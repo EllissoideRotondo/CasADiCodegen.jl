@@ -4,14 +4,13 @@
 # solutions, which are the oracles: CasADi in this build cannot run its solvers.
 import ForwardDiff
 import SciMLBase
-import Ipopt
-import OptimizationMOI
+import OptimizationIpopt
 using CasADiCodegen: Solvers, Solver
 const K = CasADiCodegen.Codegen
 
 native(f; kwargs...) = build_function(f; nonzeros = true, expression = Val{false}, expand = false, kwargs...)
 evaluated(g, f, nz) = g([fill(NaN, n) for n in nnz_out(f)], Tuple(nz))
-ipopt(options...) = OptimizationMOI.MOI.OptimizerWithAttributes(Ipopt.Optimizer, "print_level" => 0, "tol" => 1e-12, options...)
+ipopt(options...) = OptimizationIpopt.IpoptOptimizer(additional_options = Dict{String,Any}("print_level" => 0, "tol" => 1e-12, options...))
 const SOLVERS = Solvers(optimization = ipopt())
 
 "The results of the solver of CasADi `solver` for the given arguments, by name."
