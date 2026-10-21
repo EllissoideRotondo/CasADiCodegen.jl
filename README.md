@@ -1,6 +1,7 @@
 # CasADiCodegen.jl
 
 [![Docs: dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://AstroGuild.github.io/CasADiCodegen.jl/dev/)
+[![Coverage](https://codecov.io/gh/AstroGuild/CasADiCodegen.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/AstroGuild/CasADiCodegen.jl)
 
 CasADiCodegen.jl is a package for generating plain Julia code from the functions of
 [CasADi](https://web.casadi.org/), the framework for symbolic modelling and
