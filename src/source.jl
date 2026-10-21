@@ -145,7 +145,8 @@ end
 Return the expression that gives `value` again in a source file. A value can be:
 
 - a number, a text, a symbol, a type, a module or a named function;
-- a tuple, a named tuple or a vector of such values;
+- a tuple, a named tuple or a vector of such values, or a `Dict` of such keys and values,
+  as the options of a solver;
 - an object with a definition (see `source`);
 - an object of an immutable type whose fields are such values, as the algorithm of a solver.
 """
@@ -159,6 +160,9 @@ function value_source(writer::SourceWriter, value)
     value isa NamedTuple &&
         return Expr(:tuple, Expr(:parameters, (Expr(:kw, key, value_source(writer, x)) for (key, x) in pairs(value))...))
     value isa Vector && return Expr(:ref, type_source(writer, eltype(value)), (value_source(writer, x) for x in value)...)
+    # The entries in the order of their keys, so that the same Dict gives the same source.
+    value isa Dict && return Expr(:call, type_source(writer, typeof(value)),
+                                  (Expr(:call, :(=>), value_source(writer, k), value_source(writer, x)) for (k, x) in sort!(collect(value); by = repr ∘ first))...)
     (value isa Emitted || writable(value)) && return source(writer, value)
     T = typeof(value)
     @requires isstructtype(T) && !ismutabletype(T) "a source file cannot hold the value $(repr(value)) of the type $T"
