@@ -24,9 +24,13 @@ function run_group(group)
     (success(process), seconds, String(take!(output)))
 end
 
-"The number of tests that passed, from the summary that a group printed; zero when there is none."
+"""
+The number of tests that passed, from the summary that a group printed; zero when there is none.
+The colors of a terminal (`--color=yes`, as in CI) are removed first.
+"""
 function passes(output, group)
-    found = match(Regex("^test_$group\\.jl\\s*\\|\\s*(\\d+)", "m"), output)
+    plain = replace(output, r"\e\[[0-9;]*m" => "")
+    found = match(Regex("^test_$group\\.jl\\s*\\|\\s*(\\d+)", "m"), plain)
     found === nothing ? 0 : parse(Int, found[1])
 end
 
@@ -49,8 +53,9 @@ else
     println("Tests passed in all groups: ", sum(last, done; init = 0))
     # The checks are in the main task, because a test set does not record the tests of other tasks on each version of Julia.
     @testset "CasADiCodegen.jl" begin
-        @testset "test_$group.jl" for (group, passed, _) in done
-            @test passed
+        # A group with no passed test ran nothing, or its summary was not read.
+        @testset "test_$group.jl" for (group, passed, count) in done
+            @test passed && count > 0
         end
     end
 end
