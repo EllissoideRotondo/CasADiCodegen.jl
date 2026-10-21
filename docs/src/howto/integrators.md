@@ -32,6 +32,8 @@ The dictionary holds these entries:
 | `"p"` | The parameters; without them, the function is `F(x0)` | No |
 | `"t"` | The time, as a symbol that the right side uses | No |
 | `"quad"` | The quadratures: expressions that the solver integrates along the solution | No |
+| `"zero"` | The event function; free times only (see [Stop at an event](@ref events)) | No |
+| `"transition"` | The state after an event, as an expression of the state before it | No |
 
 ## Integrate between two fixed times
 

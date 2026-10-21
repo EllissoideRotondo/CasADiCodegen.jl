@@ -38,7 +38,7 @@ julia> using CasADiCodegen
 
 julia> x = SX.sym("x", 2);
 
-julia> f = CasADiCodegen.Function("f", [x], [x[1] * sin(x[2])]);
+julia> f = CasadiFunction("f", [x], [x[1] * sin(x[2])]);
 
 julia> d = CasADiCodegen.differentiable(f)
 the differentiable function "f"

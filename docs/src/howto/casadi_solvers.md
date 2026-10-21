@@ -48,7 +48,7 @@ function and the field of `Solvers` to set.
 
 | Field of `Solvers` | Replaces | With |
 |---|---|---|
-| `ode` | Integrator `cvodes` | An ODE algorithm. Supported: quadratures, controls (the input `u` of a CasADi integrator, constant between two output times), several output times, forward and adjoint sensitivities, derivatives of any order, event functions (see [Integrators with events](@ref)) |
+| `ode` | Integrator `cvodes` | An ODE algorithm. Supported: quadratures, controls (the input `u` of a CasADi integrator, constant between two output times), several output times, forward and adjoint sensitivities, derivatives of any order, event functions with forward derivatives only (see [Integrators with events](@ref)) |
 | `dae` | Integrator `idas` with algebraic states | An algorithm that accepts a mass matrix, such as `Rodas5P()`; the same derivatives |
 | `nonlinear` | Rootfinders `kinsol` and `fast_newton` | A nonlinear algorithm, as for `rootfinder` |
 | `optimization` | Solvers of `nlpsol` and of `conic` (quadratic problems; no cone constraints) | An algorithm of Optimization.jl, such as `Ipopt.Optimizer()` with OptimizationMOI.jl |
@@ -98,7 +98,8 @@ must be values that a source file can hold.
 Reverse mode works through an integrator that a solver replaces, because CasADi gets
 the adjoint sensitivities as the reverse derivative of the chain of calls between
 the output times. Each call integrates the adjoint equations backward, as
-`integrator` does with `adjoint = true`, also for a model with algebraic states.
+`integrator` does with `adjoint = true`, also for a model with algebraic states. An
+integrator with events is the exception: it has forward derivatives only.
 
 ## Integrators with events
 
@@ -124,16 +125,10 @@ bounce = CasADiCodegen.C.Function("transition", Dict("x" => vertcat(h, v), "p" =
 ball = CasADiCodegen.C.integrator("ball", "cvodes", model, 0.0, [0.5, 1.0, 2.0], Dict("transition" => bounce))
 ```
 
-CasADi differentiates such an integrator by forward directions only. At each event,
-the generated code moves the derivatives by the derivative of the event time, from
-the implicit function theorem, and by the derivative of the transition.
-
-`jacobian` of an expression that calls such an integrator gives the dense Jacobian
-of one forward direction per element of the argument. The package builds it so,
-because CasADi gives the integrator the sparsity pattern of the model without events,
-and the Jacobian of CasADi loses the effect of the transitions (see
-[Differences from CasADi](@ref)). The method `jacobian()` of a `Function` that holds
-such an integrator throws an error for the same reason.
+CasADi differentiates such an integrator by forward directions only. `jacobian` of an
+expression that calls it gives a dense Jacobian, and the method `jacobian()` of a
+`Function` that holds it throws an error; [Differences from CasADi](@ref) gives the
+reason.
 
 We take the Jacobian of the final states by the initial state and the restitution:
 
@@ -144,11 +139,10 @@ J = jacobian(final, vertcat(s0, q))
 f = CasadiFunction("f", [s0, q], [final, CasADiCodegen.C.densify(J)])
 ```
 
-CasADi has no reverse mode through an integrator with events, so such an integrator has
-forward derivatives only, also with algebraic states. The event function can then depend
-on the algebraic states, and the derivatives of the event time and of the states after it
-are exact; after the transition, the package solves the algebraic equations again for the
-algebraic states and for their derivatives.
+With algebraic states, the event function can depend on them, and the forward
+derivatives of the event time and of the states after it are exact; after the transition,
+the package solves the algebraic equations again for the algebraic states and for their
+derivatives.
 
 ## Solve the problem in Julia
 

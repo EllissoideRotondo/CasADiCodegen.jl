@@ -167,7 +167,7 @@ julia> c = callback(square, "square", (2,), (2,); jacobian = v -> [2v[1] 0; 0 2v
 
 julia> v = MX.sym("v", 2);
 
-julia> f = CasADiCodegen.Function("f", [v], [c(v), jacobian(c(v), v)]);
+julia> f = CasadiFunction("f", [v], [c(v), jacobian(c(v), v)]);
 
 julia> g, g! = build_function(f; expression = Val{false});
 

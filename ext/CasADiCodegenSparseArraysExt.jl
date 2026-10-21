@@ -19,7 +19,7 @@ then reads and writes the stored values only.
 using CasADiCodegen, SparseArrays
 
 x = SX.sym("x", 2)
-f = CasADiCodegen.Function("f", [x], [jacobian([x[1]^2; x[1] * x[2]], x)])
+f = CasadiFunction("f", [x], [jacobian([x[1]^2; x[1] * x[2]], x)])
 J = SparseMatrixCSC(CasADiCodegen.sparsity_out(f, 0))      # 2×2 with 3 stored entries
 _, g! = build_function(f; expression = Val{false})
 g!((J,), ([2.0, 3.0],))                             # J is now [4.0 0.0; 3.0 2.0]

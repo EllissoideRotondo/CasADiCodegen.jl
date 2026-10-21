@@ -21,7 +21,7 @@ julia> using CasADiCodegen
 
 julia> x = SX.sym("x", 2);
 
-julia> f = CasADiCodegen.Function("f", [x], [sin(x[1]) * x[2] + x[1] * x[2]]);
+julia> f = CasadiFunction("f", [x], [sin(x[1]) * x[2] + x[1] * x[2]]);
 
 julia> CasADiCodegen.instruction_histogram(f)
 5-element Vector{Pair{Symbol, Int64}}:
@@ -71,7 +71,7 @@ julia> using CasADiCodegen
 
 julia> x = SX.sym("x", 2);
 
-julia> f = CasADiCodegen.Function("f", [x], [sqrt(x[1]) + x[2]]);
+julia> f = CasadiFunction("f", [x], [sqrt(x[1]) + x[2]]);
 
 julia> CasADiCodegen.nan_trace(f, [-1.0, 2.0])
 (instruction = 2, operation = :OP_SQRT, operands = (-1.0,), result = NaN, text = "NaNMath.sqrt(-1.0)")

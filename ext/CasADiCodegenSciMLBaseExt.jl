@@ -145,7 +145,7 @@ model = Dict("x" => x, "p" => mu, "ode" => vertcat(x[3], x[4], -mu * x[1] / r3, 
 F = integrator("F", Vern9(), model, 0.0, 3.0; abstol = 1e-13, reltol = 1e-13)
 
 x0, p = MX.sym("x0", 4), MX.sym("p")
-f = CasADiCodegen.Function("f", [x0, p], [F(x0, p), jacobian(F(x0, p), x0)])
+f = CasadiFunction("f", [x0, p], [F(x0, p), jacobian(F(x0, p), x0)])
 ```
 """
 function CasADiCodegen.integrator(name::AbstractString, alg::SciMLBase.AbstractODEAlgorithm, dae, t0::Real, tf::Real;
@@ -457,11 +457,11 @@ using CasADiCodegen
 using SimpleNonlinearSolve: SimpleNewtonRaphson
 
 E, M, e = SX.sym("E"), SX.sym("M"), SX.sym("e")
-kepler = CasADiCodegen.Function("kepler", [E, M, e], [E - e * sin(E) - M])
+kepler = CasadiFunction("kepler", [E, M, e], [E - e * sin(E) - M])
 anomaly = rootfinder("anomaly", SimpleNewtonRaphson(), kepler; abstol = 1e-14)
 
 m, ec = MX.sym("m"), MX.sym("ec")
-f = CasADiCodegen.Function("f", [m, ec], [anomaly(m, m, ec)])    # the mean anomaly is the first guess
+f = CasadiFunction("f", [m, ec], [anomaly(m, m, ec)])    # the mean anomaly is the first guess
 ```
 """
 function CasADiCodegen.rootfinder(name::AbstractString, alg::SciMLBase.AbstractNonlinearAlgorithm, f::CasADiCodegen.Function; options...)
@@ -573,7 +573,7 @@ using CasADiCodegen
 import SciMLBase
 
 u, k, t = SX.sym("u", 2), SX.sym("k"), SX.sym("t")
-rhs = CasADiCodegen.Function("rhs", [u, k, t], [vertcat(u[2], -k * u[1])])
+rhs = CasadiFunction("rhs", [u, k, t], [vertcat(u[2], -k * u[1])])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [1.0, 0.0], (0.0, pi), [4.0])
 ```
 """
