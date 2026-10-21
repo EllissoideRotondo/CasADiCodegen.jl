@@ -19,6 +19,8 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      # Codecov authenticates the coverage upload with a GitHub OIDC token.
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -44,5 +46,6 @@ jobs:
         if: matrix.coverage
         with:
           files: lcov.info
-          token: ${{ secrets.CODECOV_TOKEN }}
+          use_oidc: true
+          # A pull request from a fork gets no OIDC token, so a failed upload does not fail the job.
           fail_ci_if_error: false
