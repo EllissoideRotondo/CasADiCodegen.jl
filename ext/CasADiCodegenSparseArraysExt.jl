@@ -2,7 +2,7 @@ module CasADiCodegenSparseArraysExt
 
 import CasADiCodegen
 import SparseArrays
-import CasADiCodegen.Codegen.Helpers: stored, is_stored
+import CasADiCodegen.Codegen.Helpers: stored, is_stored, PatternCheck
 
 # The methods of `stored` and `is_stored` for a sparse matrix, for generated code.
 include_string(@__MODULE__, CasADiCodegen.Codegen.SPARSE_HELPER_SOURCE)

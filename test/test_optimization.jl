@@ -5,6 +5,7 @@
 import ForwardDiff
 import SciMLBase
 import OptimizationIpopt
+import SparseArrays
 using CasADiCodegen: Solvers, Solver
 const K = CasADiCodegen.Codegen
 
@@ -96,6 +97,15 @@ end
     solution = SciMLBase.solve(problem, ipopt())
     @test SciMLBase.successful_retcode(solution.retcode)
     @test solution.u ≈ [1.45, 0.55] rtol = 1e-9
+    # Ipopt takes the Hessian of the Lagrange function of the sparse form, which has no Hessians of the constraints.
+    sparse = SciMLBase.OptimizationProblem(solver, [0.0, 0.0], [0.7, -0.2]; lbg = [2.0], ubg = [2.0], sparse = true)
+    @test sparse.f.cons_h === nothing
+    @test SciMLBase.solve(sparse, ipopt()).u ≈ [1.45, 0.55] rtol = 1e-9
+    # Without parameters Ipopt calls lag_h without them. The minimum of the Rosenbrock function is at (1, 1).
+    z = SX.sym("z", 2)
+    rosenbrock = CasADiCodegen.Function("rosenbrock", [z], [(1 - z[1])^2 + 100 * (z[2] - z[1]^2)^2])
+    free = SciMLBase.OptimizationProblem(SciMLBase.OptimizationFunction(rosenbrock; sparse = true), [-1.2, 1.0])
+    @test SciMLBase.solve(free, ipopt()).u ≈ [1.0, 1.0] rtol = 1e-9
 end
 
 # x^4 / 4 - q x has its least value at the cube root of q.

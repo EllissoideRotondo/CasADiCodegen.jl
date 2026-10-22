@@ -193,7 +193,8 @@ The module holds:
 The module does not need CasADiCodegen.jl. A package that includes the file must have each
 package of `DEPENDENCIES` as a dependency. The module imports:
 
-- StaticArraysCore.jl, for the method with static arrays, unless `f` has no input;
+- StaticArraysCore.jl, for the method with static arrays, unless `f` has no input or its
+  outputs have more than 4096 elements in all;
 - NaNMath.jl, when the code has an operation with a limited domain, such as `sqrt` or
   `log`, unless `nanmath = false`;
 - SparseArrays.jl, when an input or an output has structural zeros, as most Jacobians have,
@@ -245,8 +246,8 @@ function generate_julia(f, io::IO;
     append!(definitions, form_definitions(alg, name, chunk_size, ref, force_SA; julia))
     frame = named_frame(alg, core_name(name), chunk_size, ref; julia)
     nwork = frame === nothing ? 0 : frame[1][3]
-    # `is_stored` is defined with `stored`.
-    helpers = sort!(unique!([fname === :is_stored ? :stored : fname for (owner, fname) in used if owner === :Helpers]))
+    # `is_stored` and `PatternCheck` are defined with `stored`.
+    helpers = sort!(unique!([fname in (:is_stored, :PatternCheck) ? :stored : fname for (owner, fname) in used if owner === :Helpers]))
     helpers = sort!(unique!([helpers; (needed for helper in helpers for needed in get(HELPER_NEEDS, helper, Symbol[]))...]))
     imports = Set(owner for (owner, _) in used if owner !== :Helpers)
     :erfinv in helpers && push!(imports, :SpecialFunctions)

@@ -95,3 +95,50 @@ function untraced(v::AbstractVector)
     @ensures size(column) == (length(v), 1) "untraced must give one element per element of the vector"
     column
 end
+
+"""
+    traced_function(name, f, u0, p = nothing; inplace = true, time = true, symbolic = SX) -> CasADiCodegen.Function
+
+Trace the Julia function `f` of a SciML problem into the CasADi function `name(u, p, t)`,
+or `name(u, p)` with `time = false`, whose result is the derivative or the residual.
+
+`f` is `f(du, u, p, t)` in place, or `f(u, p, t)` out of place with `inplace = false`, and
+without `t` when `time = false`. It must be generic Julia code, as for
+[`traced`](@ref traced). It gets arrays of [`Traced`](@ref Traced)
+values with the shapes of `u0` and `p`; `p` may be a number, an array of numbers, or
+`nothing` for a problem without parameters. In place, `du` starts at zero.
+
+The arguments of the result are column vectors: `u` and `du` hold the elements in the
+order of `vec(u0)`, and `p` those of `vec(p)`, empty for `nothing`. `symbolic` is `SX` or
+`MX`. A method for a SciML problem comes with SciMLBase.jl.
+
+# Examples
+```julia
+using CasADiCodegen
+import SciMLBase
+
+decay!(du, u, p, t) = (du .= -p[1] .* u)
+f = CasADiCodegen.traced_function("decay", decay!, [1.0, 2.0], [0.5])
+problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(f), [1.0, 2.0], (0.0, 1.0), [0.5])
+```
+"""
+function traced_function(name::AbstractString, f, u0::AbstractArray{<:Real}, p = nothing;
+                         inplace::Bool = true, time::Bool = true, symbolic::Type{<:Symbolic} = SX)
+    @requires p === nothing || p isa Real || p isa AbstractArray{<:Real} "traced_function: the parameters must be a number, an array of numbers or nothing; got $(typeof(p))"
+    S = symbolic
+    T = Traced{S}
+    u, q, t = S.sym("u", length(u0)), S.sym("p", p === nothing ? 0 : length(p)), S.sym("t")
+    state = reshape(traced(u), size(u0))
+    parameters = p === nothing ? nothing : p isa Real ? only(traced(q)) : reshape(traced(q), size(p))
+    rest = time ? (parameters, only(traced(t))) : (parameters,)
+    value = if inplace
+        du = fill(zero(T), size(u0))
+        f(du, state, rest...)
+        du
+    else
+        f(state, rest...)
+    end
+    @requires length(value) == length(u0) "traced_function: \"$name\" must give one element per element of the state, $(length(u0)); got $(length(value))"
+    result = untraced(T[convert(T, v) for v in vec(collect(value))])
+    Front.Function(String(name), time ? [u, q, t] : [u, q], [result], time ? ["u", "p", "t"] : ["u", "p"], ["f"])
+end

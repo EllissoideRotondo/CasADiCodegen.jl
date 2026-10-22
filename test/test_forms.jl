@@ -165,6 +165,19 @@ end
     @test_throws ArgumentError g!((zeros(2), zeros(2, 2), zeros(3, 3), zeros(2, 2)), forms_inputs(f, mx_inputs(f)))
 end
 
+# An output with more elements than STATIC_LIMIT has no method with static arrays. The
+# static method of a 2000 by 2000 diagonal Jacobian was one literal of 4 million values,
+# which Julia refused to parse ("expression too large").
+@testset "output forms: no static method for a large output" begin
+    x = SX.sym("x", 65)
+    f = CasADiCodegen.Function("diagonal", [x], [C.jacobian(x .^ 2, x)])     # 4225 elements
+    src = Module()
+    Base.include_string(src, sprint(io -> generate_julia(f, io; module_name = :Large)))
+    J = Base.invokelatest((a...) -> getglobal(src, :Large).diagonal(a...), SVector{65}(1.0:65.0))
+    @test J isa Matrix{Float64} && J[end, end] == 130.0 && J[1, 2] == 0.0
+    @test_throws ArgumentError build_function(f; force_SA = true)
+end
+
 # A random pattern for a 3-by-3 input, from a mask of 9 entries with at least one nonzero.
 function masked_function(T, mask)
     rows = [mod(k - 1, 3) for k in 1:9 if mask[k]]
@@ -214,6 +227,10 @@ end
     @test_throws "pattern of a sparse matrix" g!((out[1], wrong, out[3], out[4]), x)
     @test_throws "pattern of a sparse matrix" g!(out, (wrong, x[2]))
     @test_throws ArgumentError g!(out, (sparse(ones(3, 3)), x[2]))
+    # A matrix that gains a stored value after a call with it is rejected at the next call.
+    grown = out[2]
+    grown[findfirst(c -> !(c[1] in rowvals(grown)[nzrange(grown, c[2])]), CartesianIndices(grown))] = 1.0
+    @test_throws "pattern of a sparse matrix" g!((out[1], grown, out[3], out[4]), x)
 
     # A written module holds the method and imports SparseArrays only when a pattern is sparse.
     source = sprint(io -> generate_julia(f, io; module_name = :Gen))
@@ -226,6 +243,21 @@ end
     a = SX.sym("a", 2)
     dense = sprint(io -> generate_julia(CasADiCodegen.Function("d", [a], [a * 2, C.mtimes(sin(a), C.transpose(a))]), io))
     @test !occursin("SparseArrays", dense) && !occursin("stored", dense)
+end
+
+@testset "a sparse matrix costs as much as its stored values after the first call" begin
+    # Regression: the pattern of a SparseMatrixCSC was compared with that of the function at every call,
+    # which cost five times the evaluation of this bidiagonal Jacobian.
+    n = 1000
+    x = SX.sym("x", n)
+    f = CasADiCodegen.Function("j", [x], [CasADiCodegen.jacobian(vertcat([x[k]^2 + (k > 1 ? x[k-1] : 0.0) for k in 1:n]...), x)])
+    _, g! = build_function(f; expression = Val{false})
+    h! = build_function(f; expression = Val{false}, nonzeros = true)
+    J, v = SparseMatrixCSC(C.sparsity_out(f, 0)), rand(n)
+    g!((J,), (v,))
+    @test nonzeros(J) == h!((zeros(nnz(J)),), (v,))[1]
+    fastest(call) = minimum(@elapsed(for _ in 1:20; call(); end) for _ in 1:50)
+    @test fastest(() -> g!((J,), (v,))) < 2 * fastest(() -> h!((nonzeros(J),), (v,)))
 end
 
 @testset "property: each form equals CasADi on random patterns" begin

@@ -368,15 +368,25 @@ end
     f = CasADiCodegen.Function("f", [X, P], [y, z, jacobian(y, X), jacobian(C.sum2(z), P)])
     @test mx_same(f)
     @test mx_same(f; chunk_size = 3)
-    # The body is one Julia function, which each column calls.
+    # The body is one Julia function, which a loop over the columns calls (see "a map is a loop" in test_nodes.jl).
     source = string(build_function(f; nonzeros = true, expand = false))
     @test count("function f_step!(w)", source) == 1
-    @test count("f_step!(w)", source) >= 6
     # A map inside a map, and a map of a matrix function.
     row = MX.sym("row", 2, 3)
     inner = CasADiCodegen.Function("inner", [row], [C.sum2(C.map(CasADiCodegen.Function("sq", [x], [x[1]^2 + x[2]]), 3)(row))])
     cube = MX.sym("cube", 2, 12)
     @test mx_same(CasADiCodegen.Function("g", [cube], [C.map(inner, 4)(cube)]))
+end
+
+# A copy that moves blocks with a fixed stride, as a transpose does, is one loop over the
+# blocks; the size of its code does not depend on the number of blocks.
+@testset "a transpose is a loop over blocks" begin
+    transposed(n) = let X = MX.sym("X", 2, n), v = MX.sym("v", n)
+        CasADiCodegen.Function("t", [X, v], [C.transpose(X), C.vertcat([C.transpose(v[1:n-1]), C.transpose(v[2:n])]) + X[:, 1:n-1]])
+    end
+    code_length(f) = length(string(build_function(f; nonzeros = true, expression = Val{true}, expand = false)))
+    @test mx_same(transposed(5))
+    @test code_length(transposed(300)) <= 1.1 * code_length(transposed(5))     # longer numbers only
 end
 
 @testset "a split whose first part has no nonzeros" begin

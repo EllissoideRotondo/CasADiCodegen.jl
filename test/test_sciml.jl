@@ -4,6 +4,9 @@ import SciMLBase
 using OrdinaryDiffEqVerner: Vern9
 using SimpleNonlinearSolve: SimpleNewtonRaphson
 using SpecialFunctions: erf
+using SparseArrays: SparseMatrixCSC, nnz, findnz
+using LinearAlgebra: triu
+using StaticArrays: SVector, SMatrix
 
 @testset "ODEFunction from a CasADi function" begin
     dae = two_body()
@@ -51,6 +54,84 @@ end
     @test_throws ArgumentError SciMLBase.NonlinearFunction(CasADiCodegen.Function("w", [z], [z[1]]))
 end
 
+@testset "sparse = true gives the Jacobian a sparse prototype" begin
+    # A chain: each derivative depends on the state and its neighbors, so the Jacobian is tridiagonal.
+    n = 6
+    x, k, t = SX.sym("x", n), SX.sym("k"), SX.sym("t")
+    field(s) = vertcat([k * (j > 1 ? x[j-1] : 0.0) - 2 * x[j]^2 + (j < n ? x[j+1] : 0.0) * s for j in 1:n]...)
+    rhs = CasADiCodegen.Function("chain", [x, k, t], [field(t)])
+    u, p, Jd = collect(1.0:n), [0.5], zeros(n, n)
+    SciMLBase.ODEFunction(rhs).jac(Jd, u, p, 1.0)
+    f = SciMLBase.ODEFunction(rhs; sparse = true)
+    J = copy(f.jac_prototype)
+    @test J isa SparseMatrixCSC && nnz(J) == 3n - 2
+    f.jac(J, u, p, 1.0)
+    @test J == Jd && (@allocated f.jac(J, u, p, 1.0)) == 0
+    D = fill(NaN, n, n)
+    f.jac(D, u, p, 1.0)
+    @test D == Jd                               # a dense matrix gets the same values
+    # The residual of a nonlinear problem, here the right side at t = 1.
+    residual = CasADiCodegen.Function("r", [x, k], [field(1.0)])
+    g = SciMLBase.NonlinearFunction(residual; sparse = true)
+    Jg = copy(g.jac_prototype)
+    g.jac(Jg, u, p)
+    @test Jg isa SparseMatrixCSC && Jg == Jd
+    @test_throws ArgumentError SciMLBase.ODEFunction(rhs; sparse = true, jac = false)
+    @test_throws ArgumentError SciMLBase.NonlinearFunction(residual; sparse = true, jac_prototype = J)
+end
+
+@testset "inplace = false gives functions of static arrays" begin
+    u, k, t = SX.sym("u", 2), SX.sym("k"), SX.sym("t")
+    rhs = CasADiCodegen.Function("osc", [u, k, t], [vertcat(u[2], -k * u[1] + 0.1 * t)])
+    f, g = SciMLBase.ODEFunction(rhs; inplace = false), SciMLBase.ODEFunction(rhs)
+    us, ks = SVector(1.0, 0.5), SVector(4.0)
+    du, J, P = zeros(2), zeros(2, 2), zeros(2, 1)
+    g(du, us, ks, 0.3); g.jac(J, us, ks, 0.3); g.paramjac(P, us, ks, 0.3)
+    @test !SciMLBase.isinplace(f) && f(us, ks, 0.3) isa SVector{2,Float64} && f(us, ks, 0.3) == du
+    @test f.jac(us, ks, 0.3) isa SMatrix{2,2,Float64} && f.jac(us, ks, 0.3) == J
+    @test f.paramjac(us, ks, 0.3) isa SMatrix{2,1,Float64} && f.paramjac(us, ks, 0.3) == P   # one parameter: still a matrix
+    final(fun, u0) = SciMLBase.solve(SciMLBase.ODEProblem(fun, u0, (0.0, 2.0), ks), Vern9(); abstol = 1e-12, reltol = 1e-12).u[end]
+    @test final(f, us) isa SVector{2,Float64} && isapprox(final(f, us), final(g, collect(us)); rtol = 1e-10)
+    # One state: the Jacobian is a 1x1 matrix, as the implicit solvers need.
+    x = SX.sym("x")
+    decay = SciMLBase.ODEFunction(CasADiCodegen.Function("decay", [x, k], [-k * x^2]); inplace = false)
+    @test decay.jac(SVector(2.0), ks, 0.0) === SMatrix{1,1}(-16.0)
+    z = SX.sym("z", 2)
+    r = SciMLBase.NonlinearFunction(CasADiCodegen.Function("r", [z, k], [vertcat(z[1]^2 - k, z[2] - z[1])]); inplace = false)
+    @test SciMLBase.solve(SciMLBase.NonlinearProblem(r, SVector(1.0, 1.0), ks), SimpleNewtonRaphson(); abstol = 1e-12).u ≈ SVector(2.0, 2.0)
+    @test_throws ArgumentError SciMLBase.ODEFunction(rhs; inplace = false, sparse = true)
+    # A Jacobian of 65 by 65 states is above the limit of static arrays.
+    v = SX.sym("v", 65)
+    @test_throws ArgumentError SciMLBase.ODEFunction(CasADiCodegen.Function("big", [v], [-v]); inplace = false)
+end
+
+@testset "keywords of the code and of the specialization" begin
+    u, k = SX.sym("u", 3), SX.sym("k")
+    rhs = CasADiCodegen.Function("chain", [u, k], [vertcat(k * u[2] - u[1]^2, u[3] * u[1], sin(u[2]) - k)])
+    reference, du, dv = SciMLBase.ODEFunction(rhs), zeros(3), zeros(3)
+    reference(du, [1.0, 2.0, 3.0], [0.5], 0.0)
+    @test_throws ArgumentError reference(zeros(2), [1.0, 2.0, 3.0], [0.5], 0.0)   # the inline code keeps its checks
+    # Split code computes the same values.
+    split = SciMLBase.ODEFunction(rhs; split_above = 1, chunk_size = 2, optlevel = 1)
+    split(dv, [1.0, 2.0, 3.0], [0.5], 0.0)
+    @test dv == du
+    @test_throws ArgumentError SciMLBase.ODEFunction(rhs; optlevel = 4)
+    @test_throws ArgumentError SciMLBase.NonlinearFunction(rhs; optlevel = 4)
+    @test_throws ArgumentError SciMLBase.OptimizationFunction(CasADiCodegen.Function("c", [u], [u[1] + u[2]]); optlevel = 4)
+    # With the cache on disk, the code is a package in the given directory.
+    mktempdir() do directory
+        cached = SciMLBase.ODEFunction(rhs; jac = false, paramjac = false, cache = directory)
+        dv .= 0
+        Base.invokelatest(cached, dv, [1.0, 2.0, 3.0], [0.5], 0.0)   # the code is newer than this test set
+        @test dv == du && !isempty(readdir(directory))
+    end
+    auto = SciMLBase.ODEFunction(rhs; specialize = SciMLBase.AutoSpecialize)
+    @test SciMLBase.specialization(auto) === SciMLBase.AutoSpecialize
+    problem = SciMLBase.ODEProblem(auto, [1.0, 2.0, 3.0], (0.0, 0.1), [0.5])
+    @test SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12).u[end] ≈
+          SciMLBase.solve(SciMLBase.remake(problem; f = reference), Vern9(); abstol = 1e-12, reltol = 1e-12).u[end]
+end
+
 @testset "OptimizationFunction from CasADi functions" begin
     x, p = SX.sym("x", 3), SX.sym("p", 2)
     objective = CasADiCodegen.Function("cost", [x, p], [p[1] * x[1]^2 * x[2] + sin(x[3]) * p[2]])
@@ -73,7 +154,7 @@ end
     f.cons_h(each, xv, pv)
     @test each[1] ≈ ForwardDiff.hessian(u -> cons(u)[1], xv) && each[2] ≈ ForwardDiff.hessian(u -> cons(u)[2], xv)
     @test (@allocated f.f(xv, pv)) == 0 && (@allocated f.grad(G, xv, pv)) == 0 && (@allocated f.cons_h(each, xv, pv)) == 0
-    # OptimizationBase.jl cannot call a Hessian of the Lagrange function that the user gives, so there is none.
+    # The dense form has no Hessian of the Lagrange function.
     @test f.lag_h === nothing
     # No constraints, and no parameters.
     alone = SciMLBase.OptimizationFunction(CasADiCodegen.Function("c", [x], [sum(x[i]^2 for i in 1:3)]))
@@ -82,6 +163,38 @@ end
     @test L ≈ 2.0 * [1 0 0; 0 1 0; 0 0 1]
     @test_throws ArgumentError SciMLBase.OptimizationFunction(CasADiCodegen.Function("w", [x], [x]))                        # not a scalar
     @test_throws ArgumentError SciMLBase.OptimizationFunction(objective, CasADiCodegen.Function("w", [SX.sym("y", 2), p], [p]))  # another unknown
+    # hess = false: no derivative of the second order, for a solver of the first order.
+    firstorder = SciMLBase.OptimizationFunction(objective, constraints; hess = false)
+    @test firstorder.hess === nothing && firstorder.cons_h === nothing
+    firstorder.grad(G, xv, pv)
+    @test G ≈ ForwardDiff.gradient(cost, xv)
+    @testset "sparse" begin
+        sparse = SciMLBase.OptimizationFunction(objective, constraints; sparse = true)
+        # The prototypes have the patterns of CasADi, and the functions write their stored values.
+        Hs, Js = copy(sparse.hess_prototype), copy(sparse.cons_jac_prototype)
+        @test Hs isa SparseMatrixCSC && nnz(Hs) == 4 && nnz(Js) == 5
+        sparse.hess(Hs, xv, pv)
+        sparse.cons_j(Js, xv, pv)
+        @test Hs ≈ ForwardDiff.hessian(cost, xv) && Js ≈ ForwardDiff.jacobian(cons, xv)
+        # lag_h writes the upper triangle of σ∇²f + Σμ∇²g, in the order of the stored values of lag_hess_prototype.
+        σ, μ = 0.5, [2.0, -3.0]
+        lagrange = ForwardDiff.hessian(u -> σ * cost(u) + μ' * cons(u), xv)
+        P = sparse.lag_hess_prototype
+        @test P isa SparseMatrixCSC && all(i <= j for (i, j, _) in zip(findnz(P)...))
+        h = zeros(nnz(P))
+        sparse.lag_h(h, xv, σ, μ, pv)
+        @test SparseMatrixCSC(P.m, P.n, P.colptr, P.rowval, h) ≈ triu(lagrange)
+        @test (@allocated sparse.lag_h(h, xv, σ, μ, pv)) == 0 && (@allocated sparse.cons_j(Js, xv, pv)) == 0
+        # With lag_h there are no Hessians of the constraints; without it they are sparse.
+        @test sparse.cons_h === nothing
+        each = SciMLBase.OptimizationFunction(objective, constraints; sparse = true, lag_h = false)
+        Hc = copy.(each.cons_hess_prototype)
+        each.cons_h(Hc, xv, pv)
+        @test each.lag_h === nothing && Hc[2] ≈ ForwardDiff.hessian(u -> cons(u)[2], xv) && nnz(Hc[2]) == 2
+        @test_throws "lag_h = true needs sparse = true and hess = true" SciMLBase.OptimizationFunction(objective, constraints; lag_h = true)
+        # A prototype of the user would replace the pattern into which the code writes.
+        @test_throws "makes the prototypes itself" SciMLBase.OptimizationFunction(objective, constraints; sparse = true, hess_prototype = Hs)
+    end
 end
 
 # A solver object of CasADi holds a problem: its equations and its data. The
@@ -178,6 +291,37 @@ const CC = CasADiCodegen.casadi
     @test_throws "is not an integrator of CasADi" SciMLBase.ODEProblem(CasADiCodegen.Function("f", [x], [2x]), [0.4, -0.3])
 end
 
+@testset "ODEProblem from a DaeBuilder" begin
+    # x'' = -w + z + u with w = k x and 0 = z - 2x, that is x'' = -(k - 2) x + u.
+    dae = CC.DaeBuilder("spring")
+    x, v, z = (CC.add(dae, n, "local", "continuous") for n in ("x", "v", "z"))
+    k, u = CC.add(dae, "k", "parameter", "tunable"), CC.add(dae, "u", "input", "continuous")
+    w = CC.add(dae, "w", "local", "continuous")
+    CC.eq(dae, w, k * x)
+    CC.eq(dae, CC.der(dae, x), v)
+    CC.eq(dae, CC.der(dae, v), -w + z + u)
+    CC.eq(dae, MX(0.0), z - 2x)
+    foreach(((n, value),) -> CC.set_start(dae, n, value), ("x" => 1.0, "z" => 2.0, "k" => 3.0, "u" => 0.5))
+    problem = SciMLBase.ODEProblem(dae, (0.0, 1.0))
+    @test problem.u0 == [1.0, 0.0, 2.0] && problem.p == [3.0, 0.5]
+    @test problem.f.mass_matrix == [1 0 0; 0 1 0; 0 0 0]
+    solution = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-11, reltol = 1e-11)
+    @test solution[:x][end] ≈ 0.5 + 0.5 * cos(1.0) rtol = 1e-8
+    @test solution[:z][end] ≈ 2 * solution[:x][end] rtol = 1e-8
+    # The time span of the DaeBuilder is the default; CasADi leaves it unset.
+    @test_throws "set the start and stop times" SciMLBase.ODEProblem(dae)
+    CC.set_start_time(dae, 0.0)
+    CC.set_stop_time(dae, 2.0)
+    @test SciMLBase.ODEProblem(dae).tspan == (0.0, 2.0)
+    # Regression: a constant without a value made the right side NaN with no error.
+    decay = CC.DaeBuilder("decay")
+    y, c = CC.add(decay, "y", "local", "continuous"), CC.add(decay, "c", "local", "constant")
+    CC.eq(decay, CC.der(decay, y), c - y)
+    @test_throws "give each constant its value" SciMLBase.ODEProblem(decay, (0.0, 1.0))
+    CC.when(decay, y > 0.5, String[])
+    @test_throws "when equations" SciMLBase.ODEProblem(decay, (0.0, 1.0))
+end
+
 @testset "NonlinearProblem from a rootfinder of CasADi" begin
     a, x, b = MX.sym("a"), MX.sym("x", 2), MX.sym("b", 2)
     residual = CasADiCodegen.Function("r", [a, x, b], [x * a, x^2 - a * b])
@@ -221,6 +365,76 @@ end
     # No parameters and no constraints.
     plain = SciMLBase.OptimizationProblem(CC.nlpsol("plain", "ipopt", Dict("x" => v, "f" => CC.sumsqr(v - 1))), [0.1, 0.2])
     @test plain.f.f([1.0, 3.0], plain.p) ≈ 4.0 && plain.lcons === nothing && plain.f.cons === nothing
+    # sparse = true reaches the SciML function.
+    sparse = SciMLBase.OptimizationProblem(solver, [0.1, 0.2], [0.3]; sparse = true)
+    @test sparse.f.cons_jac_prototype isa SparseMatrixCSC && nnz(sparse.f.lag_hess_prototype) == 3
     @test_throws "the unknowns must have 2 numbers" SciMLBase.OptimizationProblem(solver, [0.1], [0.3])
     @test_throws "is not a solver of CasADi for optimization problems" SciMLBase.OptimizationProblem(CasADiCodegen.Function("f", [v], [2v]), [0.1, 0.2])
+end
+
+@testset "OptimizationProblem from an Opti object" begin
+    opti = CC.Opti()
+    z, a = CC.variable(opti, 2), CC.parameter(opti)
+    CC.minimize(opti, (z[1] - a)^2 + z[2]^2)
+    CC.subject_to(opti, z[1] + z[2] >= 1)
+    CC.subject_to(opti, z[1] <= 3)
+    CC.set_value(opti, a, CC.DM(0.25))
+    CC.set_initial(opti, z, CC.DM([2.0, 1.5]))
+    problem = SciMLBase.OptimizationProblem(opti; sparse = true)
+    # The initial values, the values of the parameters and the bounds of the constraints come from the Opti object.
+    @test (problem.u0, problem.p, problem.lcons, problem.ucons) == ([2.0, 1.5], [0.25], [1.0, -Inf], [Inf, 3.0])
+    c = zeros(2)
+    problem.f.cons(c, [2.0, 1.5], [0.25])
+    @test problem.f.f([2.0, 1.5], [0.25]) ≈ 1.75^2 + 1.5^2 && c == [3.5, 2.0]
+    unset = CC.Opti()
+    w, b = CC.variable(unset), CC.parameter(unset)
+    CC.minimize(unset, (w - b)^2)
+    @test_throws "give each parameter its value" SciMLBase.OptimizationProblem(unset)
+end
+
+"The right side of an ODE on a matrix state, written in place for numbers of any type."
+function heat!(du, u, p, t)
+    n = size(u, 1)
+    for j in axes(u, 2), i in 1:n
+        left = i > 1 ? u[i-1, j] : zero(eltype(u))
+        right = i < n ? u[i+1, j] : zero(eltype(u))
+        du[i, j] = p[1] * (left - 2u[i, j] + right) + p[2] * sin(t) * u[i, j]^2
+    end
+end
+
+@testset "traced_function of a SciML problem" begin
+    u0, p = reshape(collect(1.0:6.0) ./ 7, 3, 2), [0.5, 2.0]
+    original = SciMLBase.ODEProblem(heat!, u0, (0.0, 1.0), p)
+    f = SciMLBase.ODEFunction(CasADiCodegen.traced_function("heat", original); jac = false, paramjac = false)
+    du, expected = zeros(6), similar(u0)
+    f(du, vec(u0), p, 0.3)
+    heat!(expected, u0, p, 0.3)
+    @test du ≈ vec(expected)
+    # A nonlinear problem out of place has no time.
+    nonlinear = SciMLBase.NonlinearProblem{false}((z, q) -> z .^ 2 .- q, [1.0, 1.0], [4.0, 9.0])
+    residual = CasADiCodegen.traced_function("square", nonlinear)
+    @test CC.n_in(residual) == 2 && build_function(residual; expression = Val{false})[1]([2.0, 1.0], [4.0, 9.0]) ≈ [0.0, -8.0]
+end
+
+@testset "names of the CasADi symbols in the solution" begin
+    x, v, k, τ = SX.sym("x"), SX.sym("v"), SX.sym("k"), SX.sym("τ")
+    rhs = CasADiCodegen.Function("oscillator", [vertcat(x, v), k, τ], [vertcat(v, -k * x), (v^2 + k * x^2) / 2], ["u", "k", "τ"], ["du", "energy"])
+    problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [1.0, 0.0], (0.0, 1.0), [4.0])
+    solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12)
+    @test solution[:v] == solution[2, :]
+    # A further result of the function is an observed variable with the name of that result.
+    @test solution[:energy] ≈ fill(2.0, length(solution.t)) rtol = 1e-9
+    @test solution(0.5; idxs = :energy) ≈ 2.0 rtol = 1e-9
+    remade = SciMLBase.remake(problem; p = [:k => 9.0], u0 = [:v => 1.0])
+    @test (remade.u0, remade.p) == ([1.0, 1.0], [9.0])
+    # The elements of an MX symbol have the name of the symbol and their index from 0, as CasADi names those of an SX symbol.
+    z, q = MX.sym("z", 2), MX.sym("q")
+    root = SciMLBase.solve(SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(CasADiCodegen.Function("r", [z, q], [z^2 - q])), [1.0, 1.0], [4.0]), SimpleNewtonRaphson())
+    @test root[:z_1] ≈ 2.0
+    # Names that occur twice give no names; a system of the user is kept.
+    twice = CasADiCodegen.Function("twice", [vertcat(x, v), SX.sym("x")], [vertcat(v, -x)])
+    @test SciMLBase.ODEFunction(twice).sys === nothing
+    observed_twice = CasADiCodegen.Function("observed_twice", [vertcat(x, v), SX.sym("x")], [vertcat(v, -x), x^2])
+    @test_throws "need distinct names" SciMLBase.ODEFunction(observed_twice)
+    @test SciMLBase.ODEFunction(rhs; sys = SciMLBase.SymbolCache([:a, :b], [:c], :s)).sys isa SciMLBase.SymbolCache
 end

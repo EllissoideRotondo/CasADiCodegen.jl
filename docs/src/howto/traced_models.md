@@ -28,6 +28,38 @@ vector of CasADi, on which `jacobian`, `hessian` and the other functions of CasA
 work. A plain number in the code becomes a constant of the graph, and a loop with a
 fixed number of steps is unrolled into it.
 
+## The function of a SciML problem
+
+The function `f(du, u, p, t)` of a SciML problem, written in place for any number
+type, becomes a CasADi function in one call. [`CasADiCodegen.traced_function`](@ref)
+calls `f` on traced arrays with the shapes of the initial state and of the parameters,
+so a state stored as a matrix keeps its shape inside `f`, and the CasADi function
+`rhs(u, p, t)` takes the state as the column vector `vec(u0)`:
+
+```@example traced
+import SciMLBase
+
+function diffusion!(du, u, p, t)
+    n = size(u, 1)
+    for j in axes(u, 2), i in 1:n
+        left, right = u[max(i - 1, 1), j], u[min(i + 1, n), j]
+        du[i, j] = p[1] * (left - 2u[i, j] + right) - p[2] * u[i, j]^2
+    end
+end
+u0 = rand(4, 3)
+original = SciMLBase.ODEProblem(diffusion!, u0, (0.0, 1.0), [0.5, 2.0])
+rhs = CasADiCodegen.traced_function("diffusion", original)
+problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), vec(u0), (0.0, 1.0), [0.5, 2.0])
+nothing # hide
+```
+
+The problem then has the generated right side and its Jacobian, or with
+`ODEFunction(rhs; sparse = true)` a sparse Jacobian (see
+[Give a CasADi function to a SciML problem](@ref)). A `NonlinearProblem` gives a
+function without the time, and a function out of place works as well. In `diffusion!`,
+`max` and `min` act on integer indices, not on traced values, so they need no
+`ifelse` (see the next section).
+
 ## Choices that depend on the input
 
 A comparison of traced values gives a traced condition, not a `Bool`. An `if`, a

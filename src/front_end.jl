@@ -1,5 +1,7 @@
 # The changes to the front end, made when its generated module `casadi` is included:
-# the numbers in a Dict of options keep their type (see options.jl), and `jacobian`
+# the numbers in a Dict of options keep their type (see options.jl), `der` of a
+# `DaeBuilder` and a matrix symbol calls the overload of CasADi that can declare a
+# differential state (see `derivative_definition!`), and `jacobian`
 # of a graph with an integrator of CasADi with an event function gives the Jacobian of
 # forward directions, because CasADi 3.8.1 gives such an integrator the sparsity
 # pattern of the model without events (see `Codegen.event_jacobian`).
@@ -34,6 +36,36 @@ function event_definitions!(ex, count::Ref{Int})
 end
 
 """
+    derivative_definition!(ex, count::Ref{Int}) -> ex
+
+Rewrite the method `der(self::DaeBuilder, v::MX)` in `ex` so that it always calls the
+non-const overload `MX DaeBuilder::der(const MX&)` of CasADi; `count` is increased by the
+number of rewritten methods.
+
+The generated method calls the const overload whenever SWIG can convert the arguments,
+which is always. That overload only reads the derivative of a variable and throws
+"Variable x has no time derivative" for a variable that has none. The non-const overload,
+which Python and C++ call, also makes the derivative, so that `eq(dae, der(dae, x), rhs)`
+declares `x` a differential state.
+"""
+function derivative_definition!(ex, count::Ref{Int})
+    ex isa Expr || return ex
+    if Meta.isexpr(ex, (:(=), :function)) && (signature = call_signature(ex.args[1])) !== nothing
+        if signature.args[1] === :der && signature.args[2:end] == [:(self::DaeBuilder), :(v::MX)]
+            branch = only(filter(a -> Meta.isexpr(a, :if), ex.args[2].args))
+            # The `else` branch of the generated dispatch calls the non-const overload, `_SWIG_3`.
+            occursin("der__SWIG_3", string(branch.args[3])) ||
+                throw(AssertionError("the method der(::DaeBuilder, ::MX) of the front end has changed"))
+            ex.args[2] = branch.args[3]
+            count[] += 1
+        end
+        return ex
+    end
+    foreach(a -> derivative_definition!(a, count), ex.args)
+    ex
+end
+
+"""
     typed_front_end(ex)
 
 The expression `ex` of the convenience layer of the front end, with the include of
@@ -52,5 +84,8 @@ function typed_module(ex)
     jacobians = Ref(0)
     event_definitions!(ex, jacobians)
     jacobians[] == 3 || throw(AssertionError("$(jacobians[]) methods of jacobian of the front end were found, not 3; the front end has changed"))
+    derivatives = Ref(0)
+    derivative_definition!(ex, derivatives)
+    derivatives[] == 1 || throw(AssertionError("$(derivatives[]) methods der(::DaeBuilder, ::MX) of the front end were found, not 1; the front end has changed"))
     ex
 end

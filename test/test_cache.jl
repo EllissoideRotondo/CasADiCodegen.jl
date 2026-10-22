@@ -120,7 +120,9 @@ written_nonzeros(owner, name, f, arguments) =
     y0 = MX.sym("y0", 2)
     xe, te = E(y0, MX(0.0), MX(50.0))
     solved = root(MX(1.0), te + xe[2])
-    g = CasADiCodegen.Function("mixed", [y0], [xe, te, solved, gradient(solved, y0)])
+    # A grid of times with adjoint sensitivities.
+    K = integrator("WK", Vern9(), delete!(copy(swing), "zero"), 0.0, [1.0, 2.0]; adjoint = true, TIGHT...)
+    g = CasADiCodegen.Function("mixed", [y0], [xe, te, solved, gradient(solved, y0), gradient(C.sumsqr(K(y0)), y0)])
     text = sprint(io -> generate_julia(g, io; module_name = :Mixed, name = :mixed!, expand = false))
     src = Module()
     Base.include_string(src, text)

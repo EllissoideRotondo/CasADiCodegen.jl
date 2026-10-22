@@ -68,6 +68,22 @@ end
     @test isapprox(ours[3], -slope * kron(zv', [1.0 0; 0 1.0]); atol = 1e-10)
 end
 
+# Above 16 unknowns the SciML problem is on vectors, with the Jacobian of the generated code.
+@testset "root of a large system, on vectors" begin
+    n = 40
+    z, q = SX.sym("z", n), SX.sym("q")
+    at(i) = 1 <= i <= n ? z[i] : SX(0.0)
+    residual = CasADiCodegen.Function("bratu", [z, q], [vertcat([at(i - 1) - 2 * z[i] + at(i + 1) + q * exp(z[i]) / (n + 1)^2 for i in 1:n]...)])
+    R = rootfinder("bratu", SimpleNewtonRaphson(), residual; abstol = 1e-12)
+    newton = C.rootfinder("bratu_newton", "newton", residual)
+    x, λ = MX.sym("x", n), MX.sym("λ")
+    ours = CasADiCodegen.Function("ours", [x, λ], [R(x, λ), jacobian(R(x, λ), λ)])
+    theirs = CasADiCodegen.Function("theirs", [x, λ], [newton(x, λ), jacobian(newton(x, λ), λ)])
+    values = (zeros(n), [2.0])
+    g = build_function(ours; nonzeros = true, expression = Val{false})
+    @test all(isapprox.(g([zeros(n), zeros(n)], values), casadi_eval(theirs, values...); atol = 1e-9))     # each stops at a residual of 1e-12
+end
+
 @testset "a rootfinder made by hand" begin
     # The iteration of Newton with the emitted residual and its emitted Jacobian.
     newton(residual, slope, n) = function (z0, parameters...)

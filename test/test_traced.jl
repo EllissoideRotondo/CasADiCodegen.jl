@@ -44,3 +44,19 @@ end
     @test value ≈ [0.6 * 1.5, sin(0.6) + 1]
     @test slope ≈ [4.5 1.8; 3cos(0.6) 0.0]
 end
+
+@testset "traced_function traces a function of the state, the parameters and the time" begin
+    # In place on a matrix state, with the time.
+    function spread!(du, u, p, t)
+        du[:, 1] .= p[1] .* u[:, 2]
+        du[:, 2] .= -u[:, 1] .* cos(t)
+    end
+    u0 = [1.0 2.0; 3.0 4.0]
+    f = CasADiCodegen.traced_function("spread", spread!, u0, [0.5])
+    du = similar(u0)
+    spread!(du, u0, [0.5], 0.3)
+    @test build_function(f; expression = Val{false})[1](vec(u0), [0.5], 0.3) ≈ vec(du)
+    # Out of place, with a scalar parameter and without the time.
+    g = CasADiCodegen.traced_function("decay", (u, k) -> -k * u, [1.0, 2.0], 0.5; inplace = false, time = false)
+    @test build_function(g; expression = Val{false})[1]([1.0, 2.0], 0.5) ≈ [-0.5, -1.0]
+end

@@ -15,7 +15,7 @@ value; slots are 1-based, and 0 in `out` marks a result that nothing reads.
 | indexed        | one slot    | two to four   | see `index_data`                         |
 | with tables    | one slot    | one to three  | see `table_data`                         |
 | passing        | one slot    | one or two    | see `pass_data`                          |
-| `:OP_CALL`     | one or more | one or more   | the `Algorithm`, `MXAlgorithm` or `JuliaCall` called |
+| `:OP_CALL`     | one or more | one or more   | the `Algorithm`, `MXAlgorithm`, `SwitchCall`, `MapCall` or `JuliaCall` called |
 
 An elementwise operation is an entry of the scalar operation table, applied to
 each nonzero; an operand with one nonzero is used for every element.
@@ -1240,6 +1240,41 @@ function read_switch(switch::C.Function, expand::Bool, callees)
     SwitchCall(name, cases, default, nnz_in, nnz_out)
 end
 
+"""
+    MapCall
+
+A function that calls `body` on each of `n` blocks of columns of its inputs, as
+the CasADi `map` (serial, on threads or with OpenMP). Block `k` of input `i`
+is the nonzeros `(k - 1) * body.nnz_in[i] + 1` to `k * body.nnz_in[i]`, and
+the same holds for the outputs. The generated code runs the blocks in one loop
+in one thread.
+"""
+struct MapCall
+    name::String
+    body::Any
+    n::Int
+    nnz_in::Vector{Int}
+    nnz_out::Vector{Int}
+end
+
+"""
+    read_map(map, expand, callees) -> MapCall, MXAlgorithm or Algorithm
+
+Return the copy of a CasADi map. A map of a Julia function, which has no frame
+in the work vector, is unrolled instead: CasADi writes it again as a function
+that calls the body once per block.
+"""
+function read_map(map::C.Function, expand::Bool, callees)
+    info, name = C.info(map), C.name(map)
+    f, n = info["f"]::C.Function, Int(info["n"])
+    body = callee_copy(f, expand, callees)
+    body isa JuliaCall && return read_callee(C.map(f, n, "unroll"), expand, callees)
+    nnz_in = [C.nnz_in(map, i) for i in 0:C.n_in(map)-1]
+    nnz_out = [C.nnz_out(map, j) for j in 0:C.n_out(map)-1]
+    @ensures nnz_in == n .* body.nnz_in && nnz_out == n .* body.nnz_out "map \"$name\": each input and output must hold $n blocks of the body"
+    MapCall(name, body, n, nnz_in, nnz_out)
+end
+
 function read_callee(callee::C.Function, expand::Bool, callees)
     C.is_a(callee, "SXFunction") && return Algorithm(callee)
     if C.class_name(callee) == "CallbackInternal"
@@ -1247,11 +1282,7 @@ function read_callee(callee::C.Function, expand::Bool, callees)
         haskey(JULIA_CALLS, C.__hash__(callee)) || refuse(callee)
         return JULIA_CALLS[C.__hash__(callee)][1]
     end
-    if C.class_name(callee) in ("Map", "ThreadMap", "OmpMap")
-        # CasADi writes the map again as a function that calls the body once per column; generated code runs in one thread.
-        info = C.info(callee)
-        return read_callee(C.map(info["f"], info["n"], "unroll"), expand, callees)
-    end
+    C.class_name(callee) in ("Map", "ThreadMap", "OmpMap") && return read_map(callee, expand, callees)
     C.class_name(callee) == "Switch" && return read_switch(callee, expand, callees)
     C.class_name(callee) in INTERPOLANT_CLASSES && return read_callee(interpolant_function(callee), expand, callees)
     C.class_name(callee) == "External" && return external_call(callee)

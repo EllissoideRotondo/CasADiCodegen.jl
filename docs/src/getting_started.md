@@ -80,7 +80,10 @@ typeof(J)
 ```
 
 `force_SA = true` makes the out-of-place function return static arrays for any
-argument. The in-place function also accepts `MVector` and `MMatrix`.
+argument. Static arrays suit small outputs only: when the outputs have more than 4096
+elements in all, such as the Jacobian of a large model, the out-of-place function
+returns ordinary arrays, and `force_SA = true` throws an `ArgumentError`. The in-place
+function also accepts `MVector` and `MMatrix`.
 
 ## Fill a sparse Jacobian
 
@@ -133,7 +136,7 @@ its first letter in upper case. The module holds `F.f`, `F.f!` and `F.f_nonzeros
 | `DEPENDENCIES` | Sorted tuple of the names of the packages that the module imports |
 
 The module imports StaticArraysCore.jl for the method with static arrays, NaNMath.jl
-unless `nanmath = false`, and SparseArrays.jl whenever an input or an output has
+unless `nanmath = false`, and SparseArrays whenever an input or an output has
 structural zeros, as the Jacobian of this model has, even when every caller passes
 dense arrays; SpecialFunctions.jl, LinearAlgebra and the packages of Julia functions
 in the model are imported when the code calls them. Each package must be in the
@@ -159,12 +162,5 @@ that also loads CasADiCodegen.jl, SciMLBase.jl and the package of the algorithm.
 With `nonzeros = true`, `build_function` returns the single function
 `(res, arg) -> res`, which evaluates the function as CasADi does. `arg[i]` is a vector
 of the structural nonzeros of input `i`, and the function writes those of output `j`
-into the vector `res[j]`; the nonzeros are in column-major order.
-
-## Next steps
-
-- For a model that calls Julia code, see [Call a Julia function from the model](@ref).
-- For a model with an integrator in it, see [Integrate a differential equation](@ref).
-- For a model that exists already in Python, MATLAB or C++, see [Load a model from another language](@ref).
-- For a matrix (MX) model with called functions, see [Matrix code and functions without instructions](@ref).
-- For the time of the first call and of later calls, see [Cost of the generated code](@ref).
+into the vector `res[j]`; the nonzeros are in column-major order. `generate_julia`
+writes this form as the function `<name>_nonzeros!` of the module.

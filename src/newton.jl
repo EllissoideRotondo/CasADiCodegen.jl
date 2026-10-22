@@ -4,13 +4,14 @@
 # CasADi for it.
 
 "The work space of one task and one number type for a Newton rootfinder."
-struct NewtonWork{T,R<:Tuple}
+struct NewtonWork{T,R<:Tuple,F<:Union{Nothing,SparseLU{T}}}
     inputs::Vector{Vector{T}}                   # a copy of each argument, so that every call has plain vectors
     x::Vector{T}
     f::Vector{T}
     x_trial::Vector{T}
     f_trial::Vector{T}
-    matrix::Matrix{T}
+    matrix::Matrix{T}                           # the dense Jacobian; empty when `factors` holds a sparse one
+    factors::F
     res_step::Vector{Vector{T}}                 # the Jacobian, then the results with the residual in `f`
     res_trial::Vector{Vector{T}}                # the results with the residual in `f_trial`
     returned::R
@@ -37,7 +38,9 @@ most `abstol_step`. With `line_search` the step is halved until the largest
 residual falls by the factor `1 - alpha / 2`.
 
 The linear system is solved by elimination with row exchanges, where CasADi
-uses a QR factorization, so the results agree with CasADi to rounding. A call
+uses a QR factorization, so the results agree with CasADi to rounding. A
+Jacobian with at most a quarter of its elements stored, and at least
+`SPARSE_NEWTON_SIZE` rows, gets a sparse LU factorization (see `SparseLU`). A call
 allocates no memory after the first one of a task. Number types other than
 `Float64`, such as dual numbers, go through the same iteration.
 """
@@ -66,7 +69,10 @@ function newton_work(s::NewtonCall, ::Type{T}) where {T}
         x, f, f_trial = vector(s.n), vector(s.n), vector(s.n)
         results = [vector(n) for n in s.nnz_out]
         with(residual) = [o == s.iout ? residual : r for (o, r) in enumerate(results)]
-        NewtonWork(map(vector, s.nnz_in), x, f, vector(s.n), f_trial, Matrix{T}(undef, s.n, s.n), [[vector(length(s.rows))]; with(f)], with(f_trial),
+        sparse = sparse_newton(s.n, length(s.rows))
+        matrix = sparse ? Matrix{T}(undef, 0, 0) : Matrix{T}(undef, s.n, s.n)
+        factors = sparse ? SparseLU{T}(s.n, s.rows, s.columns) : nothing
+        NewtonWork(map(vector, s.nnz_in), x, f, vector(s.n), f_trial, matrix, factors, [[vector(length(s.rows))]; with(f)], with(f_trial),
                    Tuple(o == s.iout ? x : r for (o, r) in enumerate(results) if s.nnz_out[o] > 0))
     end
 end
@@ -121,6 +127,21 @@ function eliminate!(A::Matrix, b::Vector)
     b
 end
 
+"""
+    newton_step!(m::NewtonWork, s::NewtonCall)
+
+Overwrite the residual `m.f` with the Newton step: the solution of `J x = f`, where the
+Jacobian `J` has its nonzeros in `m.res_step[1]`.
+"""
+function newton_step!(m::NewtonWork{T,R,Nothing}, s::NewtonCall) where {T,R}
+    fill!(m.matrix, zero(T))
+    for (k, value) in enumerate(m.res_step[1])
+        m.matrix[s.rows[k], s.columns[k]] = value
+    end
+    eliminate!(m.matrix, m.f)
+end
+newton_step!(m::NewtonWork{T,R,<:SparseLU}, s::NewtonCall) where {T,R} = (factor!(m.factors, m.res_step[1]); solve!(m.factors, m.f))
+
 function (s::NewtonCall)(arguments::Vararg{Any,N}) where {N}
     T = promote_type(Float64, map(eltype, arguments)...)
     m = newton_work(s, T)::NewtonWork{T}
@@ -138,11 +159,7 @@ function (s::NewtonCall)(arguments::Vararg{Any,N}) where {N}
         s.step(m.res_step, at(m.x))
         abstol = largest(m.f)
         s.abstol != Inf && abstol <= s.abstol && break
-        fill!(m.matrix, zero(T))
-        for (k, value) in enumerate(m.res_step[1])
-            m.matrix[s.rows[k], s.columns[k]] = value
-        end
-        eliminate!(m.matrix, m.f)
+        newton_step!(m, s)
         abstol_step = largest(m.f)
         s.abstol_step != Inf && abstol_step <= s.abstol_step && break
         if s.line_search

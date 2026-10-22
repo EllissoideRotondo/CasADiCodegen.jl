@@ -73,7 +73,9 @@ For information on using the package, see the
 [documentation](https://AstroGuild.github.io/CasADiCodegen.jl/dev/). It starts
 with a [tutorial](https://AstroGuild.github.io/CasADiCodegen.jl/dev/getting_started/)
 that builds a model, generates Julia functions for it and compares the forms of the
-generated code. Its how-to guides then cover models from other languages, Julia
+generated code. Tutorials then solve the problems of the ModelingToolkit.jl
+documentation with CasADi models, from ODE and DAE models to nonlinear systems, static
+and dynamic optimization, events and parameter estimation. Its how-to guides cover models from other languages, Julia
 models traced into CasADi, calls to Julia code, integrators, events and rootfinders,
 the replacement of the solvers of CasADi by SciML solvers, CasADi functions in SciML
 problems, and large models; the concept pages explain the matrix code, the

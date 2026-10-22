@@ -232,9 +232,16 @@ end
     D = integrator("KD", Vern9(), Dict("x" => y, "ode" => -y), 0.0, [1.0, 2.0]; TIGHT...)
     @test C.n_in(D) == 1
     @test closeto(casadi_eval(D, [3.0]), [[3 * exp(-1), 3 * exp(-2)]], 1e-11)
+    # One integration gives the three distinct times after the initial time; the solver does not restart at each.
+    record = only(call for (call, _) in values(CasADiCodegen.Codegen.JULIA_CALLS) if call.name == "K")
+    @test record.nnz_out == [4 * 3]
+    # Times before the initial time and at it, in any order.
+    B = integrator("KB", Vern9(), Dict("x" => y, "ode" => -y), 0.0, [1.0, 0.0, -1.0, 2.0, -0.5]; TIGHT...)
+    @test closeto(casadi_eval(B, [3.0]), [3 .* exp.(-[1.0, 0.0, -1.0, 2.0, -0.5])], 1e-11)
     @test_throws ArgumentError integrator("K", Vern9(), two_body(), 0.0, Float64[])
     @test_throws ArgumentError integrator("K", Vern9(), two_body(), 0.0, [1.0, Inf])
     @test_throws ArgumentError integrator("K", Vern9(), two_body(), NaN, [1.0])
+    @test_throws ArgumentError integrator("K", Vern9(), two_body(), 0.0, [1.0]; saveat = 0.5)
 end
 
 @testset "quadratures" begin
@@ -356,8 +363,8 @@ end
     event(v) = (res = [zeros(eltype(v), 1)]; drop(res, (v[1:2], v[3:3])); res[1][1])
     @test isapprox(ForwardDiff.gradient(event, at[1:3]), ForwardDiff.gradient(v -> landing([v; 0.5]), at[1:3]); atol = 1e-8)
 
-    # Limits: one event function, and free times only.
-    @test_throws ArgumentError integrator("e", Vern9(), merge(swing, Dict("zero" => w)); TIGHT...)
+    # Limits: a column of event functions, and free times only.
+    @test_throws ArgumentError integrator("e", Vern9(), merge(swing, Dict("zero" => horzcat([w, w]))); TIGHT...)
     @test_throws ArgumentError integrator("e", Vern9(), swing, 0.0, 1.0; TIGHT...)
     @test_throws ArgumentError integrator("e", Vern9(), swing, 0.0, [1.0, 2.0]; TIGHT...)
     @test_throws ArgumentError integrator("e", Vern9(), swing; TIGHT..., direction = 2)
@@ -409,6 +416,65 @@ end
     @test_throws "terminal" integrator("plain", Vern9(), delete!(copy(swing), "zero"); terminal = false, TIGHT...)
 end
 
+# Several event functions: the first element of "zero" that changes its sign selects the column of
+# "transition", and the result "ie" names it. With `exact = false` fewer events than `events` can
+# come before the final time; "ne" counts them, and a missing event has the final time as its time.
+# The set takes about 20 s: the callback of several event functions compiles the solver once for
+# Float64 and once for dual numbers, which take their own code path for the derivative of the time.
+@testset "several event functions, and up to a number of events" begin
+    # A body that moves at a constant speed between two walls, at 0 and at 1. At the wall 1 the
+    # speed changes its sign and keeps the part e1, at the wall 0 the part e2. The third event function
+    # t - 3 changes its sign from negative to positive, which `direction = -1` ignores.
+    x, e, τ = SX.sym("x", 2), SX.sym("e", 2), SX.sym("t")
+    walls = Dict("x" => x, "p" => e, "t" => τ, "ode" => vertcat([x[2], SX(0.0)]), "zero" => vertcat([x[1], 1 - x[1], τ - 3]),
+                 "transition" => horzcat([vertcat([x[1], -e[2] * x[2]]), vertcat([x[1], -e[1] * x[2]]), -x]))
+    F = integrator("walls", Vern9(), walls; events = 4, exact = false, terminal = false, direction = -1, TIGHT...)
+    @test [C.name_out(F, j) for j in 0:3] == ["xf", "te", "ie", "ne"]
+    # From the position a in (0, 1) with the speed w > 0, up to the final time T; v = (a, w, e1, e2, T).
+    function flight(v)
+        position, speed, t, times, hits = v[1], v[2], zero(eltype(v)), eltype(v)[], Float64[]
+        while length(times) < 4
+            # Loop invariant: the body is at `position` with `speed` at the time `t`, after the events in `times`.
+            wall = speed > 0 ? 1.0 : 0.0
+            arrival = t + (wall - position) / speed
+            arrival < v[5] || break
+            push!(times, arrival)
+            push!(hits, wall == 1 ? 2.0 : 1.0)
+            position, speed, t = wall, -(wall == 1 ? v[3] : v[4]) * speed, arrival
+        end
+        (; times, hits, state = [position + speed * (v[5] - t), speed])
+    end
+    s0, q, tf = MX.sym("s0", 2), MX.sym("q", 2), MX.sym("tf")
+    out = F(s0, q, MX(0.0), tf)
+    every = vertcat([s0, q, tf])
+    f = CasADiCodegen.Function("f", [s0, q, tf], [out[1], out[2], out[3], out[4], jacobian(out[1], every), jacobian(out[2], every)])
+    for T in (4.0, 9.0)                            # two and three events of four
+        at = [0.5, 1.0, 0.5, 0.8, T]
+        reference = flight(at)
+        missing = 4 - length(reference.times)
+        times(v) = [flight(v).times; fill(v[5], missing)]
+        expected = [reference.state, times(at), [reference.hits; zeros(missing)], [4.0 - missing],
+                    vec(ForwardDiff.jacobian(v -> flight(v).state, at)), vec(ForwardDiff.jacobian(times, at))]
+        @test closeto(ode_emitted(f, (at[1:2], at[3:4], at[5:5])), expected, 1e-9)
+        T == 9.0 && @test closeto(casadi_eval(f, at[1:2], at[3:4], T), expected, 1e-9)
+    end
+
+    # Dual numbers through the generated code: the event function that fired gives the derivative of its time.
+    second = build_function(CasADiCodegen.Function("second", [s0, q], [F(s0, q, MX(0.0), MX(9.0))[2][2]]); nonzeros = true, expression = Val{false})
+    timed(v) = (res = [zeros(eltype(v), 1)]; second(res, (v[1:2], v[3:4])); res[1][1])
+    @test isapprox(ForwardDiff.gradient(timed, [0.5, 1.0, 0.5, 0.8]), ForwardDiff.gradient(v -> flight([v; 9.0]).times[2], [0.5, 1.0, 0.5, 0.8]); atol = 1e-8)
+
+    # One event function: the count follows the times, and the integration ends at the last event or at the final time.
+    # An elastic ball from the height 2 under the gravity 1 lands at 2 and at 6.
+    fall = Dict("x" => x, "p" => e, "ode" => vertcat([x[2], -e[1]]), "zero" => x[1], "transition" => vertcat([x[1], -x[2]]))
+    G = integrator("fall_upto", Vern9(), fall; events = 2, exact = false, direction = -1, TIGHT...)
+    @test [C.name_out(G, j) for j in 0:2] == ["xf", "te", "ne"]
+    @test closeto(casadi_eval(G, [2.0, 0.0], [1.0, 0.0], 0.0, 5.0), [[1.5, -1.0], [2.0, 5.0], [1.0]], 1e-9)
+
+    @test_throws "one column per event function" integrator("wide", Vern9(), merge(walls, Dict("transition" => horzcat([x, x]))); TIGHT...)
+    @test_throws "exact" integrator("plain", Vern9(), delete!(copy(fall), "zero"); exact = false, TIGHT...)
+end
+
 # With `adjoint`, a reverse derivative integrates the state and its multipliers
 # backward in time, so that a gradient costs one integration for any number of
 # parameters. The forward sensitivities are the oracle.
@@ -450,12 +516,47 @@ end
     turned = plain(x0)
     h = CasADiCodegen.Function("plain", [x0], [gradient(turned[1] + 2 * turned[2], x0)])
     @test closeto(ode_emitted(h, point[1:1]), [[cos(1.0) - 2 * sin(1.0), sin(1.0) + 2 * cos(1.0)]], 1e-10)
-    # A grid of times is a chain of such arcs.
-    grid = integrator("AG", Vern9(), dae, 0.5, [1.0, 3.0]; adjoint = true, TIGHT...)
-    states, sums = grid(x0, q)
-    last_cost = states[1, 2] * states[2, 2] + 3 * sums[2]
-    k = CasADiCodegen.Function("grid", [x0, q], [gradient(last_cost, q)])
+    # A grid of times: one backward integration, whose multipliers take the seed of each time on the way.
+    times = [1.0, 3.0, 0.5, 2.0]
+    function sampled(F)
+        states, sums = F(x0, q)
+        cost = states[1, 2] * states[2, 2] + 3 * sums[2] + C.sumsqr(states) + C.sumsqr(sums)
+        CasADiCodegen.Function("grid", [x0, q], [gradient(cost, x0), gradient(cost, q), jacobian(gradient(cost, q), vertcat([x0, q]))])
+    end
+    grid = sampled(integrator("AG", Vern9(), dae, 0.5, times; adjoint = true, TIGHT...))
+    expected = ode_emitted(sampled(integrator("FG", Vern9(), dae, 0.5, times; TIGHT...)), point[1:2])
+    ours = ode_emitted(grid, point[1:2])
+    @test closeto(ours[1:2], expected[1:2], 1e-9)
+    @test closeto(ours[3:3], expected[3:3], 1e-8)
+    # The states, the quadrature and the seeds at the 3 times after the initial time; the gradient by x0 and q.
+    record = only(call for (call, _) in values(CasADiCodegen.Codegen.JULIA_CALLS) if call.name == "AG_a")
+    @test record.nnz_in == [2, 3, 9, 9] && record.nnz_out == [5]
+    # Only the last time: the cost of the reverse derivative of the arc with fixed times.
+    last_cost = integrator("AL", Vern9(), dae, 0.5, [3.0]; adjoint = true, TIGHT...)(x0, q)
+    k = CasADiCodegen.Function("last", [x0, q], [gradient(last_cost[1][1] * last_cost[1][2] + 3 * last_cost[2], q)])
     @test closeto(ode_emitted(k, point[1:2]), reference[3:3], 1e-9)
+end
+
+# The seeds of a least-squares cost are the residuals at the output times, so their error goes
+# into the gradient with the weight of the sensitivities. At the minimum the terms cancel, and
+# the gradient is as accurate as the states on the grid. Regression: interpolated states
+# (`saveat`) of the integration without sensitivities gave a gradient 20 times less accurate
+# than the forward sensitivities.
+@testset "adjoint gradient of a least-squares fit at its minimum" begin
+    x, p = SX.sym("x", 2), SX.sym("p", 4)
+    lotka = Dict("x" => x, "p" => p, "ode" => vertcat([(p[1] - p[2] * x[2]) * x[1], (p[4] * x[1] - p[3]) * x[2]]))
+    times, θ, u0 = collect(0.0:0.1:10.0), [1.5, 1.0, 3.0, 1.0], [1.0, 1.0]
+    q = MX.sym("q", 4)
+    reference = integrator("LR", Vern9(), lotka, 0.0, times; TIGHT...)
+    data = reshape(casadi_eval(reference, u0, θ)[1], 2, :) .+ [0.01 * sin(7.0 * i + 3.0 * k) for i in 1:2, k in eachindex(times)]
+    function fit(F)
+        cost = C.sumsqr(MX(C.DM(data)) - F(MX(C.DM(u0)), q)) / length(data)
+        CasADiCodegen.Function("fit", [q], [gradient(cost, q)])
+    end
+    exact = only(casadi_eval(fit(reference), θ))
+    loose = (; abstol = 1e-10, reltol = 1e-10, specialize = SciMLBase.AutoSpecialize)
+    by_adjoint = only(casadi_eval(fit(integrator("LA", Vern9(), lotka, 0.0, times; adjoint = true, loose...)), θ))
+    @test maximum(abs, by_adjoint - exact) < 3e-10           # 1.9e-9 with interpolated states
 end
 
 # The reverse derivative through an event has the term of the event time: the multipliers jump

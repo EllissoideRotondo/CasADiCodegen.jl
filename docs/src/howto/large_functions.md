@@ -88,7 +88,7 @@ can be deleted at any time. Four rules apply.
   `generate_julia`. An integrator or a rootfinder goes into the package with its
   algorithm and its options, and the package also holds the machine code of the
   solver for `Float64`, so that a later session does not compile the solver again.
-- An input or an output with structural zeros makes the module import SparseArrays.jl,
+- An input or an output with structural zeros makes the module import SparseArrays,
   which must then be in the environment.
 
 ## Keep bounds checks off in tests

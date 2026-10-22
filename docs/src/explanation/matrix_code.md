@@ -31,14 +31,22 @@ as CasADi does when it expands, while code that keeps the matrix operations runs
 only the branch that is selected. The package does not choose between the two from
 the cost of a branch: when CasADi can expand every branch, the default
 `expand = true` gives expanded code that computes all of them, so an expensive branch
-needs `expand = false`, whereas a branch that CasADi cannot expand, such as a call of
-a Julia function, keeps the code as matrix code with either setting, because the
-switch calls each branch as a separate function and a call of a Julia function
+needs `expand = false`. A branch that CasADi cannot expand, such as a call of a Julia
+function, keeps the code as matrix code with either setting, because the switch calls each branch as a separate function and a call of a Julia function
 inside a called function is the last case of the rule above.
 
 ```julia
 g, g! = build_function(f; expression = Val{false}, expand = false)   # f is an MX function
 ```
+
+Matrix code writes a `map` of CasADi, serial, on threads or with OpenMP, as one loop
+that calls the mapped function on each block of columns in one thread, so that its
+size does not grow with the number of columns; a copy of nonzeros that moves blocks
+by a fixed stride, as a transpose does, is likewise one loop over the blocks.
+Expanded code, in contrast, repeats the body of the mapped function for each column.
+CasADi builds `mapaccum` and `fold` as nested functions, each of which calls the next
+one a fixed number of times, so that their matrix code grows with the logarithm of
+the number of steps.
 
 Code that keeps the matrix operations also contains the operations that CasADi
 cannot expand to scalar code. An index that is a value of the model, as in `v[i]`
@@ -66,7 +74,7 @@ the code agrees with CasADi at every input.
 | B-spline node; `einstein`, a sum of products of tensor elements over repeated indices; the contracted Kronecker products (`kron_contract`), which multiply each block of a block matrix with a second operand without forming the Kronecker product; `repsum`, the sum of the equal blocks of a matrix; `find`, the index of the first nonzero element | The loops of CasADi over tables that are read from its C code |
 | `convexify`, which makes a symmetric matrix positive definite | The routines of CasADi 3.8.1, statement by statement, for the three strategies |
 | `attachAssert`, `monitor`, `printme`, `dump`, `lift` (which marks an expression for the lifted Newton method of CasADi) | The check, the print or the file of CasADi; the value passes |
-| `map` on threads or with OpenMP | A loop |
+| `map`, serial, on threads or with OpenMP | One loop over the blocks of columns, in one thread, that calls the mapped function; a map of a Julia function calls it once per block, written out |
 | External function from a compiled library | A direct call of the library, with `Float64` only |
 | Rootfinder `newton` | The iteration of CasADi 3.8.1 with its line search and its options |
 | Integrators `rk` and `collocation`, with forward and adjoint sensitivities and with derivatives of the second order | The loop of steps of CasADi, as a loop over the step function of CasADi; a collocation step is a Newton rootfinder |
@@ -96,13 +104,10 @@ instructions 20 times in a chain and returns the result with its Jacobian. Expan
 code repeats the 710 instructions at each of the 20 calls, so it takes longer to
 build and to compile, and in this model it is also slower at later calls than the
 matrix code, which compiles the called function once; both are faster than the
-virtual machine of CasADi. The table gives one measurement of each form; the
-measurement does not record which form of the generated function was called, so its
-memory column is not comparable with the forms that allocate no memory in
-[Scalar code and its forms](@ref).
+virtual machine of CasADi. The table gives one measurement of each form.
 
-| Form | Build | First call | Later calls | Memory per call |
-|---|---|---|---|---|
-| `expand = true` | 4.8 s | 86 s | 183 µs | 85 kB |
-| `expand = false` | 0.3 s | 13 s | 134 µs | 16 kB |
-| CasADi virtual machine | | | 950 µs | |
+| Form | Build | First call | Later calls |
+|---|---|---|---|
+| `expand = true` | 4.8 s | 86 s | 183 µs |
+| `expand = false` | 0.3 s | 13 s | 134 µs |
+| CasADi virtual machine | | | 950 µs |

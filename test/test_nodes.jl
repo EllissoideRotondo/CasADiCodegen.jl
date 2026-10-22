@@ -227,13 +227,26 @@ const TABLE_POINTS = [[0.3, 0.7], [1.0, 2.0], [4.99, 3.9], [-1.0, 5.0], [6.0, -2
     end
 end
 
-@testset "a map on threads is a loop" begin
-    x = MX.sym("x", 2)
-    body = CasADiCodegen.Function("body", [x], [C.sin(x) * x[1]])
-    X = MX.sym("X", 2, 3)
-    @testset "$kind" for kind in ("thread", "openmp")
-        f = CasADiCodegen.Function("f", [X], [C.map(body, 3, kind)(X) + 1])
+# A map calls its body in one loop, so the size of the code does not depend on
+# the number of columns (bug: every map was unrolled).
+@testset "a map is a loop" begin
+    x, s = MX.sym("x", 2), MX.sym("s", C.Sparsity.lower(2))
+    body = CasADiCodegen.Function("body", [x, s], [C.sin(x) * x[1] + s[2, 1], C.mtimes(s, x)])
+    mapped(n, kind) = let X = MX.sym("X", 2, n), S = MX.sym("S", C.repmat(C.Sparsity.lower(2), 1, n))
+        CasADiCodegen.Function("f", [X, S], [C.map(body, n, kind)(X, S)...])
+    end
+    code_length(f) = length(string(build_function(f; nonzeros = true, expression = Val{true}, expand = false)))
+    @testset "$kind" for kind in ("serial", "thread", "openmp")
+        f = mapped(3, kind)
         @test isequal(evaluated(native(f), f, mx_inputs(f)), mx_casadi(f, mx_inputs(f)))
+        @test code_length(mapped(300, kind)) <= 1.1 * code_length(f)     # longer numbers only
+    end
+    @testset "derivatives, which are maps of the derivatives of the body" begin
+        f = mapped(3, "serial")
+        X, S = C.mx_in(f)
+        y = f(X, S)
+        J = CasADiCodegen.Function("J", [X, S], [C.jacobian(y[1], X), CasADiCodegen.hessian(C.sumsqr(y[2]), X)[1]])
+        @test all_agree(evaluated(native(J), J, mx_inputs(J)), mx_casadi(J, mx_inputs(J)); rtol = 1e-12)
     end
 end
 
@@ -312,6 +325,25 @@ end
     h = CasADiCodegen.Function("h", [a], [stuck(a)])
     @test all(all_agree(evaluated(native(h), h, [[start]]), mx_casadi(h, [[start]]); rtol = 1e-12) for start in (0.1, 0.5))
     @test evaluated(native(h), h, [[0.1]]) == [[0.1]]
+end
+
+# A Jacobian of 60 rows and about 3 elements per row gets the sparse LU factorization.
+@testset "Newton rootfinder of CasADi with a sparse Jacobian" begin
+    n = 60
+    z, q = SX.sym("z", n), SX.sym("q")
+    at(i) = 1 <= i <= n ? z[i] : SX(0.0)
+    bratu = [at(i - 1) - 2 * z[i] + at(i + 1) + q * exp(z[i]) / (n + 1)^2 for i in 1:n]
+    # Row i holds equation i + 2, so the diagonal of the Jacobian is zero and the factorization must exchange rows.
+    residual = CasADiCodegen.Function("bratu", [z, q], [vertcat(bratu[[3:n; 1; 2]]...)])
+    newton = C.rootfinder("bratu_newton", "newton", residual)
+    x, λ = MX.sym("x", n), MX.sym("λ")
+    f = CasADiCodegen.Function("f", [x, λ], [newton(x, λ), C.jacobian(newton(x, λ), λ)])
+    values = [zeros(n), [2.0]]
+    g = native(f)
+    @test all_agree(evaluated(g, f, values), mx_casadi(f, values); rtol = 1e-10)
+    # Dual numbers go through the sparse factorization.
+    slope = ForwardDiff.derivative(t -> g([zeros(typeof(t), n), zeros(typeof(t), n)], (zeros(n), [t]))[1][n ÷ 2], 2.0)
+    @test slope ≈ mx_casadi(f, values)[2][n÷2] rtol = 1e-8
 end
 
 # An integrator of CasADi with a fixed step is its loop of steps, written out.

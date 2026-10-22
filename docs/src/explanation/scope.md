@@ -3,8 +3,7 @@
 This page lists what the package supports, what it refuses when it builds the code,
 and where the generated code or the front end behaves differently from CasADi or
 from Julia. It is meant for a reader who checks whether a model fits the package
-before writing it, or who meets an error at build time; the other pages of the
-manual link here instead of repeating these lists.
+before writing it, or who meets an error at build time.
 
 ## What is supported
 
@@ -12,13 +11,18 @@ manual link here instead of repeating these lists.
 |---|---|
 | Scalar (SX) functions | Each scalar operation of CasADi 3.8.1, listed below |
 | Matrix (MX) functions, not expanded | Elementwise operations, slices, joins, splits, transpose, reshape, projection (a change of the sparsity pattern of a matrix), assignment to chosen nonzeros of a matrix, reading of nonzeros at indices that the model computes, the search of an interval in a grid, `monitor`, calls to SX and MX functions, `map`, `mapaccum` and `fold`, `if_else` and `conditional` with `short_circuit = true`, which run only the selected branch |
-| Functions and nodes of CasADi without instructions | Julia code for the interpolants `linear` and `bspline`, the B-spline node, `einstein`, `kron_contract`, `repsum`, `convexify`, `attachAssert`, `printme`, `dump`, `lift`, `find`, `map` on threads, external functions (`Float64` only), the rootfinder `newton`, and the integrators `rk` and `collocation` with sensitivities of the first and the second order |
-| Solver objects of CasADi | As SciML problems: `ODEProblem`, `NonlinearProblem` and `OptimizationProblem`. In generated code with `solvers = CasADiCodegen.Solvers(...)`: `cvodes`, `idas`, `kinsol` and `fast_newton`, and the solvers of `nlpsol` with `Float64` only, all with forward and reverse derivatives, the integrators with event functions, with or without algebraic states, with `Float64` only and forward derivatives only, and the solvers of `conic` for quadratic problems |
+| Functions and nodes of CasADi without instructions | Julia code for the interpolants `linear` and `bspline`, the B-spline node, `einstein`, `kron_contract`, `repsum`, `convexify`, `attachAssert`, `printme`, `dump`, `lift`, `find`, `map` (serial, on threads or with OpenMP) as one loop, external functions (`Float64` only), the rootfinder `newton`, and the integrators `rk` and `collocation` with sensitivities of the first and the second order |
+| Solver objects of CasADi | As SciML problems: `ODEProblem`, `NonlinearProblem` and `OptimizationProblem`, also of an `Opti` stack. In generated code with `solvers = CasADiCodegen.Solvers(...)`: `cvodes`, `idas`, `kinsol` and `fast_newton`, with forward and reverse derivatives; the solvers of `nlpsol`, with `Float64` only and forward and reverse derivatives; the integrators with event functions, with or without algebraic states, with `Float64` only and forward derivatives only; the solvers of `conic` for quadratic problems |
 | Linear algebra, not expanded | Matrix product, inner product, bilinear form, rank one update, Frobenius, 1 and infinity norms, smallest and largest element, Kronecker product, `logsumexp`, determinant, inverse, linear solve |
 | Julia functions | `callback(f, name, sizes_in, sizes_out; jacobian)`, with derivatives of any order from Julia functions or from a backend |
-| Functions of SciML problems | `ODEFunction`, `NonlinearFunction` and `OptimizationFunction` from CasADi functions, with generated derivatives; dense matrices; no Hessian of the Lagrangian, which the solvers make from the Hessians of the constraints |
-| Roots of equations | `rootfinder(name, alg, f)`; dense unknowns and arguments, derivatives of any order |
-| Ordinary differential equations | `integrator(name, alg, dae, t0, tf)`, with free times `integrator(name, alg, dae)`, and with a vector of times for `tf`; quadratures, forward sensitivities, adjoint sensitivities with `adjoint = true`, and with free times one or more events, each with a transition of the state; algebraic states with `mass`, with forward and adjoint sensitivities and with events, but not with a vector of times |
+| Julia models traced into CasADi | Generic Julia code on `Traced` numbers through `traced` and `untraced`; the function of an `ODEProblem` or a `NonlinearProblem`, in place or out of place, through `traced_function` |
+| Functions of SciML problems | `ODEFunction`, `NonlinearFunction` and `OptimizationFunction` from CasADi functions, with generated derivatives, dense by default; the specialization with `specialize`; the keywords `chunk_size`, `split_above`, `optlevel` and `cache` of `build_function` |
+| `ODEFunction` and `NonlinearFunction` | A sparse Jacobian with its `jac_prototype` with `sparse = true`; out-of-place functions of static arrays with `inplace = false`; the names of the symbols as `sys`, and further results as observed variables |
+| `OptimizationFunction` and `OptimizationProblem(S::nlpsol)` | No Hessian with `hess = false`; with `sparse = true`, sparse `hess`, `cons_j` and `cons_h` with their prototypes, and the Hessian of the Lagrange function `lag_h` with `lag_hess_prototype` |
+| Models of a `DaeBuilder` | `ODEProblem(dae, tspan)`, with the start values, the names of scalar variables, algebraic states as a mass matrix, and inputs as constant parameters; no quadratures and no `when` equations. `der(dae, x)` declares a differential state |
+| Linearization and order of equations | `linearization(f, h)`: generated code for the matrices `A`, `B`, `C` and `D` of `x' = f(x, u, p)`, `y = h(x, u, p)`, dense or with `sparse = true`, without algebraic states; `block_triangular_form(sparsity)`: the permutations and blocks of `Sparsity::btf`. The index reduction of CasADi (`dae_reduce_index`, `dae_map_semi_expl`) is not available, because the front end does not wrap it |
+| Roots of equations | `rootfinder(name, alg, f)`; dense unknowns and arguments, derivatives of any order; static arrays up to 16 unknowns and vectors beyond |
+| Ordinary differential equations | `integrator(name, alg, dae, t0, tf)`, with free times `integrator(name, alg, dae)`, and with a vector of times for `tf`; quadratures, forward sensitivities, adjoint sensitivities with `adjoint = true`, and with free times one or more events of one or several event functions, each with a transition of the state, a fixed number of events or at most a number with their count; algebraic states with `mass`, with forward and adjoint sensitivities and with events, but not with a vector of times |
 | Rules for automatic differentiation | `CasADiCodegen.differentiable(f)`, with a forward and a reverse rule for ChainRulesCore.jl |
 | Julia functions on symbols | Methods that the front end leaves undefined: `inv` as the matrix inverse, `min`, `max`, `ifelse`, `atan(y, x)`, `hypot`, `rem`, `!=`, `&`, `LinearAlgebra.dot`, `LinearAlgebra.norm`, `SpecialFunctions.erf` |
 | Forms of a generated function | Out of place and in place on `Array`, `SArray` and `MArray` in matrix shape; in place on `SparseMatrixCSC`; in place on vectors of nonzeros with `nonzeros = true` |
@@ -83,20 +87,23 @@ not a Dict, and the module of CasADiSWIG_jll used directly, without CasADiCodege
 The first case is avoided with a vector of a concrete element type, such as `[1, 2]`
 or `Float64[1, 2]`, and with nested options given as a Dict. The function
 `change_option(f, name, value)` is not affected: it takes a `GenericType` only, and the
-front end has no way to make one from a number.
+front end has no way to make one from a number, so it cannot set a numeric option.
 
 ### Other differences
 
 - The `newton` rootfinder does not read the option `constraints`, because the Newton
-  method of CasADi does not use it.
+  method of CasADi does not use it. It solves each linear system by elimination with
+  row exchanges, dense or, for a Jacobian of 16 rows or more with at most a quarter of
+  its elements stored, sparse LU in the order of the unknowns, where CasADi uses a QR
+  factorization, so the roots agree to rounding error only.
 - An operation that leaves its domain gives `NaN`, through NaNMath.jl, as in CasADi;
   `nanmath = false` selects the functions of Base, which throw. `erfinv` is the
   accurate `SpecialFunctions.erfinv`, where that of CasADi has a relative error up
   to 1e-4.
-- Determinant, inverse and linear solve use a dense LU factorization, where CasADi
-  uses a sparse QR factorization, so the results agree to rounding error only, and a
-  singular matrix gives `Inf` or `NaN` and no error. A solve with a sparse matrix of
-  8 rows or more uses the sparse QR factorization of CasADi when its factors have
+- Determinant and inverse use a dense LU factorization, where CasADi uses a sparse QR
+  factorization, so the results agree to rounding error only, and a singular matrix
+  gives `Inf` or `NaN` and no error. A linear solve does too, except that a solve with
+  a sparse matrix of 8 rows or more uses the sparse QR factorization of CasADi when its factors have
   fewer nonzeros than half of the full matrix; for a tridiagonal matrix, measured once:
 
   | Rows | Sparse QR | Dense LU | CasADi virtual machine |
@@ -114,8 +121,19 @@ front end has no way to make one from a number.
   model without events, so its Jacobian loses the effect of the transitions, with no
   error, in the virtual machine of CasADi too. In this package, `jacobian(ex, arg)` of
   an expression that calls such an integrator gives the dense Jacobian of one forward
-  direction per element of `arg`, and the method `jacobian()` of a `Function` that
-  holds one throws an error that names `jtimes`.
+  direction per element of `arg`, and `CasADiCodegen.C.jacobian(F)` of a function `F`
+  that holds one throws an error that names `jtimes`.
+- CasADi 3.8.1 misses an event of a `cvodes` integrator that falls exactly on one of its
+  output times, so the state does not jump there or later. The code that replaces such an
+  integrator (see [Integrators with events](@ref)) applies the event and returns the state
+  after it at that output time, which is the solution of the model; with an event
+  function `10 - t`, a jump of 50 and the output times 5, 10, 10.5 and 15, the two
+  results differ by up to 50 after `t = 10`, while with the event at 10.25 they agree.
+- The front end of CasADi 3.8.1 calls the const overload of `DaeBuilder::der` for
+  `der(dae, x)`, which throws "Variable x has no time derivative" for a variable without
+  a derivative. In this package, `der(dae, x)` calls the overload that Python and C++
+  call, which makes the derivative, so that `eq(dae, der(dae, x), rhs)` declares the
+  differential state `x`.
 - `inv(A)` is the matrix inverse for SX and for MX, as in Julia, and `inv(A, "qr")`
   names the linear solver of an MX graph. The function `CasADiCodegen.C.inv(A)` of the
   front end of CasADi 3.8.1 is the reciprocal of each element for an MX matrix.

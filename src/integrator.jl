@@ -64,6 +64,9 @@ the caller copies it before the next call.
 - `tail`: constant values that follow `x0` in the initial state of the solver.
   An integration of a state with its sensitivities starts from the state, the
   identity matrix and zeros.
+- `width`: the number of output times. With more than one, the result has the
+  values of each state at all the times, one state after the other (see
+  `ode_grid`).
 - `sensitivity`: that integration, once CasADi has asked for the Jacobian. It
   takes the same `x0` and `q`.
 """
@@ -71,9 +74,10 @@ struct Integration{S}
     name::String
     solver::S
     tail::Vector{Float64}
+    width::Int
     sensitivity::Base.RefValue{Any}
 end
-Integration(name, solver, tail) = Integration(name, solver, tail, Ref{Any}(nothing))
+Integration(name, solver, tail, width = 1) = Integration(name, solver, tail, width, Ref{Any}(nothing))
 function (i::Integration)(x0, q)
     isempty(i.tail) && return i.solver(x0, q)
     T, n = promote_type(eltype(x0), eltype(q)), length(x0)
@@ -200,7 +204,8 @@ function (a::Ahead)(x0, q)
     copyto!(records.parameters[k], q)
     copyto!(records.results[k], result)
     records.count = k
-    view(records.results[k], 1:length(x0)+length(a.state.tail))
+    # The values of the state at each output time come first, whatever the number of times (see `ode_grid`).
+    view(records.results[k], 1:(length(x0)+length(a.state.tail))*a.state.width)
 end
 (a::Ahead)(x0) = a(x0, NO_PARAMETERS)
 
@@ -233,6 +238,64 @@ end
 (r::Remembered)(x0) = r(x0, NO_PARAMETERS)
 
 """
+    GridAdjoint
+
+The Julia function `(x0, q, Y, Λ) -> [l0; s0]`, or `(x0, Y, Λ) -> l0` when the model has no
+parameters, that gives the reverse derivative of an integration over a grid of `width`
+output times (see `ode_grid`). `Y` holds the `n` states at each time and `Λ` their seeds,
+one state after the other.
+
+`solver` integrates the adjoint equations of the state `x`, its multipliers `l` and the sums
+`s` of the `columns` parameters, from the last output time back to the initial time, in
+one run. At each output time on the way, the state starts again from its value in `Y` and
+the multipliers take the seed of that time. The result has the multipliers of the first
+`given` states and the sums at the initial time.
+"""
+struct GridAdjoint{S}
+    solver::S
+    n::Int
+    given::Int
+    columns::Int
+    width::Int
+end
+
+"""
+    Seeds(Y, Λ, n, width)
+
+What the solver of a `GridAdjoint` calls at the output time `k` of its run, `(u, k)`: the
+state of `u` takes its value at that time and the multipliers add their seed. The last
+time of the run is the initial time, which has neither.
+"""
+struct Seeds{A,B}
+    Y::A
+    Λ::B
+    n::Int
+    width::Int
+end
+function (seeds::Seeds)(u, k)
+    k < seeds.width || return u
+    j, n, N = seeds.width - k, seeds.n, seeds.width      # the run visits the output times backward
+    for i in 1:n
+        u[i] = seeds.Y[(i-1)*N+j]
+        u[n+i] += seeds.Λ[(i-1)*N+j]
+    end
+    u
+end
+
+function (a::GridAdjoint)(x0, q, Y, Λ)
+    n, N = a.n, a.width
+    @requires length(Y) == length(Λ) == n * N "the states and the seeds must have $(n * N) elements"
+    T = promote_type(eltype(x0), eltype(q), eltype(Y), eltype(Λ))
+    u0 = zeros(T, 2n + a.columns)
+    for i in 1:n
+        u0[i], u0[n+i] = Y[i*N], Λ[i*N]
+    end
+    uf = a.solver(u0, q, Seeds(Y, Λ, n, N))
+    [uf[n+1:n+a.given]; uf[2n+1:2n+a.columns]]
+end
+(a::GridAdjoint)(x0, Y, Λ) = a(x0, NO_PARAMETERS, Y, Λ)
+
+"""
     call_sites(functions) -> IdDict
 
 Return what the generated code calls for each Julia function of `functions`,
@@ -251,7 +314,7 @@ Base.show(io::IO, i::Integration) = print(io, "the integrator \"", i.name, "\"")
 
 # The objects of an integration in a source file. The pairs of integrations are made again
 # as they are, and each solver from its own parts.
-writable(::Union{Integration,Ahead,Remembered,RightSide,ExternalCall,NewtonCall}) = true
+writable(::Union{Integration,Ahead,Remembered,RightSide,ExternalCall,NewtonCall,GridAdjoint}) = true
 codegen_path(writer::SourceWriter, name::Symbol) = Expr(:., module_path(writer, @__MODULE__), QuoteNode(name))
 
 """
@@ -261,7 +324,9 @@ Return the expression that makes `object` again in a source file. Each type
 with `writable` has a method; the SciML extension has those of its solvers.
 """
 object_source(writer::SourceWriter, i::Integration) =
-    :($(codegen_path(writer, :Integration))($(i.name), $(source(writer, i.solver)), $(value_source(writer, i.tail))))
+    :($(codegen_path(writer, :Integration))($(i.name), $(source(writer, i.solver)), $(value_source(writer, i.tail)), $(i.width)))
+object_source(writer::SourceWriter, a::GridAdjoint) =
+    :($(codegen_path(writer, :GridAdjoint))($(source(writer, a.solver)), $(a.n), $(a.given), $(a.columns), $(a.width)))
 object_source(writer::SourceWriter, a::Ahead) =
     :($(codegen_path(writer, :Ahead))($(source(writer, a.state)), $(source(writer, a.sensitivity)), $(source(writer, a.run))))
 object_source(writer::SourceWriter, r::Remembered) =
@@ -371,24 +436,31 @@ function ode_integrator(name::AbstractString, dae, make_solver; adjoint::Bool = 
 end
 
 """
-    ode_event(name, dae, make_solver, make_event; adjoint = false, events = 1, terminal = true, mass = Float64[]) -> CasADiCodegen.Function
+    ode_event(name, dae, make_solver, make_event; adjoint = false, events = 1, terminal = true, exact = true, mass = Float64[]) -> CasADiCodegen.Function
 
 Return the CasADi function `(x0, p, t0, tf) -> (xf, te)` that integrates `dae`
 from `t0` toward `tf` and stops at the event. The event is the first time `te`
-at which the event function `"zero"` of the state, the parameters and the time
-changes sign. A model with no parameters has no `p`.
+at which an element of the event function `"zero"` of the state, the
+parameters and the time changes sign. A model with no parameters has no `p`.
 
 `xf` is the state at `te`. The quadratures to `te` follow it as `"qf"` when the
 model has them. A zero of the event function at `t0` is not an event, so an
-integration can start on the surface. The results do not depend on `tf`.
+integration can start on the surface. With `exact`, the results do not depend
+on `tf`.
+
+With more than one element of `"zero"`, the result `"ie"` follows `te`: for
+each event, the place of the element that changed its sign, from 1. When two
+elements change their sign at the same time, the first one counts.
 
 # Arguments
 - `make_solver`: that of `ode_integrator` with free times.
-- `make_event(rhs!, zero!, n, m)`: gets the right side `rhs!(du, u, q, t)`
-  and the event function `zero!((out,), (u, q, (t,)))` for `n` states and `m`
-  parameters. It returns the Julia function `(tf, x0, p, t0) -> te`, without
-  `p` when the model has none. That function throws when no event comes before
-  `tf`.
+- `make_event(rhs!, zero!, n, m, k)`: gets the right side `rhs!(du, u, q, t)`
+  and the event function `zero!((out,), (u, q, (t,)))` with `k` elements, for
+  `n` states and `m` parameters. It returns the Julia function
+  `(z0, x0, p, t0, tf) -> (te, i)`, without `p` when the model has none, where
+  `i` is the place of the element that changed its sign. `z0` is a guess that
+  the function does not use. When no event comes before `tf`, the function
+  throws, or with `exact = false` returns `(tf, 0)`.
 - `mass`: that of `ode_integrator`. `rhs!` then carries it, and the algebraic states
   of `x0` are a guess.
 
@@ -398,17 +470,22 @@ integration can start on the surface. The results do not depend on `tf`.
 - `terminal`: when true, the integration ends at the last event, where the
   state is that before its transition. Otherwise it goes on to `tf` after the
   last transition, and later events have no effect.
+- `exact`: when false, fewer than `events` events can come before `tf`. The
+  result `"ne"` then counts the events, a missing event has the time `tf` and
+  the place 0, and the state goes on to `tf` with no transition.
 
 The entry `"transition"` of `dae` is the state after an event, as an expression
-of the state before it, the parameters and the time. Without it the state does
-not change.
+of the state before it, the parameters and the time. It has one column, or one
+column per element of `"zero"`: column `i` then applies after an event of
+element `i`. Without it the state does not change.
 
-The event time is the root of the event function on the state of the free-time
-integrator, so CasADi differentiates it by the implicit function theorem, to
-any order.
+The event time is the root of the element of the event function that changed
+its sign, on the state of the free-time integrator, so CasADi differentiates it
+by the implicit function theorem, to any order. A missing event has the
+derivatives of `tf`. The places and the count have no derivatives.
 """
 function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::Bool = false, events::Integer = 1, terminal::Bool = true,
-                   mass::Vector{Float64} = Float64[])
+                   exact::Bool = true, mass::Vector{Float64} = Float64[])
     check_dae(name, dae; event = true)
     @requires haskey(dae, "zero") "integrator \"$name\": the entry \"zero\" is necessary"
     @requires events >= 1 "integrator \"$name\": the number of events must be 1 or more; got $events"
@@ -417,36 +494,53 @@ function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::
     symbol = typeof(x).sym
     p = has_p ? dae["p"] : symbol("p", 0)
     t = haskey(dae, "t") ? dae["t"] : symbol("t")
-    n, m = size(x, 1), size(p, 1)
+    n, m, k = size(x, 1), size(p, 1), size(dae["zero"], 1)
     surface = Front.Function("surface", [x, p, t], [Front.densify(dae["zero"])])
     model = Front.Function("rhs", [x, p, t], [Front.densify(dae["ode"])])
     emitted(g) = Emitted(build_function(g; expression = Val{false}, nonzeros = true), g, :nonzeros)
-    find = make_event(RightSide(emitted(model), mass, algebraic_slope(Front.densify(dae["ode"]), x, p, t, mass)), emitted(surface), n, m)
+    find = make_event(RightSide(emitted(model), mass, algebraic_slope(Front.densify(dae["ode"]), x, p, t, mass)), emitted(surface), n, m, k)
 
-    x0, t0, tf, te = Front.MX.sym("x0", n), Front.MX.sym("t0"), Front.MX.sym("tf"), Front.MX.sym("te")
+    x0, t0, tf, z = Front.MX.sym("x0", n), Front.MX.sym("t0"), Front.MX.sym("tf"), Front.MX.sym("z", 2)
     q = has_p ? [Front.MX.sym("p", m)] : Front.MX[]
+    # The place `i` of the element that changed its sign selects it: one_hot(i) has a 1 in row i, and zeros for i = 0.
+    one_hot(i) = Front.vertcat([C.eq(i, Front.MX(Float64(j))) for j in 1:k])
+    te, place = z[1], z[2]
     at_time = arc(x0, q..., t0, te)
     value = surface(has_quad ? at_time[1] : at_time, has_p ? q[1] : Front.MX(0, 1), te)
+    chosen = k == 1 ? value : Front.dot(one_hot(place), value)
+    # The unknowns are the time and the place. The place is the root of i - round(i), which no
+    # input moves, so CasADi gives it no derivatives; a missing event is the root of te - tf.
+    residual = Front.vertcat([exact ? chosen : C.if_else(C.eq(place, Front.MX(0.0)), te - tf, chosen), place - C.floor(place + Front.MX(0.5))])
     # Inline, so that the calls of the integrator are at the top level of the graph of the user.
-    residual = Front.Function(name * "_zero", [te, x0, q..., t0], [value], Dict("always_inline" => true))
-    event_time = implicit_function(name * "_time", residual, find)
+    residual_function = Front.Function(name * "_zero", [z, x0, q..., t0, tf], [residual], Dict("always_inline" => true))
+    event_time = implicit_function(name * "_time", residual_function, find)
     jump = haskey(dae, "transition") ? Front.Function("transition", [x, p, t], [Front.densify(dae["transition"])]) : nothing
-    state, start, times, sums = x0, t0, Front.MX[], Front.MX[]
+    state, start, times, places = x0, t0, Front.MX[], Front.MX[]
+    sums = Front.MX[]
     function advance(to)
         result = arc(state, q..., start, to)
         has_quad && push!(sums, result[2])
         state, start = has_quad ? result[1] : result, to
     end
-    for k in 1:events
-        # Loop invariant: `state` at the time `start` follows k - 1 events, each with its jump, and `times` holds their times.
-        push!(times, event_time(tf, state, q..., start))
+    for _ in 1:events
+        # Loop invariant: `state` at the time `start` follows the events of `times`, each with its jump, and `places` holds their places.
+        found = event_time(Front.vertcat([tf, Front.MX(0.0)]), state, q..., start, tf)
+        push!(times, found[1])
+        push!(places, found[2])
         advance(times[end])
-        (k < events || !terminal) && jump !== nothing && (state = jump(state, has_p ? q[1] : Front.MX(0, 1), start))
+        if (length(times) < events || !terminal) && jump !== nothing
+            after = jump(state, has_p ? q[1] : Front.MX(0, 1), start)
+            size(after, 2) > 1 && (after = Front.mtimes(after, one_hot(places[end])))
+            state = exact ? after : C.if_else(places[end] > 0, after, state)
+        end
     end
     terminal || advance(tf)
-    reached = Front.vertcat(times)
-    Front.Function(String(name), [x0, q..., t0, tf], has_quad ? [state, reduce(+, sums), reached] : [state, reached],
-                   has_p ? ["x0", "p", "t0", "tf"] : ["x0", "t0", "tf"], has_quad ? ["xf", "qf", "te"] : ["xf", "te"],
+    outputs, names = [state], ["xf"]
+    has_quad && (push!(outputs, reduce(+, sums)); push!(names, "qf"))
+    push!(outputs, Front.vertcat(times)); push!(names, "te")
+    k > 1 && (push!(outputs, Front.vertcat(places)); push!(names, "ie"))
+    exact || (push!(outputs, reduce(+, [place > 0 for place in places])); push!(names, "ne"))
+    Front.Function(String(name), [x0, q..., t0, tf], outputs, has_p ? ["x0", "p", "t0", "tf"] : ["x0", "t0", "tf"], names,
                    Dict("always_inline" => true))
 end
 
@@ -498,29 +592,54 @@ end
 
 Return the CasADi function `(x0, p) -> X`, or `x0 -> X`, whose column `k` is
 the state at `times[k]` of the integration that starts at `t0`. With
-quadratures, a second result `"qf"` has their values at each time.
+quadratures, a second result `"qf"` has their values at each time. The times can
+be in any order and on both sides of `t0`.
 
-The function is a chain of calls of the free-time integrator, one per time,
-each from the state and the time before it. `make_solver` is therefore that of
-`ode_integrator` with free times, and the times can be in any order.
+One integration from `t0` gives the states at all the distinct times after
+`t0`, and one more those before it; a time equal to `t0` gives `x0`.
+`make_solver(rhs!, n, m, t0, stops)` gets the right side `rhs!(du, u, q, t)` of
+`n` states and `m` parameters, the initial time and the times `stops`, in the
+order of the integration, and returns a solver `run` with two methods:
+
+- `run(x0, q)` integrates once and returns the state at each of the `stops`, in
+  a vector of `n * length(stops)` elements: the first state at all the times,
+  then the second one, and so on.
+- `run(x0, q, jump!)` integrates once, calls `jump!(u, k)` with the state `u`
+  when it reaches `stops[k]`, and goes on from the state that `jump!` changed. It
+  returns the state at the last of the `stops`.
+
+The Jacobian is one integration of the states with their sensitivities over the
+same times. With `adjoint`, a reverse derivative is one integration of the
+adjoint equations from the last time back to `t0` (see `GridAdjoint`), whose
+derivatives come from the forward sensitivities.
 """
 function ode_grid(name::AbstractString, dae, t0::Real, times::AbstractVector{<:Real}, make_solver; adjoint::Bool = false)
+    check_dae(name, dae)
     @requires !isempty(times) && isfinite(t0) && all(isfinite, times) "integrator \"$name\": the times must be finite, and at least one is necessary"
-    arc = ode_integrator(name, dae, make_solver; adjoint)
-    has_p, has_quad = haskey(dae, "p"), haskey(dae, "quad")
-    x0 = Front.MX.sym("x0", size(dae["x"], 1))
+    joined, start = with_quadratures(dae)
+    has_p, nx = haskey(dae, "p"), size(dae["x"], 1)
+    n = nx + length(start)
+    x0 = Front.MX.sym("x0", nx)
     p = has_p ? [Front.MX.sym("p", size(dae["p"], 1))] : Front.MX[]
-    states, sums, x, t = Front.MX[], Front.MX[], x0, Float64(t0)
-    for next in times
-        step = arc(x, p..., Front.MX(t), Front.MX(Float64(next)))
-        x = has_quad ? step[1] : step
-        push!(states, x)
-        # A quadrature starts at the first time, so each arc adds to the one before it.
-        has_quad && push!(sums, isempty(sums) ? step[2] : sums[end] + step[2])
-        t = Float64(next)
+    columns = Vector{Front.MX}(undef, length(times))
+    whole = nothing                     # the matrix of all the times, when it has them in their order
+    for (suffix, side) in (("", >), ("_before", <))
+        stops = sort!(unique(Float64[time for time in times if side(time, t0)]); by = time -> abs(time - t0))
+        isempty(stops) && continue
+        core = integration(name * suffix, joined, false, make_solver, start; adjoint, grid = (Float64(t0), stops))
+        X = C.transpose(reshape(core(x0, p...), length(stops), n))
+        stops == times && (whole = X)
+        for (k, time) in enumerate(times)
+            side(time, t0) && (columns[k] = X[:, searchsortedfirst(stops, time; by = s -> abs(s - t0))])
+        end
     end
-    outputs = has_quad ? [Front.horzcat(states), Front.horzcat(sums)] : [Front.horzcat(states)]
-    Front.Function(String(name), [x0, p...], outputs, has_p ? ["x0", "p"] : ["x0"], has_quad ? ["xf", "qf"] : ["xf"])
+    initial = isempty(start) ? x0 : Front.vertcat([x0, Front.MX(C.DM(start))])
+    for k in eachindex(times)
+        times[k] == t0 && (columns[k] = initial)
+    end
+    M = whole === nothing ? Front.horzcat(columns) : whole
+    outputs = isempty(start) ? [M] : [M[1:nx, :], M[nx+1:n, :]]
+    Front.Function(String(name), [x0, p...], outputs, has_p ? ["x0", "p"] : ["x0"], isempty(start) ? ["xf"] : ["xf", "qf"])
 end
 
 function check_dae(name::AbstractString, dae; event::Bool = false)
@@ -536,9 +655,9 @@ function check_dae(name::AbstractString, dae; event::Bool = false)
     @requires !haskey(dae, "t") || size(dae["t"]) == (1, 1) "integrator \"$name\": the time must be a scalar"
     @requires !haskey(dae, "quad") || size(dae["quad"], 2) == 1 "integrator \"$name\": the quadratures must be a column vector"
     @requires event || !haskey(dae, "zero") "integrator \"$name\": an event function, \"zero\", needs free times: give no times to the integrator"
-    @requires !haskey(dae, "zero") || size(dae["zero"]) == (1, 1) "integrator \"$name\": the event function, \"zero\", must be a scalar"
+    @requires !haskey(dae, "zero") || (size(dae["zero"], 2) == 1 && size(dae["zero"], 1) >= 1) "integrator \"$name\": the event function, \"zero\", must be a column vector that is not empty"
     @requires !haskey(dae, "transition") || haskey(dae, "zero") "integrator \"$name\": the state after an event, \"transition\", needs an event function, \"zero\""
-    @requires !haskey(dae, "transition") || size(dae["transition"]) == size(x) "integrator \"$name\": the state after an event, \"transition\", must have the size of the state"
+    @requires !haskey(dae, "transition") || (size(dae["transition"], 1) == size(x, 1) && size(dae["transition"], 2) in (1, size(dae["zero"], 1))) "integrator \"$name\": the state after an event, \"transition\", must have the size of the state, or one column per event function"
 end
 
 """
@@ -579,22 +698,28 @@ function algebraic_slope(ode, x, p, t, mass::Vector{Float64})
 end
 
 """
-    integration(name, dae, free, make_solver, tail = Float64[]; adjoint = false, mass = Float64[]) -> CasADiCodegen.Function
+    integration(name, dae, free, make_solver, tail = Float64[]; adjoint = false, mass = Float64[], grid = nothing) -> CasADiCodegen.Function
 
 Return the CasADi function of `ode_integrator` for a checked `dae`. With
 `free`, the last two parameters of `dae` are the initial and the final time,
 and the time of `dae` starts at zero. The function takes the first states of
 `dae` only; `tail` holds the initial values of the others.
+
+With `grid = (t0, stops)`, the times are fixed and the function returns the
+states at each of the `stops`, as the solver of `ode_grid` does; `make_solver`
+is then that of `ode_grid`.
 """
 function integration(name::AbstractString, dae, free::Bool, make_solver, tail::Vector{Float64} = Float64[];
-                     adjoint::Bool = false, mass::Vector{Float64} = Float64[])
-    @requires free || !adjoint "integrator \"$name\": the adjoint equations need an integrator with free times"
+                     adjoint::Bool = false, mass::Vector{Float64} = Float64[], grid::Union{Nothing,Tuple{Float64,Vector{Float64}}} = nothing)
+    @requires free || !adjoint || grid !== nothing "integrator \"$name\": the adjoint equations need an integrator with free times or a grid of times"
+    @requires grid === nothing || (!free && isempty(mass)) "integrator \"$name\": a grid of times needs fixed times and no mass matrix"
     x, ode = dae["x"], Front.densify(dae["ode"])
     symbol = typeof(x).sym
     has_p = haskey(dae, "p")
     p = has_p ? dae["p"] : symbol("p", 0)
     t = haskey(dae, "t") ? dae["t"] : symbol("t")
     n, m = size(x, 1), size(p, 1)
+    width = grid === nothing ? 1 : length(grid[2])
     given = n - length(tail)                    # the states that the function takes
     own = free ? m - 2 : m                      # the parameters of the model, without the times
     # The parameters whose sensitivities are integrated: those of the model and,
@@ -607,13 +732,24 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
     rhs = build_function(model; expression = Val{false}, nonzeros = true)
     # A solver that is compiled before the right side would call it with boxed arguments.
     precompile(rhs, (Tuple{Vector{Float64}}, Tuple{Vector{Float64},Vector{Float64},Tuple{Float64}}))
-    run = Integration(String(name), make_solver(RightSide(Emitted(rhs, model, :nonzeros), mass, algebraic_slope(ode, x, p, t, mass)), n, m), tail)
+    right_side = RightSide(Emitted(rhs, model, :nonzeros), mass, algebraic_slope(ode, x, p, t, mass))
+    run = Integration(String(name), grid === nothing ? make_solver(right_side, n, m) : make_solver(right_side, n, m, grid...), tail, width)
 
     # CasADi can ask for the Jacobian more than once, because it does not keep a function that
     # nothing uses; the second integrator is made once, so that each call of it is the same one.
-    made = Ref{Any}(nothing)
-    jacobian = function (jacobian_name)
-        made[] === nothing || return Front.Function(jacobian_name, made[]..., Dict("always_inline" => true))
+    # The values of each state at all the output times are next to each other, so that the sensitivities
+    # by one element of x0 or of the parameters are a column of nN elements: the Jacobian of the result.
+    nN = n * width
+    sensitivity = nothing
+    function sensitivities(x0, q)
+        if sensitivity === nothing
+            sensitivity = sensitivity_integration()
+            run.sensitivity[] = JULIA_CALLS[C.__hash__(sensitivity)][1].f
+        end
+        zf = has_p ? sensitivity(x0, q) : sensitivity(x0)
+        reshape(zf[nN+1:nN+nN*given], nN, given), reshape(zf[nN+nN*given+1:nN+nN*given+nN*columns], nN, columns)
+    end
+    function sensitivity_integration()
         # State z = (x, S, Q) with S = dx/dx0 and Q = dx/dp: S' = A S and Q' = A Q + B.
         S, A = symbol("S", n, given), Front.jacobian(ode, x)
         z, zdot = [x, flat(S)], [ode, flat(Front.mtimes(A, S))]
@@ -628,12 +764,14 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
         has_p && (augmented["p"] = p)
         # Each column of a sensitivity matrix has the mass of the state.
         longer_mass = isempty(mass) ? mass : repeat(mass, 1 + given + columns)
-        sensitivity = integration(name * "_s", augmented, free, make_solver, longer; mass = longer_mass)
-        run.sensitivity[] = JULIA_CALLS[C.__hash__(sensitivity)][1].f
-        x0, xf, q = Front.MX.sym("x0", given), Front.MX.sym("xf", n), Front.MX.sym("p", m)
-        zf = has_p ? sensitivity(x0, q) : sensitivity(x0)
-        Sf = reshape(zf[n+1:n+n*given], n, given)
-        Qf = reshape(zf[n+n*given+1:n+n*given+n*columns], n, columns)
+        integration(name * "_s", augmented, free, make_solver, longer; mass = longer_mass, grid)
+    end
+
+    made = Ref{Any}(nothing)
+    jacobian = function (jacobian_name)
+        made[] === nothing || return Front.Function(jacobian_name, made[]..., Dict("always_inline" => true))
+        x0, xf, q = Front.MX.sym("x0", given), Front.MX.sym("xf", nN), Front.MX.sym("p", m)
+        Sf, Qf = sensitivities(x0, q)
         parts = own > 0 ? Any[Qf[:, 1:own]] : Any[]
         if free
             rate = state_rate(ode, x, p, t, mass)(xf, q, q[own+2] - q[own+1])
@@ -650,7 +788,9 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
     # l' = -A' l, and the sums s with s' = -B' l. From the final time back to the initial one,
     # l goes from a seed to the derivative by the initial state, and s from zero to those by the parameters.
     reverse = nothing
-    if adjoint
+    if adjoint && grid !== nothing
+        reverse = grid_reverse(name, x, p, t, ode, has_p, n, given, columns, grid, make_solver, sensitivities)
+    elseif adjoint
         l, sums = symbol("l", n), symbol("s", columns)
         rates = [ode, -Front.jtimes(ode, x, l, true)]
         columns > 0 && push!(rates, -Front.jtimes(ode, p, l, true)[1:columns])
@@ -688,11 +828,64 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
     end
 
     shapes_in = has_p ? [(given,), (m,)] : [(given,)]
-    call = JuliaCall(String(name), run, length(shapes_in), shapes_in, [(n,)], map(prod, shapes_in), [n])
+    call = JuliaCall(String(name), run, length(shapes_in), shapes_in, [(nN,)], map(prod, shapes_in), [nN])
     # CasADi asks for the reverse derivatives of one seed at a time, and finds their function in the cache.
     options = adjoint ? (; cache = Dict("adj1_" * name => reverse), max_num_dir = 1) : (;)
     proxy = Front.callback(SymbolicCallback(call, run, jacobian, reverse); name = String(name), options...)
     F = Front.Function(proxy)
     JULIA_CALLS[C.__hash__(F)] = (call, proxy)
     F
+end
+
+"""
+    grid_reverse(name, x, p, t, ode, has_p, n, given, columns, grid, make_solver, sensitivities) -> CasADiCodegen.Function
+
+Return the reverse derivative `"adj1_" * name` of an integration over the `grid` of
+`integration`: `(x0, p, X, seed) -> (seed of x0, seed of p)`, without `p` when the model has
+none. One call of a `GridAdjoint` gives it, with one run of the adjoint equations of `ode`.
+
+That call has the Jacobian of `Σₖ Jₖ' seedₖ`, with the Jacobian `Jₖ` of the state at the
+time `k` from the forward sensitivities that `sensitivities(x0, q)` returns, so that the
+derivatives of every order come from integrations with fixed times.
+"""
+function grid_reverse(name::AbstractString, x, p, t, ode, has_p::Bool, n::Int, given::Int, columns::Int,
+                      grid::Tuple{Float64,Vector{Float64}}, make_solver, sensitivities)
+    symbol = typeof(x).sym
+    l, sums = symbol("l", n), symbol("s", columns)
+    rates = [ode, -Front.jtimes(ode, x, l, true)]
+    columns > 0 && push!(rates, -Front.jtimes(ode, p, l, true)[1:columns])
+    model = Front.Function("rhs", [Front.vertcat([x, l, sums][1:length(rates)]), p, t], [Front.densify(Front.vertcat(rates))])
+    rhs = build_function(model; expression = Val{false}, nonzeros = true)
+    t0, stops = grid
+    m, width = size(p, 1), length(stops)
+    nN, nout = n * width, given + columns
+    # From the last output time back to the initial time, through the others.
+    solver = make_solver(RightSide(Emitted(rhs, model, :nonzeros)), 2n + columns, m, stops[end], [reverse(stops[1:end-1]); t0])
+    run = GridAdjoint(solver, n, given, columns, width)
+    symbols() = (Front.MX.sym("x0", given), Front.MX.sym("p", m), Front.MX.sym("xf", nN), Front.MX.sym("adj_xf", nN))
+    arguments(x0, q, X, seed) = has_p ? [x0, q, X, seed] : [x0, X, seed]
+
+    made = Ref{Any}(nothing)
+    jacobian = function (jacobian_name)
+        made[] === nothing || return Front.Function(jacobian_name, made[]..., Dict("always_inline" => true))
+        x0, q, X, seed = symbols()
+        Sf, Qf = sensitivities(x0, q)
+        J = columns > 0 ? Front.horzcat([Sf, Qf]) : Sf
+        result = Front.mtimes(C.transpose(J), seed)
+        blocks = [Front.jacobian(result, x0)]
+        has_p && push!(blocks, Front.jacobian(result, q))
+        push!(blocks, Front.MX(nout, nN), C.transpose(J))        # the result does not depend on the states X
+        made[] = ([arguments(x0, q, X, seed)..., Front.MX.sym("r", nout)], blocks)
+        Front.Function(jacobian_name, made[]..., Dict("always_inline" => true))
+    end
+
+    shapes_in = Tuple{Vararg{Int}}[(given,), (m,), (nN,), (nN,)][has_p ? (1:4) : [1, 3, 4]]
+    call = JuliaCall(String(name) * "_a", run, length(shapes_in), shapes_in, [(nout,)], map(prod, shapes_in), [nout])
+    proxy = Front.callback(SymbolicCallback(call, run, jacobian); name = call.name)
+    F = Front.Function(proxy)
+    JULIA_CALLS[C.__hash__(F)] = (call, proxy)
+    x0, q, X, seed = symbols()
+    r = F(arguments(x0, q, X, seed)...)
+    results = has_p ? [r[1:given], r[given+1:nout]] : [r[1:given]]
+    Front.Function("adj1_" * name, arguments(x0, q, X, seed), results, Dict("always_inline" => true))
 end

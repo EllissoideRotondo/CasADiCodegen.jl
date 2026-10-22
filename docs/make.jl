@@ -1,12 +1,12 @@
 using Documenter
 using CasADiCodegen
-import SciMLBase, ChainRulesCore, SparseArrays
+import SciMLBase, ChainRulesCore, SparseArrays, OptimizationIpopt
 
 extension(name) = Base.get_extension(CasADiCodegen, name)
 
 makedocs(;
     sitename = "CasADiCodegen.jl",
-    modules = [CasADiCodegen, CasADiCodegen.Codegen, extension(:CasADiCodegenSciMLBaseExt), extension(:CasADiCodegenChainRulesCoreExt), extension(:CasADiCodegenSparseArraysExt)],
+    modules = [CasADiCodegen, CasADiCodegen.Codegen, extension(:CasADiCodegenSciMLBaseExt), extension(:CasADiCodegenChainRulesCoreExt), extension(:CasADiCodegenSparseArraysExt), extension(:CasADiCodegenOptimizationBaseExt)],
     format = Documenter.HTML(;
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://AstroGuild.github.io/CasADiCodegen.jl",
@@ -17,6 +17,17 @@ makedocs(;
     pages = [
         "Home" => "index.md",
         "Getting started" => "getting_started.md",
+        "Tutorials" => [
+            "tutorials/ode_modeling.md",
+            "tutorials/nonlinear.md",
+            "tutorials/optimization.md",
+            "tutorials/sparse_jacobians.md",
+            "tutorials/dae_models.md",
+            "tutorials/events.md",
+            "tutorials/parameter_estimation.md",
+            "tutorials/dynamic_optimization.md",
+            "tutorials/large_models.md",
+        ],
         "Models" => [
             "howto/load_model.md",
             "howto/traced_models.md",
@@ -24,6 +35,7 @@ makedocs(;
             "howto/integrators.md",
             "howto/events.md",
             "howto/rootfinders.md",
+            "howto/linearize.md",
         ],
         "Solvers and SciML" => [
             "howto/casadi_solvers.md",

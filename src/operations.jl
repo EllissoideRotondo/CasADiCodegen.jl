@@ -8,9 +8,18 @@ const HELPER_SOURCE = Dict{Symbol,String}(
     :fmax => "fmax(x, y) = isnan(y) ? x : (x > y ? x : y)",
     # SpecialFunctions.erfinv throws outside [-1, 1]; the C library gives NaN.
     :erfinv => "erfinv(x) = abs(x) > one(x) ? oftype(float(x), NaN) : SpecialFunctions.erfinv(x)",
-    # The structural nonzeros of an array in matrix shape, at the given linear
-    # indices, and whether an array is a sparse matrix, which holds them itself.
-    :stored => "stored(a, indices) = view(a, indices)\nis_stored(a) = false",
+    # The structural nonzeros of an array in matrix shape, at the linear indices of a
+    # `PatternCheck`, and whether an array is a sparse matrix, which holds them itself.
+    # A `PatternCheck` also keeps the index vectors of the last sparse matrix whose
+    # pattern was compared in full (see SPARSE_HELPER_SOURCE).
+    :stored => """
+mutable struct PatternCheck
+    const indices::Vector{Int}
+    @atomic seen::Any
+end
+PatternCheck(indices) = PatternCheck(indices, nothing)
+stored(a, check::PatternCheck) = view(a, check.indices)
+is_stored(a) = false""",
     # A vector of `n` elements of type `T` that belongs to the current task and
     # to the key type `K`. Generated code keeps its work vector there, so a call
     # allocates it once per task and not at each call; a longer vector replaces
@@ -19,6 +28,9 @@ const HELPER_SOURCE = Dict{Symbol,String}(
     # and the call of a Julia function, which keeps its own bounds checks.
     :static => "static(::Type{S}, x::Tuple) where {S} = StaticArrays.SArray{S,promote_type(map(typeof, x)...),length(S.parameters),length(x)}(x)",
     :checked => "checked(f, arguments...) = f(arguments...)",
+    # The error of a wrong number or size of arrays in a call of generated code. It is a
+    # function of its own, so that the checks keep the code of a call small enough to inline.
+    :shape_error => "@noinline shape_error(parts...) = throw(ArgumentError(string(parts...)))",
     # The place of `x` in the rising grid `w[grid+1:grid+n]`, from zero, as the CasADi routine `casadi_low`:
     # mode 0 searches from the start, mode 1 computes the place in a grid with equal steps, and mode 2
     # halves the range. A value that is no number, or too large for a whole number, has the place 0 in
@@ -633,17 +645,25 @@ them too.
 """
 const HELPER_NEEDS = Dict{Symbol,Vector{Symbol}}(Symbol("bspline!") => [:low], Symbol("convexify!") => [:workspace])
 
-# The method of `stored` for a sparse matrix, which gives its stored values
-# after a check of its pattern. The extension for SparseArrays.jl defines it
-# for this package, and a written module that uses `stored` holds a copy.
+# The method of `stored` for a sparse matrix, which gives its stored values after a
+# check of its pattern. The full check, O(nnz), runs when the index vectors of the
+# matrix (`colptr` and `rowval`) are not those of the last matrix that passed it; else
+# the check compares the number of rows and of stored values only, O(1). A matrix
+# whose index vectors are changed in place, and keep their length, is not checked
+# again. The extension for SparseArrays.jl defines the method for this package, and a
+# written module that uses `stored` holds a copy.
 const SPARSE_HELPER_SOURCE = """
-function stored(a::SparseArrays.SparseMatrixCSC, indices)
-    rows, m = SparseArrays.rowvals(a), size(a, 1)
-    length(rows) == length(indices) &&
-        all(indices[k] == (c - 1) * m + rows[k] for c in axes(a, 2) for k in SparseArrays.nzrange(a, c)) ||
-        throw(ArgumentError("the pattern of a sparse matrix is not that of the generated function"))
+function stored(a::SparseArrays.SparseMatrixCSC, check::PatternCheck)
+    colptr, rows, m, indices = SparseArrays.getcolptr(a), SparseArrays.rowvals(a), size(a, 1), check.indices
+    length(rows) == length(indices) || pattern_error()
+    seen = @atomic :acquire check.seen
+    if !(seen isa Tuple{Int,WeakRef,WeakRef} && seen[1] == m && seen[2].value === colptr && seen[3].value === rows)
+        all(indices[k] == (c - 1) * m + rows[k] for c in axes(a, 2) for k in SparseArrays.nzrange(a, c)) || pattern_error()
+        @atomic :release check.seen = (m, WeakRef(colptr), WeakRef(rows))
+    end
     SparseArrays.nonzeros(a)
 end
+@noinline pattern_error() = throw(ArgumentError("the pattern of a sparse matrix is not that of the generated function"))
 is_stored(::SparseArrays.SparseMatrixCSC) = true"""
 
 "The helper functions of `HELPER_SOURCE`, defined for use by this package."

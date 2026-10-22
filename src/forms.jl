@@ -24,33 +24,33 @@ function outofplace_name(name::Symbol)
 end
 
 "Statements that check the number of elements of each array of `res` (when `results`) and `arg`."
-function shape_checks(alg; results::Bool)
+function shape_checks(alg, ref; results::Bool)
     check(array, kind, i, name, sp) = :(length($array[$i]) == $(prod(dimensions(sp))) ||
-        throw(ArgumentError(string($("$(alg.name): $kind $i ($name) needs $(prod(dimensions(sp))) elements, got "), length($array[$i])))))
+        $(ref(:Helpers, :shape_error))($("$(alg.name): $kind $i ($name) needs $(prod(dimensions(sp))) elements, got "), length($array[$i])))
     checks = Any[check(:arg, "argument", i, alg.names_in[i], sp) for (i, sp) in enumerate(alg.sparsity_in)]
     results && append!(checks, (check(:res, "result", j, alg.names_out[j], sp) for (j, sp) in enumerate(alg.sparsity_out)))
     checks
 end
 
-count_checks(alg) = Any[
-    :(length(arg) == $(length(alg.sparsity_in)) || throw(ArgumentError(string($("$(alg.name): expected $(length(alg.sparsity_in)) arguments, got "), length(arg))))),
-    :(length(res) == $(length(alg.sparsity_out)) || throw(ArgumentError(string($("$(alg.name): expected $(length(alg.sparsity_out)) results, got "), length(res))))),
+count_checks(alg, ref) = Any[
+    :(length(arg) == $(length(alg.sparsity_in)) || $(ref(:Helpers, :shape_error))($("$(alg.name): expected $(length(alg.sparsity_in)) arguments, got "), length(arg))),
+    :(length(res) == $(length(alg.sparsity_out)) || $(ref(:Helpers, :shape_error))($("$(alg.name): expected $(length(alg.sparsity_out)) results, got "), length(res))),
 ]
 
 zero_fills(alg) = Any[:(fill!(res[$j], 0)) for (j, sp) in enumerate(alg.sparsity_out) if !is_dense(sp)]
 
 """
-    nonzero_call(alg, core, index, ref) -> Expr
+    nonzero_call(alg, core, check, ref) -> Expr
 
 Return the call of `core`, the function on vectors of nonzeros, with the structural
 nonzeros of each array of `res` and `arg`. A dense array is passed itself. Another array
 is passed as a view, or as the stored values of a sparse matrix with the sparsity pattern
-of the function. `index(kind, k)` is the expression for the indices of the nonzeros of
-input or output `k`.
+of the function. `check(kind, k)` is the expression for the `Helpers.PatternCheck` of
+input or output `k`, which holds the indices of its nonzeros.
 """
-function nonzero_call(alg, core, index, ref)
+function nonzero_call(alg, core, check, ref)
     part(array, kind, k, sp) = is_dense(sp) ? :($array[$k]) : C.nnz(sp) == 0 ? :(()) :
-                               :($(ref(:Helpers, :stored))($array[$k], $(index(kind, k))))
+                               :($(ref(:Helpers, :stored))($array[$k], $(check(kind, k))))
     arguments = [part(:arg, :in, i, sp) for (i, sp) in enumerate(alg.sparsity_in)]
     results = [part(:res, :out, j, sp) for (j, sp) in enumerate(alg.sparsity_out)]
     :($core($(Expr(:tuple, results...)), $(Expr(:tuple, arguments...))))
@@ -68,25 +68,30 @@ matrix_places(alg, index) =
      place_out = j -> is_dense(alg.sparsity_out[j]) ? :k : :($(index(:out, j))[k]))
 
 """
-    inplace_function(alg, signature, frame, core, index, ref, key) -> Expr
+    inplace_function(alg, signature, frame, core, index, check, ref, key) -> Expr
 
 Return the definition of the function `signature(res, arg)` on arrays in matrix shape,
 which reads and writes the arrays directly. `frame` is that of `entry_function`. A sparse
 matrix among the arrays, which is possible when a sparsity pattern has structural zeros,
-sends the call to `core`, the function on vectors of nonzeros.
+sends the call to `core`, the function on vectors of nonzeros; `index` and `check` are
+those of `matrix_places` and `nonzero_call`. A sparse matrix of `res` is not filled with
+zeros first, since `core` writes each of its stored values.
 
 The generated function leaves one result of `alg` in each array of `res`, in column-major
 order, with zero at each structural zero.
 """
-function inplace_function(alg, signature, frame, core, index, ref, key)
+function inplace_function(alg, signature, frame, core, index, check, ref, key)
     tables = index_tables(alg)
+    # `ref` records each helper that the code uses, so it names `is_stored` only for code that calls it.
+    is_stored = isempty(tables) ? nothing : ref(:Helpers, :is_stored)
+    sparse_fills = Any[:($is_stored(res[$j]) || fill!(res[$j], 0)) for (j, sp) in enumerate(alg.sparsity_out) if !is_dense(sp)]
     sparse = isempty(tables) ? Any[] : Any[Expr(:if,
-        foldl((a, b) -> :($a || $b), (:($(ref(:Helpers, :is_stored))($(kind === :in ? :arg : :res)[$k])) for ((kind, k), _) in tables)),
-        Expr(:block, nonzero_call(alg, core, index, ref), :(return res)))]
+        foldl((a, b) -> :($a || $b), (:($is_stored($(kind === :in ? :arg : :res)[$k])) for ((kind, k), _) in tables)),
+        Expr(:block, sparse_fills..., nonzero_call(alg, core, check, ref), :(return res)))]
     body = frame === nothing ? Any[inbounds_block(whole_statements(alg, ref; matrix_access(alg)...))] :
            framed_body(alg, frame, ref, key; matrix_places(alg, index)...)
-    Expr(:function, signature, Expr(:block, count_checks(alg)..., shape_checks(alg; results = true)...,
-        zero_fills(alg)..., sparse..., body..., :(return res)))
+    Expr(:function, signature, Expr(:block, count_checks(alg, ref)..., shape_checks(alg, ref; results = true)...,
+        sparse..., zero_fills(alg)..., body..., :(return res)))
 end
 
 argument_names(alg) = [Symbol(:arg, i) for i in eachindex(alg.sparsity_in::Vector{C.Sparsity})]
@@ -136,7 +141,7 @@ function static_function(alg, signature, frame, index, ref, key)
     results = [:($(static_type(SArray, dimensions(sp)))($(Expr(:tuple, values[j]...))))
                for (j, sp) in enumerate(alg.sparsity_out)]
     Expr(:function, signature, Expr(:block, :(arg = $(Expr(:tuple, argument_names(alg)...))),
-        shape_checks(alg; results = false)..., ELEMENT_TYPE, body...,
+        shape_checks(alg, ref; results = false)..., ELEMENT_TYPE, body...,
         :(return $(Expr(:macrocall, Symbol("@inbounds"), nothing, returned(results))))))
 end
 
@@ -147,8 +152,25 @@ index_tables(alg) = [(kind, k) => nonzero_indices(sp)
 
 core_name(name::Symbol) = Symbol(outofplace_name(name), :_nonzeros!)
 
-"Whether the out-of-place function has a method for ordinary arrays, and one for static arrays."
-methods_wanted(alg, force_SA::Bool) = (!force_SA, force_SA || !isempty(alg.sparsity_in))
+"""
+Largest number of elements, summed over the outputs, of the out-of-place method with
+static arrays. The method writes each element of each output into its code, so a large
+output makes code that is slow to compile or that Julia cannot parse.
+"""
+const STATIC_LIMIT = 4096
+
+"""
+    methods_wanted(alg, force_SA) -> (ordinary, static)
+
+Whether the out-of-place function has a method for ordinary arrays, and one for static
+arrays. A function without inputs, or with more than `STATIC_LIMIT` output elements, has
+no method for static arrays unless `force_SA` asks for it, which the second case refuses.
+"""
+function methods_wanted(alg, force_SA::Bool)
+    elements = sum(sp -> prod(dimensions(sp)), alg.sparsity_out; init = 0)
+    @requires !force_SA || elements <= STATIC_LIMIT "$(alg.name): the outputs have $elements elements, and static arrays (`force_SA = true`) take at most $STATIC_LIMIT"
+    (!force_SA, force_SA || (!isempty(alg.sparsity_in) && elements <= STATIC_LIMIT))
+end
 
 """
     form_definitions(alg, name, chunk_size, ref, force_SA) -> Vector{Expr}
@@ -164,15 +186,39 @@ is that of `mx_definitions`.
 function form_definitions(alg, name::Symbol, chunk_size::ChunkSize, ref, force_SA::Bool; key = identity, julia = identity)
     base, arguments = outofplace_name(name), argument_names(alg)
     table(kind, k) = Symbol(base, :_index_, kind, k)
+    check(kind, k) = Symbol(base, :_check_, kind, k)
     definitions = Expr[Expr(:const, :($(table(kind, k)) = $(Expr(:vect, indices...))))
                        for ((kind, k), indices) in index_tables(alg)]
+    append!(definitions, (Expr(:const, :($(check(kind, k)) = $(ref(:Helpers, :PatternCheck))($(table(kind, k)))))
+                          for ((kind, k), _) in index_tables(alg)))
     frame = named_frame(alg, core_name(name), chunk_size, ref; julia)
     ordinary, static = methods_wanted(alg, force_SA)
     typed = force_SA || !static ? arguments : Any[:($(arguments[1])::$(ref(:StaticArraysCore, :StaticArray))), arguments[2:end]...]
-    push!(definitions, inplace_function(alg, :($name(res, arg)), frame, core_name(name), table, ref, key(name)))
+    push!(definitions, inplace_function(alg, :($name(res, arg)), frame, core_name(name), table, check, ref, key(name)))
     ordinary && push!(definitions, outofplace_function(alg, :($base($(arguments...))), name, ref))
     static && push!(definitions, static_function(alg, :($base($(typed...))), frame, table, ref, key(name)))
     named_calls(alg, definitions, julia)
+end
+
+"""
+    runtime_inplace(alg, chunk_size, ref) -> NamedTuple
+
+Return the in-place function on arrays in matrix shape as a runtime generated function
+`inplace`, which holds the function on nonzeros that it calls, together with the `frame`,
+the function `index` and the `key` that the out-of-place forms share with it.
+"""
+function runtime_inplace(alg, chunk_size::ChunkSize, ref)
+    generate(ex) = RuntimeGeneratedFunction(@__MODULE__, CONTEXT[], ex)
+    tables = Dict(index_tables(alg))
+    checks = Dict(place => Helpers.PatternCheck(indices) for (place, indices) in tables)
+    index(kind, k) = tables[(kind, k)]
+    check(kind, k) = checks[(kind, k)]
+    key = unique_key(alg.name)
+    frame = runtime_frame(alg, chunk_size, ref)
+    # Only a sparse matrix, which needs a pattern with structural zeros, sends a call to the function on nonzeros.
+    core = isempty(tables) ? nothing : RuntimeGeneratedFunctions.drop_expr(generate(entry_function(alg, :((res, arg)), frame, ref, key)))
+    inplace = generate(inplace_function(alg, :((res, arg)), frame, core, index, check, ref, key))
+    (; inplace, frame, index, key)
 end
 
 """
@@ -185,15 +231,9 @@ arrays when its first argument is a static array, or always with `force_SA`.
 function runtime_forms(alg, chunk_size::ChunkSize, ref, force_SA::Bool)
     generate(ex) = RuntimeGeneratedFunction(@__MODULE__, CONTEXT[], ex)
     hold(g) = RuntimeGeneratedFunctions.drop_expr(g)
-    tables = Dict(index_tables(alg))
-    index(kind, k) = tables[(kind, k)]
+    (; inplace, frame, index, key) = runtime_inplace(alg, chunk_size, ref)
     arguments = argument_names(alg)
     signature = Expr(:tuple, arguments...)
-    key = unique_key(alg.name)
-    frame = runtime_frame(alg, chunk_size, ref)
-    # Only a sparse matrix, which needs a pattern with structural zeros, sends a call to the function on nonzeros.
-    core = isempty(tables) ? nothing : hold(generate(entry_function(alg, :((res, arg)), frame, ref, key)))
-    inplace = generate(inplace_function(alg, :((res, arg)), frame, core, index, ref, key))
     ordinary, static = methods_wanted(alg, force_SA)
     with_arrays = ordinary ? generate(outofplace_function(alg, signature, hold(inplace), ref)) : nothing
     with_static = static ? generate(static_function(alg, signature, frame, index, ref, key)) : nothing

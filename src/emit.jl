@@ -5,6 +5,9 @@ const UNSPLIT_LIMIT = 50_000
 
 unique_key(name) = gensym(string(name))
 
+"A scalar function of at most this number of instructions, in one piece, has its calls by `build_inplace` compiled inline."
+const INLINE_LIMIT = 256
+
 """
     Split(chunk_size, split_above)
 
@@ -152,9 +155,9 @@ inbounds_block(statements) =
     Expr(:macrocall, Symbol("@inbounds"), nothing, Expr(:block, statements...))
 
 "Statements that check the shape of `res` and `arg` in generated code."
-function io_checks(alg)
+function io_checks(alg, ref)
     label = alg.name
-    fail(parts...) = :(throw(ArgumentError(string($(parts...)))))
+    fail(parts...) = :($(ref(:Helpers, :shape_error))($(parts...)))
     checks = Any[
         :(length(arg) == $(length(alg.nnz_in)) ||
           $(fail("$label: expected $(length(alg.nnz_in)) arguments, got ", :(length(arg))))),
@@ -267,7 +270,7 @@ all statements of scalar code without a frame, or the statements of
 """
 function entry_function(alg, signature, frame, ref, key)
     body = frame === nothing ? Any[inbounds_block(whole_statements(alg, ref))] : framed_body(alg, frame, ref, key)
-    Expr(:function, signature, Expr(:block, io_checks(alg)..., body..., :(return res)))
+    Expr(:function, signature, Expr(:block, io_checks(alg, ref)..., body..., :(return res)))
 end
 
 chunk_function(signature, statements) =
@@ -377,13 +380,18 @@ Both functions take arrays in matrix shape; a column is a vector.
 
 - `g` takes one array per input. It returns one array for one output, and a tuple of
   arrays otherwise. The arrays are `SVector` and `SMatrix` when the first argument is a
-  static array, and `Vector` and `Matrix` otherwise.
+  static array, and `Vector` and `Matrix` otherwise. Outputs with more than
+  4096 elements in all give `Vector` and `Matrix` for any argument.
 - `g!` fills the arrays of the tuple `res` from the tuple `arg` and returns `res`. An array
   of `res` can be a mutable static array.
 - A structural zero of an output is set to zero. A structural zero of an input is not read.
 - With SparseArrays.jl loaded, an array of `res` or `arg` can be a `SparseMatrixCSC` with
   the sparsity pattern of that output or input, which `SparseMatrixCSC(sparsity)` makes.
-  `g!` then reads and writes the stored values only.
+  `g!` then reads and writes the stored values only. It compares the whole pattern of a
+  matrix whose index vectors (`colptr` and `rowval`) are not those of the last matrix that
+  passed this comparison. Otherwise it compares the number of rows and of stored values
+  only, so a call costs as much as the function on nonzeros. Do not change the index
+  vectors of a matrix in place.
 
 `f` must have no free symbols and only supported operations; see
 [Scope and differences from CasADi](@ref).
@@ -391,7 +399,8 @@ Both functions take arrays in matrix shape; a column is a vector.
 # Keywords
 - `expression = Val{true}`: `Val{true}` returns an `Expr`, and `Val{false}` returns
   compiled functions.
-- `force_SA = false`: with `true`, `g` returns static arrays for any argument.
+- `force_SA = false`: with `true`, `g` returns static arrays for any argument. It throws
+  an `ArgumentError` for outputs with more than 4096 elements in all.
 - `nonzeros = false`: with `true`, return the single function `(res, arg) -> res` on which
   the others are built. `arg[i]` holds the structural nonzeros of input `i`, and `res[j]`
   receives those of output `j`, as CasADi evaluates a function.
@@ -474,4 +483,40 @@ function build_function(f; expression = Val{true},
     else
         runtime_forms(alg, chunk_size, ref, force_SA)
     end
+end
+
+"""
+    Inlined(g!)
+
+The function `g!(res, arg)` with each call compiled inline. A call of a small generated
+function otherwise costs more than its arithmetic, as in the right side of an ODE.
+"""
+struct Inlined{G<:RuntimeGeneratedFunction}
+    g!::G
+end
+# The call of a runtime generated function goes through a method that the compiler does not
+# inline when the body is large enough to matter; its inner function takes the inline request.
+(i::Inlined)(res, arg) = @inline RuntimeGeneratedFunctions.generated_callfunc(i.g!, res, arg)
+
+"""
+    build_inplace(f; chunk_size = nothing, split_above = nothing, nanmath = true, expand = true, optlevel = nothing) -> g!
+
+Return the compiled in-place function `g!(res, arg)` of `build_function(f; expression =
+Val{false})` alone. The out-of-place forms are not generated: their static method has one
+element per place of each output matrix, which for a large sparse Jacobian costs more
+time and memory than the rest of the code. A scalar function of at most `INLINE_LIMIT`
+instructions in one piece comes as an `Inlined` function.
+"""
+function build_inplace(f; chunk_size::Union{Nothing,Integer} = nothing, split_above::Union{Nothing,Integer} = nothing,
+                       nanmath::Bool = true, expand::Bool = true, optlevel::Union{Nothing,Integer} = nothing)
+    check_optlevel(optlevel)
+    optlevel === nothing ||
+        return Base.ScopedValues.with(CONTEXT => OPTLEVEL_CONTEXTS[optlevel+1]) do
+            build_inplace(f; chunk_size, split_above, nanmath, expand)
+        end
+    split = Split(chunk_size, split_above)
+    alg = one_function(algorithm(f; expand), split)
+    (; inplace, frame) = runtime_inplace(alg, split, nanmath ? global_ref : throwing(global_ref))
+    g! = RuntimeGeneratedFunctions.drop_expr(inplace)
+    alg isa Algorithm && frame === nothing && length(alg.instructions) <= INLINE_LIMIT ? Inlined(g!) : g!
 end

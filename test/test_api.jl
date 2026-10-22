@@ -1,6 +1,7 @@
 # The modelling interface that `using CasADiCodegen` gives, with no module alias.
 import LinearAlgebra
 import SpecialFunctions
+using SparseArrays: SparseMatrixCSC, nnz
 
 module ApiUser
 using CasADiCodegen
@@ -143,4 +144,51 @@ end
     negative = C.rootfinder("negative", "kinsol", CasADiCodegen.Function("g", [z], [z .^ 2 .- 4]),
                             Dict("constraints" => [-1, -1], "u_scale" => [1.0, 2.0]))
     @test C.nonzeros(negative(C.DM([-1.0, -1.0]))) ≈ [-2.0, -2.0] rtol = 1e-6
+end
+
+# Regression: the front end called the const overload of `DaeBuilder::der`, which cannot
+# make the derivative of a variable, so `eq(der(x), ...)` declared no state.
+@testset "der of a DaeBuilder declares a differential state" begin
+    dae = C.DaeBuilder("decay")
+    x, a = C.add(dae, "x", "local", "continuous"), C.add(dae, "a", "parameter", "tunable")
+    C.eq(dae, C.der(dae, x), -a * x)
+    @test C.x(dae) == ["x"]
+    f = C.create(dae, "f", ["x", "p"], ["ode"])
+    @test Float64(f(C.DM(2.0), C.DM(3.0))) == -6.0
+end
+
+@testset "block-triangular form of a sparsity pattern" begin
+    # Rows are equations, columns unknowns: unknowns 3 and 1 form a loop, 4 needs 3, and 2 needs 4.
+    rows, cols = [3, 3, 1, 1, 0, 0, 2, 2], [2, 0, 2, 0, 2, 3, 3, 1]
+    pattern = C.triplet(C.Sparsity, 4, 4, rows, cols)
+    form = CasADiCodegen.block_triangular_form(pattern)
+    @test form.blocks == C.btf(pattern) == 3
+    @test form.rowblock == form.colblock
+    # The permuted matrix is block lower triangular, so the loop {1, 3} comes first, then 4, then 2.
+    rowof, colof = invperm(form.rowperm), invperm(form.colperm)
+    block(offsets, k) = searchsortedlast(offsets, k)
+    @test [block(form.colblock, colof[j]) for j in 1:4] == [1, 3, 1, 2]
+    @test all(block(form.rowblock, rowof[i+1]) >= block(form.colblock, colof[j+1]) for (i, j) in zip(rows, cols))
+    @test CasADiCodegen.block_triangular_form(C.Sparsity(0, 0)).blocks == 0
+end
+
+@testset "linearization of a state-space model" begin
+    x, u, p = SX.sym("x", 2), SX.sym("u"), SX.sym("p", 2)
+    f = CasadiFunction("f", [x, u, p], [vertcat(x[2], -p[1] * sin(x[1]) + p[2] * u)])
+    h = CasadiFunction("h", [x, u, p], [vertcat(x[1] * x[2], u^2)])
+    lin, lin! = CasADiCodegen.linearization(f, h)
+    x0, u0, p0 = [0.3, -0.7], [2.0], [9.81, 0.5]
+    A, B, Cm, D = lin(x0, u0, p0)
+    @test A ≈ [0 1; -9.81*cos(0.3) 0] && B ≈ [0; 0.5;;]
+    @test Cm ≈ [-0.7 0.3; 0 0] && D ≈ [0; 4.0;;]
+    # In place, and with `sparse` into the stored values of sparse matrices.
+    out = (zeros(2, 2), zeros(2, 1), zeros(2, 2), zeros(2, 1))
+    lin!(out, (x0, u0, p0))
+    @test out[1] ≈ A && out[4] ≈ D
+    _, sparse! = CasADiCodegen.linearization(f, h; sparse = true)
+    S = map(i -> SparseMatrixCSC(C.sparsity_out(CasADiCodegen.linearization_function(f, h; sparse = true), i)), (0, 1, 2, 3))
+    sparse!(S, (x0, u0, p0))
+    @test nnz(S[1]) == 2 && Matrix(S[1]) ≈ A && Matrix(S[4]) ≈ D
+    g = CasadiFunction("g", [x, p], [x])
+    @test_throws "must take the arguments (x, u, p)" CasADiCodegen.linearization(g, h)
 end

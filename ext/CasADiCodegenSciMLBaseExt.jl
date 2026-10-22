@@ -78,10 +78,98 @@ end
 (s::Solver)(x0, q) = integrate!(state(s, promote_type(eltype(x0), eltype(q)), x0, q), s, x0, q)
 
 """
+    GridSolver
+
+The solver of an integrator over a grid of times (see `CasADiCodegen.Codegen.ode_grid`): it
+integrates `rhs` from `t0` through `times` with the SciML algorithm `alg`, in one run.
+
+- `(x0, q) -> path`: the states at the `times`, where the solver stops (`tstops`),
+  the first state at all the times, then the second one, and so on.
+- `(x0, q, jump!) -> u`: the solver stops at each of the `times` (`tstops`), calls
+  `jump!(u, k)` there, and goes on from the changed state; `u` is the state at the last time.
+
+Each task keeps one solver state per number type and form, as `Solver` does, and the
+result is memory of that state.
+"""
+struct GridSolver{F,A,O}
+    name::String
+    rhs::F
+    alg::A
+    t0::Float64
+    times::Vector{Float64}
+    specialize::DataType
+    options::O
+end
+
+function grid_state(s::GridSolver, ::Type{T}, x0, q, jumps::Bool) where {T}
+    get!(task_local_storage(), (s, T, jumps)) do
+        u0, q0 = copyto!(Vector{T}(undef, length(x0)), x0), copyto!(Vector{T}(undef, length(q)), q)
+        make_grid_state(s, s.specialize, u0, q0, jumps)
+    end
+end
+
+function make_grid_state(s::GridSolver, ::Type{S}, u0::Vector{T}, q0::Vector, jumps::Bool) where {S,T}
+    problem = SciMLBase.ODEProblem{true,S}(problem_function(s.rhs, S), u0, (T(s.t0), T(s.times[end])), q0)
+    integrator = jumps ?
+        SciMLBase.init(problem, s.alg; tstops = s.times, save_everystep = false, save_start = false, save_end = false, s.options...) :
+        # The solver stops at each time: the error of the interpolant between two steps is not
+        # under the control of the tolerances, and an adjoint gradient multiplies it.
+        SciMLBase.init(problem, s.alg; saveat = s.times, tstops = s.times, save_everystep = false, save_start = false, s.options...)
+    (; integrator, path = Vector{T}(undef, length(u0) * length(s.times)))
+end
+
+function restart!(integrator, x0, q)
+    u0 = integrator.sol.prob.u0
+    copyto!(u0, x0)
+    copyto!(integrator.p, q)
+    SciMLBase.reinit!(integrator, u0)
+    integrator
+end
+
+function (s::GridSolver)(x0, q)
+    state = grid_state(s, promote_type(eltype(x0), eltype(q)), x0, q, false)
+    sample!(state.integrator, state.path, s, x0, q)
+end
+
+function sample!(integrator, path, s::GridSolver, x0, q)
+    SciMLBase.solve!(restart!(integrator, x0, q))
+    code = integrator.sol.retcode
+    SciMLBase.successful_retcode(code) || error("integrator \"$(s.name)\": the solver stopped with the return code $code")
+    saved, n, N = integrator.sol.u, length(x0), length(s.times)
+    @ensures length(saved) == N "integrator \"$(s.name)\": the solver must save the state at each of the $N times; do not give saveat or save_start"
+    for k in 1:N, i in 1:n
+        path[(i-1)*N+k] = saved[k][i]
+    end
+    path
+end
+
+function (s::GridSolver)(x0, q, jump!)
+    state = grid_state(s, promote_type(eltype(x0), eltype(q)), x0, q, true)
+    jumped!(state.integrator, s, x0, q, jump!)
+end
+
+function jumped!(integrator, s::GridSolver, x0, q, jump!)
+    restart!(integrator, x0, q)
+    direction = sign(s.times[end] - s.t0)
+    for (k, stop) in enumerate(s.times)
+        # Loop invariant: the state of `integrator` follows the calls of `jump!` at the times before `k`.
+        while direction * (stop - integrator.t) > 0
+            SciMLBase.step!(integrator)
+            code = integrator.sol.retcode
+            code in (SciMLBase.ReturnCode.Default, SciMLBase.ReturnCode.Success) ||
+                error("integrator \"$(s.name)\": the solver stopped with the return code $code")
+        end
+        jump!(integrator.u, k)
+        SciMLBase.derivative_discontinuity!(integrator, true)
+    end
+    integrator.u
+end
+
+"""
     integrator(name, alg, dae, t0, tf; specialize, adjoint = false, mass, options...) -> CasADiCodegen.Function
     integrator(name, alg, dae, t0, times::AbstractVector; specialize, adjoint = false, options...) -> CasADiCodegen.Function
     integrator(name, alg, dae; specialize, adjoint = false, mass, direction = 0, interp_points = 10,
-               events = 1, terminal = true, options...) -> CasADiCodegen.Function
+               events = 1, terminal = true, exact = true, options...) -> CasADiCodegen.Function
 
 Make a CasADi function that integrates an ordinary differential equation with the SciML
 algorithm `alg`, for example `Vern9()` of OrdinaryDiffEqVerner.jl. CasADi differentiates
@@ -96,14 +184,18 @@ The times select the form of the function. `p` is absent when the model has no p
 | `integrator(name, alg, dae)`            | `G(x0, p, t0, tf)` | the state at `tf`; CasADi also differentiates by the two times |
 
 With free times, `tf` can be before `t0` or equal to it. The times of the vector `times`
-can be in any order. A model with quadratures returns them as a second result.
+can be in any order and on both sides of `t0`. One run of the solver, which stops at
+each time, gives the states at all the times after `t0`, and one more those before it;
+`options` must not hold a saving option, such as `saveat` or `tstops`. A model with
+quadratures returns them as a second result.
 
 # Arguments
 - `name`: the name of the CasADi function, a valid identifier.
 - `dae`: a dictionary as for the CasADi integrators. It holds the state `"x"` and its
   derivative `"ode"`, both dense column vectors. Optional entries are the parameters `"p"`,
-  the time `"t"` and the integrands `"quad"`. With free times, the entry `"zero"` is an
-  event function, and `"transition"` is the state after an event.
+  the time `"t"` and the integrands `"quad"`. With free times, the entry `"zero"` is a
+  column of event functions, and `"transition"` is the state after an event: one column,
+  or one column per event function. Several event functions need SciMLBase.jl 3 or later.
 - `t0`, `tf`, `times`: finite times. `t0` and `tf` must be different.
 
 # Keywords
@@ -118,19 +210,23 @@ can be in any order. A model with quadratures returns them as a second result.
   the residual of an algebraic equation, and its initial value is a guess. `alg` must
   accept a mass matrix, as `Rodas5P()` of OrdinaryDiffEqRosenbrock.jl does. A vector of
   times is not supported with it.
-- `direction = 0`: the change of sign of `"zero"` that is an event: any with 0, from
+- `direction = 0`: the change of sign of an element of `"zero"` that is an event: any with 0, from
   negative to positive with 1, and from positive to negative with -1.
 - `interp_points = 10`: the number of points of each step at which the solver looks for
   the change of sign, besides the end of the step.
 - `events = 1`: the number of events that the integration passes.
 - `terminal = true`: the integration ends at the last event. With `false` it applies the
   transition there too and goes on to `tf`.
+- `exact = true`: a call throws when fewer than `events` events come before `tf`. With
+  `false` it passes at most `events` events and returns their count.
 - `options...`: options of the solver, for example `abstol`, `reltol` and `maxiters`.
 
 With an event function, the function returns the state at the event, the quadratures if
-the model has them, and the event time `te` as its last result; `te` is a vector with
-`events` more than 1. A zero at the initial time is not an event. A call throws when no
-event comes before `tf`.
+the model has them, and the event time `te`; `te` is a vector with `events` more than 1.
+With several event functions, the result `ie` follows: for each event, the index from 1 of
+the event function that changed its sign. With `exact = false`, the last result `ne` is the
+number of events, and a missing event has the time `tf` and the index 0. A zero at the
+initial time is not an event.
 
 See [Integrate a differential equation](@ref) and [Stop at an event](@ref events).
 
@@ -161,43 +257,55 @@ function CasADiCodegen.integrator(name::AbstractString, alg::SciMLBase.AbstractO
                            specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
                            adjoint::Bool = false, mass::AbstractVector{<:Real} = Float64[], options...)
     @requires isempty(mass) "integrator \"$name\": mass is not supported with a vector of times"
-    make_solver(rhs, n, m) = Solver(String(name), rhs, alg, NaN, NaN, true, specialize, values(options))
+    @requires !any(in(keys(options)), (:saveat, :tstops, :save_start, :save_end, :save_everystep, :save_idxs)) "integrator \"$name\": the times give saveat and tstops; do not pass saving options"
+    make_solver(rhs, n, m, start, stops) = GridSolver(String(name), rhs, alg, start, stops, specialize, values(options))
     CasADiCodegen.Codegen.ode_grid(name, dae, t0, times, make_solver; adjoint)
 end
 
 function CasADiCodegen.integrator(name::AbstractString, alg::SciMLBase.AbstractODEAlgorithm, dae;
                            specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
                            direction::Integer = 0, interp_points::Integer = 10, adjoint::Bool = false,
-                           events::Integer = 1, terminal::Bool = true, mass::AbstractVector{<:Real} = Float64[], options...)
+                           events::Integer = 1, terminal::Bool = true, exact::Bool = true, mass::AbstractVector{<:Real} = Float64[], options...)
     @requires direction in (-1, 0, 1) "integrator \"$name\": the direction of the event must be -1, 0 or 1; got $direction"
     @requires interp_points >= 0 "integrator \"$name\": interp_points must not be negative; got $interp_points"
     make_solver(rhs, n, m) = Solver(String(name), rhs, alg, NaN, NaN, true, specialize, values(options))
-    @requires haskey(dae, "zero") || (events == 1 && terminal) "integrator \"$name\": events and terminal need an event function, \"zero\""
+    @requires haskey(dae, "zero") || (events == 1 && terminal && exact) "integrator \"$name\": events, terminal and exact need an event function, \"zero\""
     haskey(dae, "zero") || return CasADiCodegen.Codegen.ode_integrator(name, dae, make_solver; adjoint, mass = Vector{Float64}(mass))
+    # SciMLBase.jl 2 calls the affect of a vector callback with an index and no direction.
+    @requires size(dae["zero"], 1) == 1 || pkgversion(SciMLBase) >= v"3" "integrator \"$name\": several event functions need SciMLBase.jl 3 or later; got $(pkgversion(SciMLBase))"
     # Without full specialization the solver does not know the type of the event function,
     # so that it compiles once for all integrators with an event.
     crossing(zero) = specialize === SciMLBase.FullSpecialize ? Crossing(zero) : Crossing{Any}(zero)
-    make_event(rhs, zero, n, m) = EventSolver(String(name), rhs, crossing(zero), alg, Int(direction), Int(interp_points), specialize, values(options))
-    CasADiCodegen.Codegen.ode_event(name, dae, make_solver, make_event; adjoint, events, terminal, mass = Vector{Float64}(mass))
+    make_event(rhs, zero, n, m, k) = EventSolver(String(name), rhs, crossing(zero), alg, Int(direction), Int(interp_points), specialize, values(options), k, exact)
+    CasADiCodegen.Codegen.ode_event(name, dae, make_solver, make_event; adjoint, events, terminal, exact, mass = Vector{Float64}(mass))
 end
 
-"The event function of an integrator as the condition `(u, t, integrator)` of a SciML callback."
+"""
+    Crossing(zero)
+
+The event function `zero((out,), (u, q, (t,)))` of an integrator as the condition of a SciML
+callback: `(u, t, integrator)` for one element, and `(out, u, t, integrator)` for several.
+"""
 struct Crossing{Z}
     zero::Z
 end
 (c::Crossing)(u, t, integrator) = (T = promote_type(eltype(u), typeof(t)); number(c.zero, T, (u, integrator.p, (t,)))::T)
+(c::Crossing)(out, u, t, integrator) = (c.zero((out,), (u, integrator.p, (t,))); nothing)
 
 """
     EventSolver
 
-The Julia function `(tf, x0, p, t0) -> te`, or `(tf, x0, t0) -> te`, that integrates `rhs`
-from `t0` toward `tf` with the SciML algorithm `alg` and returns the time of the first
-event, where `zero` changes its sign. A call throws when no event comes before `tf`.
+The Julia function `(z0, x0, p, t0, tf) -> (te, i)`, or `(z0, x0, t0, tf) -> (te, i)`, that
+integrates `rhs` from `t0` toward `tf` with the SciML algorithm `alg` and returns the time of
+the first event, where an element of the event function `zero` changes its sign, and the
+place `i` of that element, from 1. The guess `z0` has no use. With `exact`, a call throws
+when no event comes before `tf`; otherwise it returns `(tf, 0)`.
 
 `direction` selects the change of sign: any with 0, from negative to positive with 1, and
 from positive to negative with -1. The solver looks for the change at `interp_points`
-points of each step and at its end. Each task keeps one solver state per number type and
-per direction of time, as `Solver` does.
+points of each step and at its end. `width` is the number of elements of `zero`. When two
+elements change their sign in one root search, the first one counts. Each task keeps one
+solver state per number type and per direction of time, as `Solver` does.
 """
 struct EventSolver{F,Z,A,O}
     name::String
@@ -208,64 +316,101 @@ struct EventSolver{F,Z,A,O}
     interp_points::Int
     specialize::DataType
     options::O
+    width::Int
+    exact::Bool
 end
 
-function (s::EventSolver)(limit, x0, rest...)
-    q = length(rest) == 2 ? rest[1] : CasADiCodegen.Codegen.NO_PARAMETERS
-    T = float(promote_type(eltype(limit), eltype(x0), eltype(q), eltype(rest[end])))
-    t0, tf = T(rest[end][1]), T(limit[1])
-    state = get!(task_local_storage(), tf < t0 ? (s, T, :backward) : (s, T)) do
-        u0, q0 = copyto!(Vector{T}(undef, length(x0)), x0), copyto!(Vector{T}(undef, length(q)), q)
-        make_state(s, CasADiCodegen.Codegen.consistent!(u0, s.rhs, q0, t0), q0, t0, tf == t0 ? t0 + one(T) : tf)
-    end
+function (s::EventSolver)(guess, x0, rest...)
+    q = length(rest) == 3 ? rest[1] : CasADiCodegen.Codegen.NO_PARAMETERS
+    T = float(promote_type(eltype(guess), eltype(x0), eltype(q), eltype(rest[end-1]), eltype(rest[end])))
+    t0, tf = T(rest[end-1][1]), T(rest[end][1])
     if tf != t0
-        copyto!(state.sol.prob.u0, x0)
-        copyto!(state.p, q)
-        CasADiCodegen.Codegen.consistent!(state.sol.prob.u0, s.rhs, state.p, t0)
-        run!(state, s, t0, tf) && return StaticArrays.SVector{1,T}(event_time(state, s, T))
+        state = get!(task_local_storage(), tf < t0 ? (s, T, :backward) : (s, T)) do
+            u0, q0 = copyto!(Vector{T}(undef, length(x0)), x0), copyto!(Vector{T}(undef, length(q)), q)
+            make_state(s, CasADiCodegen.Codegen.consistent!(u0, s.rhs, q0, t0), q0, t0, tf)
+        end
+        integrator = state.integrator
+        copyto!(integrator.sol.prob.u0, x0)
+        copyto!(integrator.p, q)
+        CasADiCodegen.Codegen.consistent!(integrator.sol.prob.u0, s.rhs, integrator.p, t0)
+        run!(state, s, t0, tf) && return StaticArrays.SVector{2,T}(event_time(state, s, T), T(state.place[]))
     end
-    error("integrator \"$(s.name)\": no event between the initial time $t0 and the final time $tf")
+    s.exact && error("integrator \"$(s.name)\": no event between the initial time $t0 and the final time $tf")
+    StaticArrays.SVector{2,T}(tf, zero(T))
 end
 
 """
     event_time(state, s::EventSolver, T)
 
-Return the time of the event that ended the run of `state`; `state.u` and `state.t` are
-then the state and the time of the event. For `Float64` the result is `state.t`.
+Return the time of the event that ended the run of `state`; `state.integrator.u` and
+`state.integrator.t` are then the state and the time of the event, and `state.place[]` the
+element of the event function that changed its sign. For `Float64` the result is the time
+of the solver.
 
 The root search of the solver does not give exact derivatives for a number type that
-carries them, such as a dual number. For such a type, one Newton step on the event function
-along the trajectory makes the derivatives those of the implicit function. The value does
-not change, because the event function is zero there. The slope of the event function
-comes from a finite difference, which is sufficient because it multiplies a residual that
-is almost zero.
+carries them, such as a dual number. For such a type, one Newton step on that element of
+the event function along the trajectory makes the derivatives those of the implicit
+function. The value does not change, because the element is zero there. Its slope comes
+from a finite difference, which is sufficient because it multiplies a residual that is
+almost zero.
 """
-event_time(state, s::EventSolver, ::Type{Float64}) = state.t
+event_time(state, s::EventSolver, ::Type{Float64}) = state.integrator.t
 function event_time(state, s::EventSolver, ::Type{T}) where {T}
-    u, t = state.u, state.t
+    integrator = state.integrator
+    u, t = integrator.u, integrator.t
     flow = similar(u)
-    s.rhs(flow, u, state.p, t)
+    s.rhs(flow, u, integrator.p, t)
     h = T(sqrt(eps(Float64)))
-    residual = s.zero(u, t, state)
+    residual = element(s, state, u, t)
     # The rows of the algebraic states hold residuals, so those states follow from their equations at the later time.
-    moved = CasADiCodegen.Codegen.consistent!(u .+ h .* flow, s.rhs, state.p, t + h)
-    slope = (s.zero(moved, t + h, state) - residual) / h
+    moved = CasADiCodegen.Codegen.consistent!(u .+ h .* flow, s.rhs, integrator.p, t + h)
+    slope = (element(s, state, moved, t + h) - residual) / h
     t - residual / slope
 end
 
+"The element of the event function that ended the run of `state`, at the state `u` and the time `t`."
+element(s::EventSolver, state, u, t) = s.width == 1 ? s.zero(u, t, state.integrator) :
+    (values = similar(u, promote_type(eltype(u), typeof(t)), s.width); s.zero(values, u, t, state.integrator); values[state.place[]])
+
 "Integrate from `t0` toward `tf`; true when an event ended the run."
 function run!(state, s::EventSolver, t0, tf)
-    SciMLBase.reinit!(state, state.sol.prob.u0; t0, tf)
-    SciMLBase.solve!(state)
-    state.sol.retcode == SciMLBase.ReturnCode.Terminated
+    integrator = state.integrator
+    SciMLBase.reinit!(integrator, integrator.sol.prob.u0; t0, tf)
+    SciMLBase.solve!(integrator)
+    integrator.sol.retcode == SciMLBase.ReturnCode.Terminated
+end
+
+"""
+    Stop(place, direction)
+
+The affect of the callback of an `EventSolver`: it ends the run at the first element whose
+change of sign has the `direction` (0 for any), and keeps the place of that element in
+`place[]`. With one element it is the affect of a `ContinuousCallback`, which calls it for
+the right direction only.
+"""
+struct Stop
+    place::Base.RefValue{Int}
+    direction::Int
+end
+(a::Stop)(integrator) = (a.place[] = 1; SciMLBase.terminate!(integrator))
+function (a::Stop)(integrator, crossings)
+    # `crossings[i]` is -1 when element `i` changes its sign from positive to negative, +1 for the opposite change, and 0 otherwise.
+    i = findfirst(c -> c != 0 && (a.direction == 0 || c == a.direction), crossings)
+    # A change in the other direction leaves the state and its derivative as they are.
+    i === nothing && return SciMLBase.derivative_discontinuity!(integrator, false)
+    a.place[] = i
+    SciMLBase.terminate!(integrator)
 end
 
 function make_state(s::EventSolver, ::Type{S}, u0::Vector, q0::Vector, t0, tf) where {S}
-    stop = SciMLBase.terminate!
-    callback = SciMLBase.ContinuousCallback(s.zero, s.direction >= 0 ? stop : nothing, s.direction <= 0 ? stop : nothing;
-                                            save_positions = (false, false), s.interp_points)
+    stop = Stop(Ref(0), s.direction)
+    callback = s.width == 1 ?
+        SciMLBase.ContinuousCallback(s.zero, s.direction >= 0 ? stop : nothing, s.direction <= 0 ? stop : nothing;
+                                     save_positions = (false, false), s.interp_points) :
+        SciMLBase.VectorContinuousCallback(s.zero, stop, s.width; save_positions = (false, false), s.interp_points)
     problem = SciMLBase.ODEProblem{true,S}(problem_function(s.rhs, S), u0, (t0, tf), q0)
-    SciMLBase.init(problem, s.alg; callback, save_everystep = false, save_start = false, save_end = false, s.options...)
+    integrator = SciMLBase.init(problem, s.alg; callback, save_everystep = false, save_start = false, save_end = false, s.options...)
+    (; integrator, place = stop.place)
 end
 
 """
@@ -281,6 +426,11 @@ function CasADiCodegen.Codegen.warm(s::Union{Solver,EventSolver})
     made = Base.return_types(make_state, types)
     length(made) == 1 && isconcretetype(made[1]) &&
         precompile(run!, s isa Solver ? (made[1], typeof(s)) : (made[1], typeof(s), Float64, Float64))
+    nothing
+end
+
+function CasADiCodegen.Codegen.warm(s::GridSolver)
+    precompile(make_grid_state, (typeof(s), Type{s.specialize}, Vector{Float64}, Vector{Float64}, Bool))
     nothing
 end
 
@@ -413,25 +563,34 @@ function integrate!(state, s::EventIntegration, x0, p, u)
     path
 end
 
+"The largest number of unknowns for which the SciML problem of a rootfinder is on static arrays."
+const STATIC_ROOT_SIZE = 16
+
 """
     RootSolver{N}
 
 The Julia function `(z0, p1, p2, ...) -> root` that solves the equations of `residual` for
-`N` unknowns with the SciML algorithm `alg`. The problem is on static arrays, so a small
-system allocates little memory.
-
-The algorithm differentiates the residual itself: with the Jacobian as a second function,
-SimpleNonlinearSolve.jl was measured 40 times slower on one equation.
+`N` unknowns with the SciML algorithm `alg`. Up to `STATIC_ROOT_SIZE` unknowns the problem
+is on static arrays, so a small system allocates little memory, and the algorithm
+differentiates the residual itself: with the Jacobian as a second function,
+SimpleNonlinearSolve.jl was measured 40 times slower on one equation. A larger problem is
+on vectors, with the Jacobian `slope` of the generated code.
 """
-struct RootSolver{N,G,A,O}
+struct RootSolver{N,G,J,A,O}
     name::String
     residual::G
+    slope::J
     alg::A
     options::O
 end
 
 function (s::RootSolver{N})(z0, parameters...) where {N}
-    problem = SciMLBase.NonlinearProblem{false}((u, q) -> s.residual(u, q...), StaticArrays.SVector{N}(z0), parameters)
+    problem = if N <= STATIC_ROOT_SIZE
+        SciMLBase.NonlinearProblem{false}((u, q) -> s.residual(u, q...), StaticArrays.SVector{N}(z0), parameters)
+    else
+        f = SciMLBase.NonlinearFunction{false}((u, q) -> s.residual(u, q...); jac = (u, q) -> s.slope(u, q...))
+        SciMLBase.NonlinearProblem{false}(f, collect(z0), parameters)
+    end
     solution = SciMLBase.solve(problem, s.alg; s.options...)
     code = solution.retcode
     SciMLBase.successful_retcode(code) || error("rootfinder \"$(s.name)\": the solver stopped with the return code $code")
@@ -448,6 +607,10 @@ first guess of `z` and the other arguments of `f`, and returns the root.
 `f` is a CasADi function with dense arguments. Its first argument `z` is a column vector
 that is not empty, and its only result, the residual, has the size of `z`. `name` is a
 valid identifier. The `options` go to the solver, for example `abstol` and `maxiters`.
+
+Up to 16 unknowns the solver works on static arrays and differentiates the residual
+itself. With more unknowns it works on vectors and gets the dense Jacobian of the
+generated code.
 
 CasADi differentiates the root to any order by the implicit function theorem.
 `build_function` emits code that calls the solver directly. See [Solve an equation](@ref).
@@ -467,28 +630,31 @@ f = CasadiFunction("f", [m, ec], [anomaly(m, m, ec)])    # the mean anomaly is t
 """
 function CasADiCodegen.rootfinder(name::AbstractString, alg::SciMLBase.AbstractNonlinearAlgorithm, f::CasADiCodegen.Function; options...)
     make_solver(residual, slope, n) =
-        RootSolver{n,typeof(residual),typeof(alg),typeof(values(options))}(String(name), residual, alg, values(options))
+        RootSolver{n,typeof(residual),typeof(slope),typeof(alg),typeof(values(options))}(String(name), residual, slope, alg, values(options))
     CasADiCodegen.Codegen.root_function(name, f, make_solver)
 end
 
 # The solvers in a source file: each is made again from its parts, with the code of its
 # functions, the algorithm and the options. The file gets the extension from CasADiCodegen.jl.
 const G = CasADiCodegen.Codegen
-G.writable(::Union{Solver,EventSolver,EventIntegration,RootSolver,Crossing}) = true
+G.writable(::Union{Solver,GridSolver,EventSolver,EventIntegration,RootSolver,Crossing}) = true
 extension(writer) = (G.module_path(writer, SciMLBase); :(Base.get_extension($(G.module_path(writer, CasADiCodegen)), :CasADiCodegenSciMLBaseExt)))
 parts(writer, values...) = map(value -> G.value_source(writer, value), values)
 
 G.object_source(writer::G.SourceWriter, s::Solver) = :($(extension(writer)).Solver(
     $(parts(writer, s.name, s.rhs, s.alg, s.t0, s.tf, s.free, s.specialize, s.options)...)))
+G.object_source(writer::G.SourceWriter, s::GridSolver) = :($(extension(writer)).GridSolver(
+    $(parts(writer, s.name, s.rhs, s.alg, s.t0, s.times, s.specialize, s.options)...)))
 G.object_source(writer::G.SourceWriter, s::EventSolver) = :($(extension(writer)).EventSolver(
-    $(parts(writer, s.name, s.rhs, s.zero, s.alg, s.direction, s.interp_points, s.specialize, s.options)...)))
+    $(parts(writer, s.name, s.rhs, s.zero, s.alg, s.direction, s.interp_points, s.specialize, s.options, s.width, s.exact)...)))
 G.object_source(writer::G.SourceWriter, s::EventIntegration) = :($(extension(writer)).EventIntegration(
     $(parts(writer, s.name, s.rhs, s.zero, s.jump, s.alg, s.t0, s.times, s.sizes, s.specialize, s.options)...)))
 G.object_source(writer::G.SourceWriter, c::Crossing{Z}) where {Z} =
     Z === Any ? :($(extension(writer)).Crossing{Any}($(G.source(writer, c.zero)))) : :($(extension(writer)).Crossing($(G.source(writer, c.zero))))
 G.object_source(writer::G.SourceWriter, s::RootSolver{N}) where {N} = :(
-    let residual = $(G.source(writer, s.residual)), alg = $(G.value_source(writer, s.alg)), options = $(G.value_source(writer, s.options))
-        $(extension(writer)).RootSolver{$N,typeof(residual),typeof(alg),typeof(options)}($(s.name), residual, alg, options)
+    let residual = $(G.source(writer, s.residual)), slope = $(G.source(writer, s.slope)), alg = $(G.value_source(writer, s.alg)),
+        options = $(G.value_source(writer, s.options))
+        $(extension(writer)).RootSolver{$N,typeof(residual),typeof(slope),typeof(alg),typeof(options)}($(s.name), residual, slope, alg, options)
     end)
 
 # CasADi functions as the functions of SciML problems. Each wrapper calls the
@@ -500,14 +666,34 @@ const C = CasADiCodegen.C
 struct Call{N,G}
     g!::G
 end
-(c::Call{1})(out, u, p, t) = (c.g!((out,), (u,)); nothing)
-(c::Call{2})(out, u, p, t) = (c.g!((out,), (u, p)); nothing)
-(c::Call{3})(out, u, p, t) = (c.g!((out,), (u, p, t)); nothing)
-(c::Call{1})(out, u, p) = (c.g!((out,), (u,)); nothing)
-(c::Call{2})(out, u, p) = (c.g!((out,), (u, p)); nothing)
+# The calls are inline, so that the tuples of arrays stay in registers; the code of a small
+# function comes inline with them (see `Codegen.Inlined`).
+(c::Call{1})(out, u, p, t) = (@inline c.g!((out,), (u,)); nothing)
+(c::Call{2})(out, u, p, t) = (@inline c.g!((out,), (u, p)); nothing)
+(c::Call{3})(out, u, p, t) = (@inline c.g!((out,), (u, p, t)); nothing)
+(c::Call{1})(out, u, p) = (@inline c.g!((out,), (u,)); nothing)
+(c::Call{2})(out, u, p) = (@inline c.g!((out,), (u, p)); nothing)
+
+"""
+    Static{N,S}(g)
+
+A generated out-of-place function `g` with static arrays as a SciML function of `N` of the
+arguments (u, p, t). `S` is `Nothing` for a vector, or `Tuple{R,C}` for an R x C matrix,
+which the result of `g` has whatever the number of its columns.
+"""
+struct Static{N,S,G}
+    g::G
+end
+(s::Static{1})(u, p, t) = shaped(s, s.g(u))
+(s::Static{2})(u, p, t) = shaped(s, s.g(u, p))
+(s::Static{3})(u, p, t) = shaped(s, s.g(u, p, t))
+(s::Static{1})(u, p) = shaped(s, s.g(u))
+(s::Static{2})(u, p) = shaped(s, s.g(u, p))
+shaped(::Static{N,Nothing}, a) where {N} = a
+shaped(::Static{N,Tuple{R,C}}, a) where {N,R,C} = StaticArrays.SMatrix{R,C}(Tuple(a))
 
 "The value of a generated function with one number as its result, for the arguments (x, p)."
-struct Scalar{N,G}
+struct Scalar{N,G} <: CasADiCodegen.Codegen.GeneratedObjective
     g!::G
 end
 (s::Scalar{1})(x, p) = number(s.g!, float(eltype(x)), (x,))
@@ -538,65 +724,327 @@ end
 struct Hessians{N,G}
     g!::G
 end
-(h::Hessians{1})(H, x, p) = (h.g!(H, (x,)); nothing)
-(h::Hessians{2})(H, x, p) = (h.g!(H, (x, p)); nothing)
+(h::Hessians{1})(H, x, p) = (@inline h.g!(H, (x,)); nothing)
+(h::Hessians{2})(H, x, p) = (@inline h.g!(H, (x, p)); nothing)
 
-symbols(f::CasADiCodegen.Function) = [CasADiCodegen.MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
+"""
+    LagrangeHessian{N}(g)
+
+The Hessian of the Lagrange function `σ f(x, p) + μ' g(x, p)` by `x` as the `lag_h(h, x, σ, μ, p)`
+of a SciML function, for an objective of `N` arguments. `g` is the generated function on
+nonzeros of the arguments (x, σ, μ) or (x, p, σ, μ), whose result is the upper triangle of
+the Hessian; `h` receives its stored values.
+"""
+struct LagrangeHessian{N,G}
+    g::G
+end
+(l::LagrangeHessian{1})(h, x, σ, μ, p) = (l.g((h,), (x, σ, μ)); nothing)
+(l::LagrangeHessian{2})(h, x, σ, μ, p) = (l.g((h,), (x, p, σ, μ)); nothing)
+
+"""
+    Opaque(f)
+
+The in-place function `f(out, u, p, t)` behind a field of abstract type, so that the type
+of a SciML function that holds it is the same for each model. A call costs a dynamic
+dispatch.
+"""
+struct Opaque
+    f::Any
+end
+(o::Opaque)(out, u, p, t) = (o.f(out, u, p, t); nothing)
+
+# The numbers of arguments of the methods of each wrapper. SciMLBase finds them by reflection
+# otherwise, at each construction of a SciML function and so at each `remake` of a problem.
+SciMLBase.numargs(::Union{Call{1},Call{2}}) = [4, 3]
+SciMLBase.numargs(::Call{3}) = [4]
+SciMLBase.numargs(::Union{Static{1},Static{2}}) = [3, 2]
+SciMLBase.numargs(::Static{3}) = [3]
+SciMLBase.numargs(::Scalar) = [2]
+SciMLBase.numargs(::Hessians) = [3]
+SciMLBase.numargs(::LagrangeHessian) = [5]
+SciMLBase.numargs(::Opaque) = [4]
+
+# SX symbols for an SX function, whose call on them gives its expressions again; MX symbols
+# would make a call node that the code generator expands back to SX, at a cost in time and memory.
+function symbols(f::CasADiCodegen.Function)
+    T = C.is_a(f, "SXFunction") ? CasADiCodegen.SX : CasADiCodegen.MX
+    [T.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
+end
+"The keywords of the code generation that the SciML constructors pass on."
+codegen_options(; chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false) =
+    (; chunk_size, split_above, optlevel, cache)
+
 # CasADi does not accept the function names "jac" and "hess", thus each name gets a prefix.
-inplace(name, arguments, value) = build_function(CasADiCodegen.Function("sciml_" * name, arguments, [value]); expression = Val{false})[2]
-build_function(f; options...) = CasADiCodegen.build_function(f; options...)
+# The in-place function comes alone, without the out-of-place forms, unless it comes from the cache.
+function inplace(name, arguments, values::Vector; cache = false, options...)
+    f = CasADiCodegen.Function("sciml_" * name, arguments, values)
+    cache === false ? G.build_inplace(f; options...) : G.build_function(f; expression = Val{false}, cache, options...)[2]
+end
+inplace(name, arguments, value; options...) = inplace(name, arguments, [value]; options...)
+
+"""
+    outofplace(name, arguments, value; matrix, options...) -> Static
+
+Return the out-of-place function of `value` that returns static arrays, as a SciML function
+of the `arguments`. With `matrix` it returns an `SMatrix` also for one column.
+"""
+function outofplace(name, arguments, value; matrix::Bool, options...)
+    elements = prod(shape(C.sparsity(value)))
+    @requires elements <= G.STATIC_LIMIT "$name: inplace = false returns static arrays of at most $(G.STATIC_LIMIT) elements, and this one has $elements; use inplace = true"
+    g = G.build_function(CasADiCodegen.Function("sciml_" * name, arguments, [value]); expression = Val{false}, force_SA = true, options...)[1]
+    Static{length(arguments),matrix ? Tuple{shape(C.sparsity(value))...} : Nothing,typeof(g)}(g)
+end
+
+"The function `name` of `value` for a SciML function: a `Call` in place, or else a `Static`."
+sciml_function(name, arguments, value, inplace::Bool; matrix::Bool = false, codegen...) =
+    inplace ? concrete(Call{length(arguments),Any}(CasADiCodegenSciMLBaseExt.inplace(name, arguments, value; codegen...))) :
+              outofplace(name, arguments, value; matrix, codegen...)
 shape(sp) = (C.size1(sp), C.size2(sp))
 
-"The arguments of `f` as symbols and its result on them, when it maps a column vector to one of the same size."
-function vector_field(kind, f::CasADiCodegen.Function, most::Int)
-    @requires 1 <= C.n_in(f) <= most && C.n_out(f) == 1 "$kind: the function \"$(C.name(f))\" must have 1 to $most arguments and one result"
-    n = C.size1(C.sparsity_in(f, 0))
-    @requires shape(C.sparsity_in(f, 0)) == (n, 1) && shape(C.sparsity_out(f, 0)) == (n, 1) "$kind: the first argument and the result of \"$(C.name(f))\" must be column vectors of one size"
-    arguments = symbols(f)
-    arguments, CasADiCodegen.densify(f(arguments...))
+"""
+    sparse_prototype(kind, J) -> SparseMatrixCSC
+
+Return a sparse matrix of stored zeros with the sparsity pattern of the expression `J`, as
+the `jac_prototype` of a SciML function. It needs SparseArrays.jl loaded.
+"""
+function sparse_prototype(kind, J)
+    sparse_extension = Base.get_extension(CasADiCodegen, :CasADiCodegenSparseArraysExt)
+    @requires sparse_extension !== nothing "$kind: sparse = true needs SparseArrays.jl; load it with `using SparseArrays`"
+    sparse_extension.SparseArrays.SparseMatrixCSC(C.sparsity(J))
+end
+
+function check_sparse(kind, sparse::Bool, jac::Bool, inplace::Bool, options)
+    @requires !sparse || (jac && inplace && !haskey(options, :jac_prototype)) "$kind: sparse = true needs jac = true and inplace = true, and makes jac_prototype itself"
 end
 
 """
-    SciMLBase.ODEFunction(f::CasADiCodegen.Function; jac = true, paramjac = true, options...)
+    vector_field(kind, f, most) -> (arguments, value, observed)
 
-Make the in-place SciML function of the ordinary differential equation whose right side is
-the CasADi function `f(u)`, `f(u, p)` or `f(u, p, t)`. It holds generated code for the
-right side and for its Jacobians by the state (`jac`) and by the parameters (`paramjac`).
+Return the arguments of `f` as symbols, its first result on them, which is a column vector
+of the size of the first argument, and its other results on them, which are column vectors.
+"""
+function vector_field(kind, f::CasADiCodegen.Function, most::Int)
+    @requires 1 <= C.n_in(f) <= most && C.n_out(f) >= 1 "$kind: the function \"$(C.name(f))\" must have 1 to $most arguments and at least one result"
+    n = C.size1(C.sparsity_in(f, 0))
+    @requires shape(C.sparsity_in(f, 0)) == (n, 1) && shape(C.sparsity_out(f, 0)) == (n, 1) "$kind: the first argument and the first result of \"$(C.name(f))\" must be column vectors of one size"
+    @requires all(C.size2(C.sparsity_out(f, o)) == 1 for o in 1:C.n_out(f)-1) "$kind: the other results of \"$(C.name(f))\" must be column vectors"
+    arguments = symbols(f)
+    values = C.n_out(f) == 1 ? [f(arguments...)] : collect(f(arguments...))
+    arguments, CasADiCodegen.densify(values[1]), map(CasADiCodegen.densify, values[2:end])
+end
 
-`f` must have one result, a column vector of the size of its first argument. Set `jac` or
-`paramjac` to `false` to leave that Jacobian out. The other `options` go to
-`SciMLBase.ODEFunction`, for example `jac_prototype` with a sparse matrix that has the
-sparsity pattern of the Jacobian. See [Give a CasADi function to a SciML problem](@ref).
+# Names of the variables of a solution, from the names of the symbols of CasADi.
+
+const SII = SciMLBase.SymbolicIndexingInterface
+
+"""
+    element_names(f, i) -> Vector{Symbol} or nothing
+
+Return the names of the elements of argument `i` (from 0) of `f`: the names of its scalar
+symbols, or for one MX symbol of several elements, its name and the index from 0, as CasADi
+names the elements of an SX symbol. Return `nothing` when the argument has other symbols or
+is not dense.
+"""
+function element_names(f::CasADiCodegen.Function, i::Int)
+    C.is_dense(C.sparsity_in(f, i)) || return nothing
+    if C.is_a(f, "SXFunction")
+        e = C.sx_in(f, i)
+        n = C.numel(e)
+        all(k -> C.is_symbolic(e[k]), 1:n) || return nothing
+        return [Symbol(C.name(e[k])) for k in 1:n]
+    end
+    e = C.mx_in(f, i)
+    n = C.numel(e)
+    if C.is_symbolic(e)
+        return n == 1 ? [Symbol(C.name(e))] : [Symbol(C.name(e), "_", k - 1) for k in 1:n]
+    end
+    parts = C.symvar(e)
+    length(parts) == n && all(part -> C.numel(part) == 1, parts) ? [Symbol(C.name(part)) for part in parts] : nothing
+end
+
+"The name of an observed variable as a property of `Names`, through which SciMLBase looks up a `Symbol`."
+struct ObservedName
+    name::Symbol
+end
+
+"""
+    Names
+
+The symbolic system of a SciML function made from a CasADi function: a
+`SciMLBase.SymbolCache` with the names of the states, the parameters and the time, and the
+functions `(u, p, t) -> value`, or `(u, p) -> value` without time, of the observed
+variables by name. A property of it is an `ObservedName`, as SciMLBase expects of the
+system of an observed variable.
+"""
+struct Names{S}
+    cache::S
+    observed::Dict{Symbol,Any}
+end
+Base.getproperty(n::Names, name::Symbol) = ObservedName(name)
+Base.propertynames(n::Names) = collect(keys(getfield(n, :observed)))
+
+SII.symbolic_container(n::Names) = getfield(n, :cache)
+SII.is_time_dependent(n::Names) = SII.is_time_dependent(getfield(n, :cache))
+SII.constant_structure(::Names) = true
+SII.all_symbols(n::Names) = [SII.all_symbols(getfield(n, :cache)); collect(keys(getfield(n, :observed)))]
+SII.is_observed(n::Names, name::Symbol) = haskey(getfield(n, :observed), name)
+SII.is_observed(::Names, ::ObservedName) = true
+SII.is_observed(n::Names, names::Union{AbstractArray,Tuple}) = any(name -> SII.is_observed(n, name), names)
+SII.is_observed(n::Names, other) = SII.is_observed(getfield(n, :cache), other)
+SII.observed(n::Names, name::Symbol) = getfield(n, :observed)[name]
+SII.observed(n::Names, name::ObservedName) = getfield(n, :observed)[name.name]
+SII.observed(n::Names, other) = SII.observed(getfield(n, :cache), other)
+function SII.observed(n::Names, names::Union{AbstractArray,Tuple})
+    getters = map(name -> getter(n, name), names)
+    (arguments...) -> map(g -> g(arguments...), getters)
+end
+function SII.get_all_timeseries_indexes(n::Names, name::Union{Symbol,ObservedName})
+    observed = name isa ObservedName || SII.is_observed(n, name)
+    !observed ? SII.get_all_timeseries_indexes(getfield(n, :cache), name) :
+    SII.is_time_dependent(n) ? Set([SII.ContinuousTimeseries()]) : Set()
+end
+
+"The function `(u, p, t...) -> value` of the state, the parameter, the time or the observed variable `name` of `n`."
+function getter(n::Names, name)
+    SII.is_observed(n, name) && !(name isa Union{AbstractArray,Tuple}) && return SII.observed(n, name)
+    cache = getfield(n, :cache)
+    SII.is_variable(cache, name) && return (index = SII.variable_index(cache, name); (u, p, t...) -> u[index])
+    SII.is_parameter(cache, name) && return (index = SII.parameter_index(cache, name); (u, p, t...) -> p[index])
+    SII.is_independent_variable(cache, name) && return (u, p, t) -> t
+    SII.observed(cache, name)
+end
+
+"""
+    observed_functions(f, arguments, values, codegen) -> Dict{Symbol,Any}
+
+Return the observed variables of the other results `values` of `f` on the symbols
+`arguments`: result `o` with the name `y` gives `y`, its value, and for more than one
+element also `y_0`, `y_1`, ..., each element.
+"""
+function observed_functions(f::CasADiCodegen.Function, arguments, values, codegen)
+    observed = Dict{Symbol,Any}()
+    for (o, value) in enumerate(values)
+        name = C.name_out(f, o)
+        g = G.build_function(CasADiCodegen.Function("sciml_observed_" * name, arguments, [value]); expression = Val{false}, codegen...)[1]
+        call = length(arguments) == 1 ? (u, p, t...) -> g(u) : length(arguments) == 2 ? (u, p, t...) -> g(u, p) : (u, p, t) -> g(u, p, t)
+        n = C.size1(C.sparsity(value))
+        observed[Symbol(name)] = n == 1 ? (arguments...) -> call(arguments...)[1] : (arguments...) -> collect(vec(call(arguments...)))
+        for k in 1:(n == 1 ? 0 : n)
+            observed[Symbol(name, "_", k - 1)] = (arguments...) -> call(arguments...)[k]
+        end
+    end
+    observed
+end
+
+"""
+    named_system(f, arguments, values, time, codegen) -> NamedTuple
+
+Return the option `sys` of the SciML function of `f`, with the names of the elements of
+its arguments (see `element_names`) and the observed variables of its other results
+`values`, or no option when an argument has no names or a name occurs twice. Throw an
+`ArgumentError` in that case when `f` has further results, since an observed variable
+needs the names.
+"""
+function named_system(f::CasADiCodegen.Function, arguments, values, time::Bool, codegen)
+    states = element_names(f, 0)
+    parameters = C.n_in(f) >= 2 ? element_names(f, 1) : Symbol[]
+    clock = !time ? Symbol[] : C.n_in(f) >= 3 ? element_names(f, 2) : [:t]
+    outputs = [Symbol(C.name_out(f, o)) for o in 1:length(values)]
+    elements = [Symbol(C.name_out(f, o), "_", k - 1) for (o, v) in enumerate(values) if C.size1(C.sparsity(v)) > 1 for k in 1:C.size1(C.sparsity(v))]
+    named = !any(isnothing, (states, parameters, clock)) && (!time || length(clock) == 1) &&
+            allunique([states; parameters; clock; outputs; elements])
+    @requires named || isempty(values) "the further results of \"$(C.name(f))\" are observed variables, which need distinct names for the symbols of its arguments and for its results"
+    named || return (;)
+    cache = time ? SciMLBase.SymbolCache(states, parameters, only(clock)) : SciMLBase.SymbolCache(states, parameters)
+    (; sys = isempty(values) ? cache : Names(cache, observed_functions(f, arguments, values, codegen)))
+end
+
+"""
+    SciMLBase.ODEFunction(f::CasADiCodegen.Function; jac = true, paramjac = true, sparse = false,
+                          inplace = true, specialize = SciMLBase.FullSpecialize, chunk_size = nothing,
+                          split_above = nothing, optlevel = nothing, cache = false, options...)
+
+Make the SciML function of the ordinary differential equation whose right side is the
+CasADi function `f(u)`, `f(u, p)` or `f(u, p, t)`. It holds generated code for the right
+side and for its Jacobians by the state (`jac`) and by the parameters (`paramjac`).
+
+The first result of `f` is the right side, a column vector of the size of its first
+argument. Each further result, a column vector, is an observed variable. Set `jac` or
+`paramjac` to `false` to leave that Jacobian out.
+
+The function has the names of the symbols of `f` as its `sys`, so that `solution[:x]`,
+`remake(problem; p = [:k => 2.0])` and `problem.ps[:k]` work:
+
+- The states, the parameters and the time have the names of the scalar symbols of the
+  arguments of `f`. The elements of one symbol of several elements, such as
+  `MX.sym("x", 2)`, are `x_0` and `x_1`, as CasADi names the elements of `SX.sym("x", 2)`.
+  Without a third argument the time is `t`.
+- An observed variable has the name of its result (see `C.name_out`). A result of more
+  than one element `y` also gives `y_0`, `y_1`, ..., one per element.
+
+A function whose arguments are not made of named symbols, or whose names occur twice,
+gets no names, and then a further result throws an `ArgumentError`. A `sys` among the
+`options` replaces the names and the observed variables. With `sparse = true` the function has a
+`jac_prototype`: a `SparseMatrixCSC` with the sparsity pattern of the Jacobian, into whose
+stored values `jac` writes. It needs SparseArrays.jl loaded and `jac = true`.
+
+With `inplace = false` the functions are out of place and return static arrays: an
+`SVector` for the right side and an `SMatrix` for each Jacobian, also of one row or one
+column. Use it with an `SVector` state. Each of these arrays holds at most 4096
+elements, so `jac = true` allows at most 64 states; a larger function throws an
+`ArgumentError`. `specialize` is the specialization of the SciML
+function: `SciMLBase.AutoSpecialize` lets OrdinaryDiffEq.jl wrap the in-place functions of
+a `Vector{Float64}` state, so that the solver code compiled for one model serves the next
+one; an explicit solver wraps them only with `jac = false`. `chunk_size`, `split_above`,
+`optlevel` and `cache` go to [`build_function`](@ref CasADiCodegen.build_function). The
+other `options` go to `SciMLBase.ODEFunction`. See
+[Give a CasADi function to a SciML problem](@ref).
 
 # Examples
 ```julia
 using CasADiCodegen
 import SciMLBase
 
-u, k, t = SX.sym("u", 2), SX.sym("k"), SX.sym("t")
-rhs = CasadiFunction("rhs", [u, k, t], [vertcat(u[2], -k * u[1])])
+x, v, k, t = SX.sym("x"), SX.sym("v"), SX.sym("k"), SX.sym("t")
+rhs = CasadiFunction("rhs", [vertcat(x, v), k, t], [vertcat(v, -k * x), (v^2 + k * x^2) / 2],
+                     ["u", "k", "t"], ["du", "energy"])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [1.0, 0.0], (0.0, pi), [4.0])
+# After `solution = solve(problem, Tsit5())`: solution[:x], solution[:energy]
 ```
 """
-function SciMLBase.ODEFunction(f::CasADiCodegen.Function; jac::Bool = true, paramjac::Bool = true, options...)
-    arguments, value = vector_field("ODEFunction", f, 3)
-    n = length(arguments)
-    wrap(name, expression) = Call{n,Any}(inplace(name, arguments, expression)) |> concrete
-    SciMLBase.ODEFunction{true,SciMLBase.FullSpecialize}(wrap("rhs", value);
-        jac = jac ? wrap("jac", CasADiCodegen.jacobian(value, arguments[1])) : nothing,
-        paramjac = paramjac && n >= 2 ? wrap("paramjac", CasADiCodegen.jacobian(value, arguments[2])) : nothing, options...)
+function SciMLBase.ODEFunction(f::CasADiCodegen.Function; jac::Bool = true, paramjac::Bool = true, sparse::Bool = false,
+                               inplace::Bool = true, specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
+                               chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    check_sparse("ODEFunction", sparse, jac, inplace, options)
+    codegen = codegen_options(; chunk_size, split_above, optlevel, cache)
+    arguments, value, observed = vector_field("ODEFunction", f, 3)
+    wrap(name, expression; matrix = true) = sciml_function(name, arguments, expression, inplace; matrix, codegen...)
+    J = jac ? CasADiCodegen.jacobian(value, arguments[1]) : nothing
+    prototype = sparse ? (; jac_prototype = sparse_prototype("ODEFunction", J)) : (;)
+    names = haskey(options, :sys) ? (;) : named_system(f, arguments, observed, true, codegen)
+    # OrdinaryDiffEq.jl wraps the right side and the Jacobian of a function that is not
+    # FullSpecialize, but not the Jacobian by the parameters, whose type would stay in that of the solver.
+    pJ = paramjac && length(arguments) >= 2 ? wrap("paramjac", CasADiCodegen.jacobian(value, arguments[2])) : nothing
+    SciMLBase.ODEFunction{inplace,specialize}(wrap("rhs", value; matrix = false);
+        jac = jac ? wrap("jac", J) : nothing,
+        paramjac = pJ !== nothing && inplace && specialize !== SciMLBase.FullSpecialize ? Opaque(pJ) : pJ,
+        prototype..., names..., options...)
 end
 concrete(c::Call{N}) where {N} = Call{N,typeof(c.g!)}(c.g!)
 
 """
-    SciMLBase.NonlinearFunction(f::CasADiCodegen.Function; jac = true, options...)
+    SciMLBase.NonlinearFunction(f::CasADiCodegen.Function; jac = true, sparse = false, inplace = true,
+                                specialize = SciMLBase.FullSpecialize, chunk_size = nothing,
+                                split_above = nothing, optlevel = nothing, cache = false, options...)
 
-Make the in-place SciML function of the equations `f(u) = 0` or `f(u, p) = 0`, where `f` is
+Make the SciML function of the equations `f(u) = 0` or `f(u, p) = 0`, where `f` is
 a CasADi function. It holds generated code for the residual and for its Jacobian (`jac`).
 
-`f` must have one result, a column vector of the size of its first argument. Set
-`jac = false` to leave the Jacobian out. The other `options` go to
-`SciMLBase.NonlinearFunction`.
+The first result of `f` is the residual, a column vector of the size of its first
+argument; each further result is an observed variable. Set `jac = false` to leave the
+Jacobian out. The names, the keywords `sparse`, `inplace`, `specialize` and those of the
+code have the meaning that they have for `ODEFunction`, without the time. The other
+`options` go to `SciMLBase.NonlinearFunction`.
 
 # Examples
 ```julia
@@ -604,56 +1052,103 @@ residual = CasADiCodegen.Function("r", [z, q], [equations])
 problem = SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(residual), z0, q0)
 ```
 """
-function SciMLBase.NonlinearFunction(f::CasADiCodegen.Function; jac::Bool = true, options...)
-    arguments, value = vector_field("NonlinearFunction", f, 2)
-    n = length(arguments)
-    wrap(name, expression) = concrete(Call{n,Any}(inplace(name, arguments, expression)))
-    SciMLBase.NonlinearFunction{true,SciMLBase.FullSpecialize}(wrap("residual", value);
-        jac = jac ? wrap("jac", CasADiCodegen.jacobian(value, arguments[1])) : nothing, options...)
+function SciMLBase.NonlinearFunction(f::CasADiCodegen.Function; jac::Bool = true, sparse::Bool = false, inplace::Bool = true,
+                                     specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
+                                     chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    check_sparse("NonlinearFunction", sparse, jac, inplace, options)
+    codegen = codegen_options(; chunk_size, split_above, optlevel, cache)
+    arguments, value, observed = vector_field("NonlinearFunction", f, 2)
+    wrap(name, expression; matrix = true) = sciml_function(name, arguments, expression, inplace; matrix, codegen...)
+    J = jac ? CasADiCodegen.jacobian(value, arguments[1]) : nothing
+    prototype = sparse ? (; jac_prototype = sparse_prototype("NonlinearFunction", J)) : (;)
+    names = haskey(options, :sys) ? (;) : named_system(f, arguments, observed, false, codegen)
+    SciMLBase.NonlinearFunction{inplace,specialize}(wrap("residual", value; matrix = false);
+        jac = jac ? wrap("jac", J) : nothing, prototype..., names..., options...)
 end
 
 """
-    SciMLBase.OptimizationFunction(objective::CasADiCodegen.Function, constraints = nothing; options...)
+    SciMLBase.OptimizationFunction(objective::CasADiCodegen.Function, constraints = nothing; hess = true,
+                                   sparse = false, lag_h = sparse && hess, chunk_size = nothing,
+                                   split_above = nothing, optlevel = nothing, cache = false, options...)
 
 Make the SciML function of an optimization problem from the CasADi functions `objective(x)`
 or `objective(x, p)` and, if the problem has them, `constraints` with the same arguments.
 
 The result holds generated code for the objective, its gradient (`grad`) and its Hessian
-(`hess`). With constraints it also holds `cons`, their Jacobian `cons_j`, and
-`cons_h(H, x, p)`, where `H` has one matrix per constraint. The matrices are dense. The
-other `options` go to `SciMLBase.OptimizationFunction`.
+(`hess`). With constraints it also holds `cons`, their Jacobian `cons_j`, and, unless
+`lag_h`, `cons_h(H, x, p)`, where `H` has one matrix per constraint. `hess = false` leaves out the
+derivatives of the second order, for a solver that uses first derivatives only; their code
+can take long to build.
 
-`x` must be a column vector, and the objective one number. The constraints must be a column
-vector. The result has no Hessian of the Lagrange function (`lag_h`): the solvers of
-Optimization.jl make it from `hess` and `cons_h`.
+The matrices are dense unless `sparse = true`. Then `hess`, `cons_j` and `cons_h` write the
+stored values of a `SparseMatrixCSC` with the sparsity pattern of CasADi, which the result
+holds as `hess_prototype`, `cons_jac_prototype` and `cons_hess_prototype`; `options` must
+not hold a prototype then. It needs SparseArrays.jl loaded.
+
+`lag_h = true` needs `sparse = true` and `hess = true`. It adds the Hessian of the Lagrange
+function `σ f + μ' g`, as `lag_h(h, x, σ, μ, p)`, in place of `cons_h`: `h` receives the
+stored values of its upper triangle, whose pattern is `lag_hess_prototype`. Ipopt, through
+OptimizationIpopt.jl, then makes one call per iteration in place of one Hessian per
+constraint.
+
+`chunk_size`, `split_above`, `optlevel` and `cache` go to
+[`build_function`](@ref CasADiCodegen.build_function). The other `options` go to
+`SciMLBase.OptimizationFunction`. `x` must be a column vector, and the objective one number.
+The constraints must be a column vector.
 
 # Examples
 ```julia
+using SparseArrays
+
 x = SX.sym("x", 2)
 objective = CasADiCodegen.Function("cost", [x], [(x[1] - 1)^2 + x[2]^2])
 constraints = CasADiCodegen.Function("cons", [x], [x[1] + x[2]])
-f = SciMLBase.OptimizationFunction(objective, constraints)
+f = SciMLBase.OptimizationFunction(objective, constraints; sparse = true)
 problem = SciMLBase.OptimizationProblem(f, [0.0, 0.0]; lcons = [1.0], ucons = [1.0])
 ```
 """
-function SciMLBase.OptimizationFunction(objective::CasADiCodegen.Function, constraints::Union{Nothing,CasADiCodegen.Function} = nothing; options...)
+function SciMLBase.OptimizationFunction(objective::CasADiCodegen.Function, constraints::Union{Nothing,CasADiCodegen.Function} = nothing;
+                                        hess::Bool = true, sparse::Bool = false, lag_h::Bool = sparse && hess,
+                                        chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    @requires !lag_h || (sparse && hess) "OptimizationFunction: lag_h = true needs sparse = true and hess = true"
+    @requires !sparse || !any(haskey(options, k) for k in (:hess_prototype, :cons_jac_prototype, :cons_hess_prototype, :lag_hess_prototype)) "OptimizationFunction: sparse = true makes the prototypes itself"
+    codegen = codegen_options(; chunk_size, split_above, optlevel, cache)
     n = C.n_in(objective)
     @requires 1 <= n <= 2 && C.n_out(objective) == 1 && shape(C.sparsity_out(objective, 0)) == (1, 1) "OptimizationFunction: the objective must have 1 or 2 arguments and one number as its result"
     @requires C.size2(C.sparsity_in(objective, 0)) == 1 "OptimizationFunction: the unknown must be a column vector"
     arguments = symbols(objective)
     x = arguments[1]
     cost = CasADiCodegen.densify(objective(arguments...))
-    call(name, expression) = concrete(Call{n,Any}(inplace(name, arguments, expression)))
-    given = (; grad = call("grad", CasADiCodegen.gradient(cost, x)), hess = call("hess", CasADiCodegen.hessian(cost, x)))
+    call(name, expression) = sciml_function(name, arguments, expression, true; codegen...)
+    # A prototype for each sparse matrix; the dense form has none.
+    prototype(name, M) = sparse ? (; name => sparse_prototype("OptimizationFunction", M)) : (;)
+    H = hess ? CasADiCodegen.hessian(cost, x) : nothing
+    given = (; grad = call("grad", CasADiCodegen.gradient(cost, x)), hess = hess ? call("hess", H) : nothing,
+             (hess ? prototype(:hess_prototype, H) : (;))...)
+    value = nothing
     if constraints !== nothing
         @requires C.n_in(constraints) == n && C.n_out(constraints) == 1 && C.size2(C.sparsity_out(constraints, 0)) == 1 &&
                   all(shape(C.sparsity_in(constraints, i)) == shape(C.sparsity_in(objective, i)) for i in 0:n-1) "OptimizationFunction: the constraints must be a column vector and have the arguments of the objective"
         value = CasADiCodegen.densify(constraints(arguments...))
-        hessians = CasADiCodegen.Function("sciml_cons_h", arguments, [CasADiCodegen.densify(CasADiCodegen.hessian(value[j], x)) for j in 1:size(value, 1)])
-        cons_h = build_function(hessians; expression = Val{false})[2]
-        given = (; given..., cons = call("cons", value), cons_j = call("cons_j", CasADiCodegen.jacobian(value, x)), cons_h = Hessians{n,typeof(cons_h)}(cons_h))
+        J = CasADiCodegen.jacobian(value, x)
+        given = (; given..., cons = call("cons", value), cons_j = call("cons_j", J), prototype(:cons_jac_prototype, J)...)
+        if hess && !lag_h
+            # The dense form has m·n² entries: with `sparse` only the stored values are written.
+            each = [CasADiCodegen.hessian(value[j], x) for j in 1:size(value, 1)]
+            cons_h = inplace("cons_h", arguments, sparse ? each : map(CasADiCodegen.densify, each); codegen...)
+            given = (; given..., cons_h = Hessians{n,typeof(cons_h)}(cons_h),
+                     (sparse ? (; cons_hess_prototype = [sparse_prototype("OptimizationFunction", Hj) for Hj in each]) : (;))...)
+        end
     end
-    scalar = Scalar{n,Any}(inplace("cost", arguments, cost))
+    if lag_h
+        T = typeof(x)
+        σ, μ = T.sym("sigma"), T.sym("mu", value === nothing ? 0 : size(value, 1))
+        upper = C.triu(CasADiCodegen.hessian(value === nothing ? σ * cost : σ * cost + C.dot(μ, value), x))
+        lagrange = G.build_function(CasADiCodegen.Function("sciml_lag_h", [arguments..., σ, μ], [upper]);
+                                    expression = Val{false}, nonzeros = true, codegen...)
+        given = (; given..., lag_h = LagrangeHessian{n,typeof(lagrange)}(lagrange), prototype(:lag_hess_prototype, upper)...)
+    end
+    scalar = Scalar{n,Any}(inplace("cost", arguments, cost; codegen...))
     SciMLBase.OptimizationFunction{true}(Scalar{n,typeof(scalar.g!)}(scalar.g!), SciMLBase.NoAD(); given..., options...)
 end
 
@@ -726,6 +1221,72 @@ function SciMLBase.ODEProblem(I::CasADiCodegen.Function, x0::AbstractVector{<:Re
 end
 
 """
+    SciMLBase.ODEProblem(dae::CasADiCodegen.C.DaeBuilder, tspan = nothing; jac = true, paramjac = true,
+                         sparse = false, specialize = SciMLBase.FullSpecialize, chunk_size = nothing,
+                         split_above = nothing, optlevel = nothing, cache = false, options...)
+
+Make the SciML problem of the model `dae` of CasADi, with generated code for its right side
+and for the Jacobians of it, and with the start values of its variables.
+
+- The state has the differential states `x`, then the algebraic states `z` of `dae`. The
+  initial state is their start values. The algebraic start values must satisfy the
+  algebraic equations, as for `ODEProblem(I; z0)` of an integrator.
+- The parameters are `p`, then the inputs `u`, from their start values. The inputs are
+  constant over the solve.
+- The time span is `tspan`, or the start and stop times of `dae` when `tspan` is
+  `nothing`.
+- With algebraic states the problem has a mass matrix, so it needs a solver for such
+  problems, for example `Rodas5P()` of OrdinaryDiffEqRosenbrock.jl.
+- When each variable is a scalar, the problem has the names of the variables, so that
+  `solution[:x]` gives the values of the variable `x`.
+
+The dependent variables `w` and the constants `c` of `dae` are substituted into the
+equations; CasADi takes the value of a constant from `set(dae, name, value)`, not from its
+start value. A model with quadratures `q` or with `when` equations is not supported. The keywords from `jac` to `cache` go to
+[`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function)); the other `options`
+go to the problem.
+
+# Examples
+```julia
+dae = CasADiCodegen.C.DaeBuilder("decay")
+x, k = CasADiCodegen.C.add(dae, "x", "local", "continuous"), CasADiCodegen.C.add(dae, "k", "parameter", "tunable")
+CasADiCodegen.C.eq(dae, CasADiCodegen.C.der(dae, x), -k * x)
+CasADiCodegen.C.set_start(dae, "x", 1.0)
+CasADiCodegen.C.set_start(dae, "k", 0.5)
+solution = SciMLBase.solve(SciMLBase.ODEProblem(dae, (0.0, 2.0)), Vern9())
+solution[:x]
+```
+"""
+function SciMLBase.ODEProblem(dae::CasADiCodegen.C.DaeBuilder, tspan::Union{Nothing,Tuple{Real,Real}} = nothing;
+                              jac::Bool = true, paramjac::Bool = true, sparse::Bool = false,
+                              specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
+                              chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    name = C.name(dae)
+    label = "DaeBuilder \"$name\""
+    @requires isempty(C.q(dae)) "$label: a model with quadratures is not supported"
+    @requires C.nzero(dae) == 0 "$label: a model with when equations is not supported"
+    span = tspan === nothing ? (C.start_time(dae), C.stop_time(dae)) : tspan
+    @requires all(isfinite, span) "$label: give the time span, or set the start and stop times of the DaeBuilder"
+    g = C.create(dae, "$(name)_dae", ["x", "z", "p", "u", "t"], ["ode", "alg"])
+    nx, nz, np, nu = (C.nnz_in(g, i) for i in 0:3)
+    state, parameters, t = CasADiCodegen.MX.sym("u", nx + nz), CasADiCodegen.MX.sym("p", np + nu), CasADiCodegen.MX.sym("t")
+    # A model that does not use the time has a time of no element.
+    time = C.nnz_in(g, 4) == 0 ? CasADiCodegen.MX(C.sparsity_in(g, 4)) : t
+    ode, alg = g(G.part(state, 0, nx), G.part(state, nx, nz), G.part(parameters, 0, np), G.part(parameters, np, nu), time)
+    rhs = CasADiCodegen.Function(name, [state, parameters, t], [CasADiCodegen.vertcat(ode, alg)])
+    differential, algebraic, constant, inputs = C.x(dae), C.z(dae), C.p(dae), C.u(dae)
+    u0, p0 = C.start(dae, [differential; algebraic]), C.start(dae, [constant; inputs])
+    @ensures length(u0) == nx + nz && length(p0) == np + nu "$label: the start values do not have the sizes of the model"
+    # CasADi replaces a constant by its value, which is NaN until `set(dae, name, value)` gives it.
+    @requires all(isfinite, C.nonzeros(rhs(C.DM(u0), C.DM(p0), C.DM(float(span[1]))))) "$label: the right side is not finite at the start values; give each constant its value with set(dae, name, value)"
+    scalar = length(u0) == length(differential) + length(algebraic) && length(p0) == length(constant) + length(inputs)
+    names = scalar ? (; sys = SciMLBase.SymbolCache(Symbol.([differential; algebraic]), Symbol.([constant; inputs]), :t)) : (;)
+    mass = nz == 0 ? (;) : (; mass_matrix = LinearAlgebra.Diagonal([ones(nx); zeros(nz)]))
+    f = SciMLBase.ODEFunction(rhs; jac, paramjac, sparse, specialize, chunk_size, split_above, optlevel, cache, mass..., names...)
+    SciMLBase.ODEProblem(f, u0, float.(span), p0; options...)
+end
+
+"""
     control_changes(controls, times, np, callback) -> NamedTuple
 
 Return the options `callback` and `tstops` of a problem whose controls are constant
@@ -774,11 +1335,14 @@ function SciMLBase.NonlinearProblem(R::CasADiCodegen.Function, z0::AbstractVecto
 end
 
 """
-    SciMLBase.OptimizationProblem(S::CasADiCodegen.Function, x0, p = Float64[]; lbx, ubx, lbg, ubg, options...)
+    SciMLBase.OptimizationProblem(S::CasADiCodegen.Function, x0, p = Float64[]; lbx, ubx, lbg, ubg,
+                                  hess = true, sparse = false, lag_h = sparse && hess, chunk_size = nothing,
+                                  split_above = nothing, optlevel = nothing, cache = false, options...)
 
 Make the SciML problem of the solver `S` that `nlpsol` or `conic` of CasADi made, with
-generated code for the objective, the constraints and their derivatives (see
-`OptimizationFunction`).
+generated code for the objective, the constraints and their derivatives. The keywords from
+`hess` to `cache` have the meaning that they have for
+[`OptimizationFunction`](@ref SciMLBase.OptimizationFunction(::CasADiCodegen.Function, ::Union{Nothing,CasADiCodegen.Function})).
 
 For a solver of `conic`, the parameters `p` are the nonzeros of `h`, then `g`, then the
 nonzeros of `a`, and the constraints `g` of the bounds are the rows of `a`.
@@ -789,12 +1353,14 @@ column vector, and the vectors must have the sizes of `S`.
 
 # Examples
 ```julia
-problem = SciMLBase.OptimizationProblem(S, [0.0, 0.0]; lbg = [1.0], ubg = [1.0])
-solution = SciMLBase.solve(problem, Ipopt.Optimizer())              # with OptimizationMOI.jl
+problem = SciMLBase.OptimizationProblem(S, [0.0, 0.0]; lbg = [1.0], ubg = [1.0], sparse = true)
+solution = SciMLBase.solve(problem, OptimizationIpopt.IpoptOptimizer())
 ```
 """
 function SciMLBase.OptimizationProblem(S::CasADiCodegen.Function, x0::AbstractVector{<:Real}, p::AbstractVector{<:Real} = Float64[];
-                                       lbx = nothing, ubx = nothing, lbg = nothing, ubg = nothing, options...)
+                                       lbx = nothing, ubx = nothing, lbg = nothing, ubg = nothing, hess::Bool = true,
+                                       sparse::Bool = false, lag_h::Bool = sparse && hess, chunk_size = nothing,
+                                       split_above = nothing, optlevel = nothing, cache = false, options...)
     model = G.optimization_model(S)
     label = "solver \"$(model.name)\""
     check_count(label, "the unknowns", x0, model.nx)
@@ -804,13 +1370,95 @@ function SciMLBase.OptimizationProblem(S::CasADiCodegen.Function, x0::AbstractVe
         bound === nothing || check_count(label, what, bound, n)
     end
     constrained = model.ng > 0
-    f = SciMLBase.OptimizationFunction(model.objective, constrained ? model.constraints : nothing)
+    f = SciMLBase.OptimizationFunction(model.objective, constrained ? model.constraints : nothing;
+                                       hess, sparse, lag_h, chunk_size, split_above, optlevel, cache)
     limit(bound, value) = !constrained ? nothing : bound === nothing ? fill(value, model.ng) : float(collect(bound))
     # A SciML problem takes both bounds of the unknowns or none.
     bounded = lbx !== nothing || ubx !== nothing
     side(bound, value) = !bounded ? nothing : bound === nothing ? fill(value, model.nx) : float(collect(bound))
     SciMLBase.OptimizationProblem(f, float(collect(x0)), float(collect(p)); lb = side(lbx, -Inf), ub = side(ubx, Inf),
                                   lcons = limit(lbg, -Inf), ucons = limit(ubg, Inf), options...)
+end
+
+"""
+    SciMLBase.OptimizationProblem(opti::CasADiCodegen.C.Opti; hess = true, sparse = false, lag_h = sparse && hess,
+                                  chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+
+Make the SciML problem of the optimization problem that the `Opti` object of CasADi holds,
+with generated code for the objective, the constraints and their derivatives.
+
+- The unknowns are the variables of `opti`, in the order of their declaration, as
+  `C.x(opti)` joins them. Their initial values come from `set_initial`, or are zero.
+- The parameters are the parameters of `opti` (`C.p(opti)`), with the values from
+  `set_value`. Each parameter must have a value.
+- The constraints are those of `subject_to`, with the bounds that `opti` gives them.
+  `opti` keeps a bound on a variable as a constraint, so the problem has no `lb` and
+  `ub`. A bound that depends on a parameter has the value of this call; a later change
+  of the parameters in the problem does not change it.
+
+The keywords from `hess` to `cache` have the meaning that they have for
+[`OptimizationFunction`](@ref SciMLBase.OptimizationFunction(::CasADiCodegen.Function, ::Union{Nothing,CasADiCodegen.Function})).
+The other `options` go to the problem. `C.value(opti, expression, [C.x(opti) == CasADiCodegen.DM(solution.u)])`
+evaluates an expression of `opti` at the solution.
+
+# Examples
+```julia
+C = CasADiCodegen.C
+opti = C.Opti()
+x, a = C.variable(opti, 2), C.parameter(opti)
+C.minimize(opti, (x[1] - a)^2 + x[2]^2)
+C.subject_to(opti, x[1] + x[2] >= 1)
+C.set_value(opti, a, C.DM(0.25))
+problem = SciMLBase.OptimizationProblem(opti; sparse = true)
+solution = SciMLBase.solve(problem, OptimizationIpopt.IpoptOptimizer())
+```
+"""
+function SciMLBase.OptimizationProblem(opti::C.Opti; hess::Bool = true, sparse::Bool = false, lag_h::Bool = sparse && hess,
+                                       chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    x, p = C.x(opti), C.p(opti)
+    given = C.value_parameters(opti)
+    numbers(expression, values) = Vector{Float64}(C.nonzeros(CasADiCodegen.DM(C.value(opti, expression, values))))
+    # CasADi refuses the value of a parameter that has none.
+    p0 = C.np(opti) == 0 ? Float64[] : try
+        numbers(p, given)
+    catch err
+        err isa C.SwigError || rethrow()
+        Float64[NaN]
+    end
+    @requires all(isfinite, p0) "Opti: give each parameter its value with set_value"
+    x0 = numbers(x, C.initial(opti))
+    arguments = C.np(opti) == 0 ? [x] : [x, p]
+    objective = CasADiCodegen.Function("opti_objective", arguments, [C.f(opti)])
+    constrained = C.ng(opti) > 0
+    constraints = constrained ? CasADiCodegen.Function("opti_constraints", arguments, [C.g(opti)]) : nothing
+    f = SciMLBase.OptimizationFunction(objective, constraints; hess, sparse, lag_h, chunk_size, split_above, optlevel, cache)
+    lcons, ucons = constrained ? (numbers(C.lbg(opti), given), numbers(C.ubg(opti), given)) : (nothing, nothing)
+    @ensures length(x0) == C.nx(opti) && (lcons === nothing || length(lcons) == length(ucons) == C.ng(opti)) "Opti: the values do not have the sizes of the problem"
+    SciMLBase.OptimizationProblem(f, x0, p0; lcons, ucons, options...)
+end
+
+"""
+    CasADiCodegen.traced_function(name, problem; symbolic = SX) -> CasADiCodegen.Function
+
+Trace the function of the SciML `problem`, an `ODEProblem` or a `NonlinearProblem`, into a
+CasADi function, with the shapes of its initial state and of its parameters (see
+[`traced_function`](@ref CasADiCodegen.traced_function(::AbstractString, ::Any, ::AbstractArray{<:Real}))).
+The function of an `ODEProblem` takes the time; that of a `NonlinearProblem` does not.
+Parameters of the type `SciMLBase.NullParameters` count as none.
+
+# Examples
+```julia
+original = SciMLBase.ODEProblem(brusselator!, u0, (0.0, 11.5), p)
+rhs = CasADiCodegen.traced_function("brusselator", original)
+f = SciMLBase.ODEFunction(rhs; sparse = true)
+problem = SciMLBase.ODEProblem(f, vec(u0), (0.0, 11.5), p)
+```
+"""
+function CasADiCodegen.traced_function(name::AbstractString, problem::Union{SciMLBase.ODEProblem,SciMLBase.NonlinearProblem};
+                                       symbolic::Type = CasADiCodegen.SX)
+    p = problem.p isa SciMLBase.NullParameters ? nothing : problem.p
+    CasADiCodegen.traced_function(name, SciMLBase.unwrapped_f(problem.f.f), problem.u0, p;
+                                  inplace = SciMLBase.isinplace(problem), time = problem isa SciMLBase.ODEProblem, symbolic)
 end
 
 # A solver of CasADi for optimization problems in the graph of a function,

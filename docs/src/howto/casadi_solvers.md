@@ -17,7 +17,7 @@ import SciMLBase
 x, mu = MX.sym("x", 4), MX.sym("mu")
 r3 = (x[1]^2 + x[2]^2)^1.5
 ode = vertcat(x[3], x[4], -mu * x[1] / r3, -mu * x[2] / r3)
-I = CasADiCodegen.C.integrator("I", "cvodes", Dict("x" => x, "p" => mu, "ode" => ode), 0.0, [1.0, 2.0, 3.0])
+cv = CasADiCodegen.C.integrator("cv", "cvodes", Dict("x" => x, "p" => mu, "ode" => ode), 0.0, [1.0, 2.0, 3.0])
 nothing # hide
 ```
 
@@ -34,7 +34,7 @@ state by the initial state, with `Vern9` at tight tolerances:
 using CasADiCodegen: Solvers, Solver
 
 x0, p = MX.sym("x0", 4), MX.sym("p")
-final = I(Dict("x0" => x0, "p" => p))["xf"]                    # 4 by 3: one column per output time
+final = cv(Dict("x0" => x0, "p" => p))["xf"]                    # 4 by 3: one column per output time
 f = CasadiFunction("f", [x0, p], [final, jacobian(final[:, 3], x0)])
 
 solvers = Solvers(ode = Solver(Vern9(); abstol = 1e-13, reltol = 1e-13))
@@ -86,8 +86,7 @@ multiplier of a bound that is not active is exactly zero, and the others solve t
 stationarity condition by least squares. CasADi makes the derivatives of the
 solution from these results, since it reads the active bounds from the signs of the
 multipliers, so derivatives of any order need no other code. A bound counts as active
-when the solution is within 1e-6 of it, relative to the bound when that is more than
-1. The problem is solved with `Float64` only and with dense matrices, and the first
+when ``|x - \mathrm{bound}| \le 10^{-6} \max(1, |\mathrm{bound}|)``. The problem is solved with `Float64` only and with dense matrices, and the first
 guesses of the multipliers are not used. The options of the solver of CasADi, such as
 those of `ipopt`, are not read, so they must go with the algorithm.
 
@@ -111,6 +110,9 @@ solver of the field `ode`, or of `dae` for algebraic states; an integrator `rk` 
 an event is a change of sign of an element of `"zero"` from positive to negative,
 the transition then sets the state, and a call throws after more than `max_events`
 events, where `max_events` is an option of the integrator of CasADi (20 by default).
+One case differs: CasADi 3.8.1 misses an event that falls exactly on an output time, while
+the generated code applies it and returns the state after the event at that time
+([Differences from CasADi](@ref) gives an example).
 The numbers must be `Float64`: this replaced integrator does not take dual numbers,
 unlike the `integrator` with an event function of this package
 (see [Stop at an event](@ref events)).
@@ -120,14 +122,14 @@ As an example, we model a ball that bounces with the restitution `e`:
 ```julia
 h, v, e = MX.sym("h"), MX.sym("v"), MX.sym("e")             # height, speed, restitution
 model = Dict("x" => vertcat(h, v), "p" => e, "ode" => vertcat(v, -9.81), "zero" => h)
-bounce = CasADiCodegen.C.Function("transition", Dict("x" => vertcat(h, v), "p" => e, "post_x" => vertcat(h, -e * v)),
-                           CasADiCodegen.C.event_in(), CasADiCodegen.C.event_out())
+bounce = CasadiFunction("transition", Dict("x" => vertcat(h, v), "p" => e, "post_x" => vertcat(h, -e * v)),
+                        CasADiCodegen.C.event_in(), CasADiCodegen.C.event_out())
 ball = CasADiCodegen.C.integrator("ball", "cvodes", model, 0.0, [0.5, 1.0, 2.0], Dict("transition" => bounce))
 ```
 
 CasADi differentiates such an integrator by forward directions only. `jacobian` of an
-expression that calls it gives a dense Jacobian, and the method `jacobian()` of a
-`Function` that holds it throws an error; [Differences from CasADi](@ref) gives the
+expression that calls it gives a dense Jacobian, and `CasADiCodegen.C.jacobian(F)` of a
+function `F` that holds it throws an error; [Differences from CasADi](@ref) gives the
 reason.
 
 We take the Jacobian of the final states by the initial state and the restitution:
@@ -139,8 +141,8 @@ J = jacobian(final, vertcat(s0, q))
 f = CasadiFunction("f", [s0, q], [final, CasADiCodegen.C.densify(J)])
 ```
 
-With algebraic states, the event function can depend on them, and the forward
-derivatives of the event time and of the states after it are exact; after the transition,
+With algebraic states, the event function can depend on them, and CasADi differentiates
+the event time and the states after it by forward directions; after the transition,
 the package solves the algebraic equations again for the algebraic states and for their
 derivatives.
 
@@ -150,20 +152,37 @@ To call a SciML solver directly, we make a SciML problem from the solver object 
 CasADi. The problem holds generated code for its functions and their derivatives:
 
 ```@example solvers
-problem = SciMLBase.ODEProblem(I, [1.0, 0.0, 0.0, 1.0], [1.0])    # the output times of I are `saveat`
+problem = SciMLBase.ODEProblem(cv, [1.0, 0.0, 0.0, 1.0], [1.0])    # the output times of cv are `saveat`
 solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-13, reltol = 1e-13)
 solution.u[end]
 ```
 
 | Constructor | Object of CasADi | Problem |
 |---|---|---|
-| `ODEProblem(I, x0, p; z0, u)` | Integrator `cvodes`, `idas`, `rk` or `collocation` | The state has the differential states, the algebraic states from `z0`, which must satisfy the algebraic equations, and the quadratures; algebraic states give a mass matrix; event functions give a callback with the transition; the tolerances of CasADi are `abstol` and `reltol` |
+| `ODEProblem(I, x0, p; z0, u)` | Integrator `cvodes`, `idas`, `rk` or `collocation` | The state has the differential states, the algebraic states from `z0`, which must satisfy the algebraic equations, and the quadratures; algebraic states give a mass matrix; event functions give a callback with the transition; the problem takes `abstol` and `reltol` from the options of `cvodes` and `idas` |
+| `ODEProblem(dae, tspan)` | Model of a `DaeBuilder` | The state has the differential and then the algebraic states, from their start values; the parameters are `p` and then the inputs `u`; algebraic states give a mass matrix; the time span is that of `dae` when `tspan` is not given |
 | `NonlinearProblem(R, z0, others...)` | Rootfinder `newton`, `fast_newton` or `kinsol` | The residual and its Jacobian; the other arguments of `R` are the parameters |
-| `OptimizationProblem(S, x0, p; lbx, ubx, lbg, ubg)` | Solver of `nlpsol` or of `conic` | The objective and the constraints with their derivatives; the bounds have the names and the default values of CasADi. For `conic`, `p` has the nonzeros of `h`, then `g`, then the nonzeros of `a`, where CasADi writes the quadratic problem as minimizing ``\tfrac12 x^T h x + g^T x`` subject to ``\mathrm{lba} \le a x \le \mathrm{uba}`` |
+| `OptimizationProblem(opti; sparse = false)` | `Opti` stack | The objective and the constraints of `opti`, with its initial values, the values of its parameters and the bounds of its constraints at the time of the call; a bound on a variable stays a constraint |
+| `OptimizationProblem(S, x0, p; lbx, ubx, lbg, ubg, sparse = false)` | Solver of `nlpsol` or of `conic` | The objective and the constraints with their derivatives, sparse with `lag_h` for `sparse = true` (see [Give a CasADi function to a SciML problem](@ref)); the bounds have the names and the default values of CasADi. For `conic`, `p` has the nonzeros of `h`, then `g`, then the nonzeros of `a`, where CasADi writes the quadratic problem as minimizing ``\tfrac12 x^T h x + g^T x`` subject to ``\mathrm{lba} \le a x \le \mathrm{uba}`` |
 
 For an integrator with controls and several output times, `u` has one block of
 controls per output time, and the problem has a callback that changes the controls
 at each output time.
+
+A model built in a `DaeBuilder` of CasADi becomes a SciML problem in the same way, with
+the start values of its variables. When each variable is a scalar, the solution gives
+each variable by its name:
+
+```@example solvers
+dae = CasADiCodegen.C.DaeBuilder("decay")
+y = CasADiCodegen.C.add(dae, "y", "local", "continuous")
+k = CasADiCodegen.C.add(dae, "k", "parameter", "tunable")
+CasADiCodegen.C.eq(dae, CasADiCodegen.C.der(dae, y), -k * y)
+CasADiCodegen.C.set_start(dae, "y", 1.0)
+CasADiCodegen.C.set_start(dae, "k", 0.5)
+solution = SciMLBase.solve(SciMLBase.ODEProblem(dae, (0.0, 2.0)), Vern9(); abstol = 1e-12, reltol = 1e-12)
+solution[:y][end] ≈ exp(-1.0)
+```
 
 ## Limits
 

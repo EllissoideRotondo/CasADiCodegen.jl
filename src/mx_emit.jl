@@ -80,6 +80,51 @@ function runs(source::AbstractVector{<:Integer}, keep)
 end
 
 """
+    blocks(found) -> Vector{NTuple{7,Int}}
+
+Group consecutive runs of `found` (see `runs`) that have one step and one length, and
+whose positions and first values advance by fixed strides, into blocks
+`(k, first, step, length, count, k_stride, first_stride)`: run `j` of a block, from 0 to
+`count - 1`, is `(k + k_stride * j, first + first_stride * j, step, length)`. A transpose
+gives one block where it gives one run per column.
+"""
+function blocks(found::Vector{NTuple{4,Int}})
+    grouped = NTuple{7,Int}[]
+    r = 1
+    while r <= length(found)
+        # Loop invariant: `grouped` holds the runs before r, in order.
+        k, first, step, len = found[r]
+        count, dk, dfirst = 1, 0, 0
+        if r < length(found) && found[r+1][3] == step && found[r+1][4] == len
+            dk, dfirst = found[r+1][1] - k, found[r+1][2] - first
+            count = 2
+            while r + count <= length(found) &&
+                  found[r+count] == (k + dk * count, first + dfirst * count, step, len)
+                count += 1
+            end
+        end
+        push!(grouped, (k, first, step, len, count, dk, dfirst))
+        r += count
+    end
+    @ensures sum(b -> b[5], grouped; init = 0) == length(found) "blocks must hold every run once"
+    grouped
+end
+
+"""
+    copy_loop(statement, b) -> Vector{Any}
+
+Return the statements that run `statement(i, j)` for each position `i` in `1:length` of
+each run `j` in `0:count-1` of the block `b` of `blocks`. An index is an integer when it
+takes one value.
+"""
+function copy_loop(statement, b::NTuple{7,Int})
+    _, _, _, len, count, _, _ = b
+    count == 1 && return loop(len, i -> statement(i, 0))
+    len == 1 && return Any[Expr(:for, :(j = 0:$(count - 1)), Expr(:block, statement(1, :j)))]
+    Any[Expr(:for, Expr(:block, :(j = 0:$(count - 1)), :(i = 1:$len)), Expr(:block, statement(:i, :j)))]
+end
+
+"""
     indexed(em, tuples, statement) -> Vector{Any}
 
 Return statements that run `statement(indices...)` for each tuple of indices.
@@ -115,11 +160,14 @@ function copy_statements(maps::Vector{Vector{Int}}, operand_offsets::Vector{Int}
         if operand_offsets[d] != result_offset
             for first_use in (true, false)
                 keep = [from[k] != 0 && seen[k] != first_use for k in 1:n]
-                for (k, source, step, len) in runs(from, keep)
-                    target(i) = element(result_offset + k - 1, i)
-                    value(i) = :(w[$(stride(operand_offsets[d] + source, step, i))])
-                    append!(statements, loop(len, i -> first_use ? :($(target(i)) = $(value(i))) :
-                                                                   :($(target(i)) += $(value(i)))))
+                for b in blocks(runs(from, keep))
+                    k, source, step, _, _, dk, dsource = b
+                    shift(index, by, j) = j == 0 ? index : index isa Int && by == 0 ? index : :($index + $by * $j)
+                    target(i, j) = :(w[$(shift(i isa Int ? result_offset + k - 1 + i : :($(result_offset + k - 1) + $i), dk, j))])
+                    value(i, j) = :(w[$(shift(stride(operand_offsets[d] + source, step, i), dsource, j))])
+                    append!(statements, copy_loop(b) do i, j
+                        first_use ? :($(target(i, j)) = $(value(i, j))) : :($(target(i, j)) += $(value(i, j)))
+                    end)
                 end
             end
         end
@@ -504,6 +552,22 @@ function body!(em::Emission, switch::SwitchCall, name::Symbol)
         chain = Expr(k == 1 ? :if : :elseif, :(trunc(selector) == $(k - 1)), branch(switch.cases[k]), chain)
     end
     (Any[:(selector = $(element(offset_in[1], 1))), chain], offset_in, offset_out)
+end
+
+# A map runs its body in one loop over the blocks: each turn copies one block of
+# each input to the frame of the body, calls it, and copies one block of each output back.
+function body!(em::Emission, map::MapCall, name::Symbol)
+    offset_in, offset_out, _ = frame!(em, map, 0)
+    callee, callee_in, callee_out = callee!(em, map.body)
+    statements = Any[]
+    for (d, n) in enumerate(map.body.nnz_in)
+        append!(statements, loop(n, i -> :($(element(callee_in[d], i)) = w[$(offset_in[d]) + $n * k + $i])))
+    end
+    push!(statements, :($callee(w)))
+    for (o, n) in enumerate(map.body.nnz_out)
+        append!(statements, loop(n, i -> :(w[$(offset_out[o]) + $n * k + $i] = $(element(callee_out[o], i)))))
+    end
+    (Any[Expr(:for, :(k = 0:$(map.n - 1)), Expr(:block, statements...))], offset_in, offset_out)
 end
 
 """

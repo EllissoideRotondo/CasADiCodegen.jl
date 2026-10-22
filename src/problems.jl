@@ -561,6 +561,15 @@ optimization problem with the SciML algorithm `alg` (see `optimization_functions
 function optimizer end
 
 """
+    GeneratedObjective
+
+The supertype of the objective of a `SciMLBase.OptimizationFunction` that the extension for
+SciMLBase.jl makes. The extension for OptimizationBase.jl passes the `lag_h` and the
+`lag_hess_prototype` of such a function on to the solvers.
+"""
+abstract type GeneratedObjective end
+
+"""
     optimization_functions(model) -> NamedTuple
 
 Return generated code for the problem of a solver of CasADi (see `optimization_model`), as

@@ -150,6 +150,16 @@ end
     # As the integrator of CasADi, a call stops after `max_events` events, 20 by default: an elastic ball under a strong
     # gravity hits the ground about 30 times.
     @test_throws "more than 20 events" evaluated(native(plain; solvers), plain, [values[1], [1.0], fill(2000.0, 3)])
+    # An event exactly on an output time, where CasADi 3.8.1 misses it: the generated code applies it and returns
+    # the state after it at that time, the exact solution of N' = 100 - N with N += 50 at t = 10.
+    N, M, τ = MX.sym("N"), MX.sym("M"), MX.sym("t")
+    injection = C.Function("transition", Dict("x" => N, "p" => M, "post_x" => N + M), C.event_in(), C.event_out())
+    cells = C.integrator("cells", "cvodes", Dict("x" => N, "p" => M, "t" => τ, "ode" => 100 - N, "zero" => 10 - τ), 0.0, [5.0, 10.0, 15.0],
+                         Dict("transition" => injection))
+    injected = CasADiCodegen.Function("injected", [N, M], [cells(N, MX(0, 1), M, MX(1, 0), MX(), MX(), MX())[1]])
+    after_ten = 100 * (1 - exp(-10.0)) + 50
+    exact = [100 * (1 - exp(-5.0)), after_ten, 100 + (after_ten - 100) * exp(-5.0)]
+    @test all_agree(evaluated(native(injected; solvers), injected, [[0.0], [50.0]]), [exact]; rtol = 1e-9)
     # A fixed step has no Julia code with events: only an override replaces it.
     fixed = C.integrator("fixed", "rk", dae, 0.0, times, Dict("transition" => transition))
     k = CasADiCodegen.Function("k", [x, p, u], [fixed(x, MX(0, 1), p, u, MX(), MX(), MX())[1]])
