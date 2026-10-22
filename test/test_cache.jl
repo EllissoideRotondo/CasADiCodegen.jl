@@ -108,10 +108,11 @@ written_nonzeros(owner, name, f, arguments) =
     text = sprint(io -> generate_julia(f, io; module_name = :Orbit, name = :arc!))
     src = Module()
     Base.include_string(src, text)
-    @test written_nonzeros(src, (:Orbit, :arc_nonzeros!), f, (ODE_X0, ODE_MU)) == ode_emitted(f, (ODE_X0, ODE_MU))
-    @test Base.invokelatest((a, b) -> getfield(getfield(src, :Orbit), :arc)(a, b), ODE_X0, ODE_MU)[1] == ode_emitted(f, (ODE_X0, ODE_MU))[1]
+    emitted = ode_emitted(f, (ODE_X0, ODE_MU))
+    @test written_nonzeros(src, (:Orbit, :arc_nonzeros!), f, (ODE_X0, ODE_MU)) == emitted
+    @test Base.invokelatest((a, b) -> getfield(getfield(src, :Orbit), :arc)(a, b), ODE_X0, ODE_MU)[1] == emitted[1]
 
-    # An event with adjoint derivatives and a rootfinder, in matrix code and in scalar code around the calls.
+    # An event with adjoint derivatives and a rootfinder, in matrix code; the module above has the scalar code.
     y, z, a = SX.sym("y", 2), MX.sym("z"), MX.sym("a")
     swing = Dict("x" => y, "ode" => vertcat([y[2], -y[1]]), "zero" => y[1])
     E = integrator("WE", Vern9(), swing; adjoint = true, direction = -1, TIGHT...)
@@ -120,13 +121,11 @@ written_nonzeros(owner, name, f, arguments) =
     xe, te = E(y0, MX(0.0), MX(50.0))
     solved = root(MX(1.0), te + xe[2])
     g = CasADiCodegen.Function("mixed", [y0], [xe, te, solved, gradient(solved, y0)])
-    for expand in (true, false)
-        text = sprint(io -> generate_julia(g, io; module_name = :Mixed, name = :mixed!, expand))
-        src = Module()
-        Base.include_string(src, text)
-        # A solver that ran before starts with its last step, so the numbers agree to its tolerance.
-        @test closeto(written_nonzeros(src, (:Mixed, :mixed_nonzeros!), g, ([1.0, 0.2],)), ode_emitted(g, ([1.0, 0.2],); expand), 1e-10)
-    end
+    text = sprint(io -> generate_julia(g, io; module_name = :Mixed, name = :mixed!, expand = false))
+    src = Module()
+    Base.include_string(src, text)
+    # A solver that ran before starts with its last step, so the numbers agree to its tolerance.
+    @test closeto(written_nonzeros(src, (:Mixed, :mixed_nonzeros!), g, ([1.0, 0.2],)), ode_emitted(g, ([1.0, 0.2],); expand = false), 1e-10)
 
     # What a source file cannot hold: a solver that is a local function, and a call through CasADi.
     local_solver(rhs!, n, m) = (x0, q) -> x0

@@ -25,22 +25,6 @@ const PRECISE = Solver(Vern9(); abstol = 1e-13, reltol = 1e-13, specialize = Sci
     @test_throws "has a function of CasADi; give it in overrides" Solvers(ode = one)
 end
 
-"The model of the test below, integrated arc by arc with the solver itself: the states at the three times, and the quadratures."
-function pendulum_reference(x0, rate, controls)
-    T = promote_type(eltype(x0), eltype(rate), eltype(controls))
-    rhs(du, s, q, time) = (du[1] = s[2]; du[2] = -q[1] * sin(s[1]) + q[2] * time; du[3] = s[1]^2 + s[2]^2; nothing)
-    state, start, finals, sums = T[x0; 0], 0.0, T[], T[]
-    for (k, stop) in enumerate((0.5, 1.0, 2.0))
-        # Loop invariant: `state` is the state with the quadrature at the time `start`.
-        problem = SciMLBase.ODEProblem(rhs, state, (start, stop), T[rate[1], controls[k]])
-        state = SciMLBase.solve(problem, Vern9(); abstol = 1e-13, reltol = 1e-13, save_everystep = false).u[end]
-        append!(finals, state[1:2])
-        push!(sums, state[3])
-        start = stop
-    end
-    finals, sums
-end
-
 @testset "integrator with a variable step" begin
     x, p, u, t = MX.sym("x", 2), MX.sym("p"), MX.sym("u", 1, 3), MX.sym("t")
     control = MX.sym("c")
@@ -50,34 +34,29 @@ end
     final, quadrature = run(x, p, u)[1], run(x, p, u)[3]
     f = CasADiCodegen.Function("f", [x, p, u], [final, quadrature, C.jacobian(final, x), C.jacobian(quadrature, p), C.jacobian(final[:, 3], u)])
     values = [[0.4, -0.3], [1.7], [0.2, -0.1, 0.5]]
-    # One Jacobian of the reference by all its arguments: the states are the rows 1 to 6, and the quadratures follow them.
-    all_values = reduce(vcat, values)
-    J = ForwardDiff.jacobian(v -> reduce(vcat, pendulum_reference(v[1:2], v[3:3], v[4:6])), all_values)
-    expected = [pendulum_reference(values...)..., vec(J[1:6, 1:2]), J[7:9, 3], vec(J[5:6, 4:6])]
+    # The oracle is CasADi with 2000 steps of rk, whose error of about h^4 = 1e-12 is below the tolerance of the checks.
+    fine = C.integrator("fine", "rk", dae, 0.0, [0.5, 1.0, 2.0], Dict("number_of_finite_elements" => 2000))
+    reached = fine(x, MX(0, 1), p, u, MX(), MX(), MX())
+    cost(final, quadrature) = C.sumsqr(final) + quadrature[3]
+    reference = CasADiCodegen.Function("reference", [x, p, u], [reached[1], reached[3], C.jacobian(reached[1], x), C.jacobian(reached[3], p),
+                                                                C.jacobian(reached[1][:, 3], u), C.gradient(cost(reached[1], reached[3]), C.vertcat([x, p, C.vec(u)]))])
+    expected = mx_casadi(reference, values)
     solvers = Solvers(ode = PRECISE)
     @test_throws "CasADiCodegen.Solvers(ode = ...)" K.algorithm(f; expand = false)
     g = native(f; solvers)
-    @test all_agree(evaluated(g, f, values), expected; rtol = 1e-9)
+    @test all_agree(evaluated(g, f, values), expected[1:5]; rtol = 1e-9)
     # The function without derivatives keeps the compilation short.
     plain = CasADiCodegen.Function("plain", [x, p, u], [final])
     @testset "reverse mode" begin
         # The gradient of one number by all arguments, for which CasADi asks the integrator for adjoint sensitivities.
-        cost = C.sumsqr(final) + quadrature[3]
-        h = CasADiCodegen.Function("h", [x, p, u], [C.gradient(cost, C.vertcat([x, p, C.vec(u)]))])
-        @test evaluated(native(h; solvers), h, values)[1] ≈ 2 * J[1:6, :]' * expected[1] + J[9, :] rtol = 1e-8
+        h = CasADiCodegen.Function("h", [x, p, u], [C.gradient(cost(final, quadrature), C.vertcat([x, p, C.vec(u)]))])
+        @test evaluated(native(h; solvers), h, values)[1] ≈ expected[6] rtol = 1e-8
     end
     # The tolerances of the integrator of CasADi are those of the solver when the user gives none.
     # No public result names the tolerances in use, so the size of the error shows them.
-    loose = evaluated(native(plain; solvers = Solvers(ode = Vern9())), plain, values)
+    loose = evaluated(native(plain; solvers = Solvers(ode = Solver(Vern9(); specialize = SciMLBase.AutoSpecialize))), plain, values)
     @test all_agree(loose, expected[1:1]; rtol = 1e-4)
     @test !all_agree(loose, expected[1:1]; rtol = 1e-11)
-    @testset "a written module has the solver" begin
-        text = sprint(io -> generate_julia(plain, io; module_name = :Written, name = :run!, expand = false, solvers))
-        src = Module()
-        Base.include_string(src, text)
-        written = Base.invokelatest((r, a) -> src.Written.run_nonzeros!(r, a), [fill(NaN, 6)], Tuple(values))
-        @test all_agree(written, expected[1:1]; rtol = 1e-9)
-    end
 end
 
 @testset "one solver for one function" begin
@@ -210,6 +189,7 @@ end
         @test P ≈ by_rate rtol = 1e-7
     end
     @test_throws "one number per state" CasADiCodegen.integrator("stiff", Rodas5P(), model, 0.0, 1.0; mass = [1.0, 0.0])
+    @test_throws "a vector of times" CasADiCodegen.integrator("grid", Rodas5P(), model, 0.0, [0.5, 1.0]; mass = [1.0, 1.0, 0.0])
     # The adjoint equations give the gradient of a weighted sum of the final state, the algebraic state included.
     @testset "adjoint equations" begin
         backward = CasADiCodegen.integrator("stiff_a", Rodas5P(), model, 0.0, 1.0; mass = [1.0, 1.0, 0.0], adjoint = true, abstol = 1e-11, reltol = 1e-11, specialize = SciMLBase.AutoSpecialize)

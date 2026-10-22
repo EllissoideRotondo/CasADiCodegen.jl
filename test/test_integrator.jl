@@ -314,6 +314,7 @@ end
     # The state at the event and the derivatives of the event time need the sensitivities at the
     # same arguments: the generated code integrates them once, as for an arc to the event time.
     Solver = Base.get_extension(CasADiCodegen, :CasADiCodegenSciMLBaseExt).Solver
+    # A solver with 20 states integrates the 4 states with their sensitivities in the 4 directions.
     evaluations(name) = sum(state.stats.nf for (key, state) in task_local_storage()
                             if key isa Tuple && key[1] isa Solver && key[1].name == name && length(state.u) == 20; init = 0)
     plain = integrator("plain", Vern9(), delete!(copy(orbit), "zero"); TIGHT...)

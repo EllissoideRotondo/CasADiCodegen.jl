@@ -159,7 +159,8 @@ end
 
 function CasADiCodegen.integrator(name::AbstractString, alg::SciMLBase.AbstractODEAlgorithm, dae, t0::Real, times::AbstractVector{<:Real};
                            specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
-                           adjoint::Bool = false, options...)
+                           adjoint::Bool = false, mass::AbstractVector{<:Real} = Float64[], options...)
+    @requires isempty(mass) "integrator \"$name\": mass is not supported with a vector of times"
     make_solver(rhs, n, m) = Solver(String(name), rhs, alg, NaN, NaN, true, specialize, values(options))
     CasADiCodegen.Codegen.ode_grid(name, dae, t0, times, make_solver; adjoint)
 end

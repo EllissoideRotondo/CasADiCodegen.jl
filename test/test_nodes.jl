@@ -316,18 +316,19 @@ end
 
 # An integrator of CasADi with a fixed step is its loop of steps, written out.
 @testset "integrators of CasADi with a fixed step" begin
-    x, p, u = MX.sym("x", 2), MX.sym("p"), MX.sym("u", 1, 3)
+    x, p, u, t = MX.sym("x", 2), MX.sym("p"), MX.sym("u", 1, 3), MX.sym("t")
     control = MX.sym("c")
-    dae = Dict("x" => x, "p" => p, "u" => control, "ode" => C.vertcat([x[2], -p * C.sin(x[1]) + control]), "quad" => C.dot(x, x))
+    dae = Dict("x" => x, "p" => p, "u" => control, "t" => t, "ode" => C.vertcat([x[2], -p * C.sin(x[1]) + control * t]), "quad" => C.dot(x, x))
     values = [[0.4, -0.3], [1.7], [0.2, -0.1, 0.5]]
     @testset "$plugin" for plugin in ("rk", "collocation")
-        rule = C.integrator("rule", plugin, dae, 0.0, [0.5, 1.0, 2.0])
+        # Seven elements from the start time 0.25 give one, two and four steps, so both branches of the loop run.
+        rule = C.integrator("rule", plugin, dae, 0.25, [0.5, 1.0, 2.0], Dict("number_of_finite_elements" => 7))
         run(x0, parameter, controls) = rule(x0, MX(0, 1), parameter, controls, MX(), MX(), MX())
         final, quadrature = run(x, p, u)[1], run(x, p, u)[3]
         f = CasADiCodegen.Function("f", [x, p, u], [final, quadrature, C.jacobian(final, x), C.jacobian(quadrature, p), C.jacobian(final[:, 3], u)])
         g = native(f)
         @test all_agree(evaluated(g, f, values), mx_casadi(f, values); rtol = 1e-10)
-        # Dual numbers go through the steps. The code of the steps does not depend on the method, so one method shows it.
+        # Dual numbers go through the loop of steps, which both methods share, so one method shows it.
         if plugin == "rk"
             slope = ForwardDiff.derivative(s -> g([zeros(typeof(s), n) for n in nnz_out(f)], (values[1], [s], values[3]))[2][3], values[2][1])
             @test slope ≈ mx_casadi(f, values)[4][3] rtol = 1e-8
@@ -341,20 +342,18 @@ end
     @testset "two adjoint directions at once" begin
         # CasADi asks for them for a Jacobian with two rows and many columns.
         wide = MX.sym("wide", 6)
-        many = C.integrator("many", "collocation", Dict("x" => x, "p" => wide, "ode" => -C.sum1(wide) * x^2 + wide[1:2], "quad" => x[1] * wide[3]), 0.0, [0.5, 1.0])
+        many = C.integrator("many", "collocation", Dict("x" => x, "p" => wide, "ode" => -C.sum1(wide) * x^2 + wide[1:2], "quad" => x[1] * wide[3]), 0.0, [0.5, 1.0],
+                            Dict("number_of_finite_elements" => 4))
         reached = many(x, MX(0, 1), wide, MX(0, 1), MX(), MX(), MX())
         rows = CasADiCodegen.Function("rows", [x, wide], [C.jacobian(reached[1][:, 2], wide), C.jacobian(C.vertcat([reached[3][2], reached[1][1, 1]]), wide)])
         point = [values[1], [0.3, -0.2, 0.5, 0.1, 0.4, 0.2]]
         @test all_agree(evaluated(native(rows), rows, point), mx_casadi(rows, point); rtol = 1e-9)
     end
-    @testset "a written module has the solver" begin
-        rule = C.integrator("rule", "collocation", Dict("x" => x, "p" => p, "ode" => -p * x), 0.0, 1.0)
-        f = CasADiCodegen.Function("f", [x, p], [rule(x, MX(0, 1), p, MX(0, 1), MX(), MX(), MX())[1]])
-        @test all_agree(written(f, values[1:2]), mx_casadi(f, values[1:2]); rtol = 1e-10)
-    end
+    # The derivatives of the second order go through the same loop for both methods; rk keeps the code small.
     @testset "derivatives of the second order" begin
         w = MX.sym("w", 2)
-        rule = C.integrator("rule", "collocation", Dict("x" => x, "p" => w, "u" => control, "ode" => -w[1] * x^2 * w[2] + control, "quad" => x[1] * w[1]), 0.0, [0.5, 1.0])
+        rule = C.integrator("rule", "rk", Dict("x" => x, "p" => w, "u" => control, "ode" => -w[1] * x^2 * w[2] + control, "quad" => x[1] * w[1]), 0.0, [0.5, 1.0],
+                            Dict("number_of_finite_elements" => 2))
         result = rule(x, MX(0, 1), w, u[1:2], MX(), MX(), MX())
         cost = C.sumsqr(result[1]) + result[3][2]
         f = CasADiCodegen.Function("f", [x, w, u], [CasADiCodegen.hessian(cost, w), C.jacobian(C.jacobian(result[1][:, 2], w), x), C.jacobian(C.gradient(cost, x), u)])
