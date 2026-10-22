@@ -157,7 +157,7 @@ solution.u[end]
 
 | Constructor | Object of CasADi | Problem |
 |---|---|---|
-| `ODEProblem(I, x0, p; z0, u)` | Integrator `cvodes`, `idas`, `rk` or `collocation` | The state has the differential states, the algebraic states from the guess `z0` and the quadratures; algebraic states give a mass matrix; event functions give a callback with the transition; the tolerances of CasADi are `abstol` and `reltol` |
+| `ODEProblem(I, x0, p; z0, u)` | Integrator `cvodes`, `idas`, `rk` or `collocation` | The state has the differential states, the algebraic states from `z0`, which must satisfy the algebraic equations, and the quadratures; algebraic states give a mass matrix; event functions give a callback with the transition; the tolerances of CasADi are `abstol` and `reltol` |
 | `NonlinearProblem(R, z0, others...)` | Rootfinder `newton`, `fast_newton` or `kinsol` | The residual and its Jacobian; the other arguments of `R` are the parameters |
 | `OptimizationProblem(S, x0, p; lbx, ubx, lbg, ubg)` | Solver of `nlpsol` or of `conic` | The objective and the constraints with their derivatives; the bounds have the names and the default values of CasADi. For `conic`, `p` has the nonzeros of `h`, then `g`, then the nonzeros of `a`, where CasADi writes the quadratic problem as minimizing ``\tfrac12 x^T h x + g^T x`` subject to ``\mathrm{lba} \le a x \le \mathrm{uba}`` |
 

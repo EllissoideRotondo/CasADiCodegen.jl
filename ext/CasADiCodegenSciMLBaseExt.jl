@@ -670,8 +670,9 @@ end
 Make the SciML problem of the integrator `I` of CasADi (`cvodes`, `idas`, `rk` or
 `collocation`), with generated code for its right side and for the Jacobians of it.
 
-- The state has the differential states from `x0`, then the algebraic states from the guess
-  `z0`, then the quadratures, which start at zero.
+- The state has the differential states from `x0`, then the algebraic states from `z0`,
+  then the quadratures, which start at zero. `z0` must satisfy the algebraic equations at
+  the initial time: the default initialization of the SciML solvers checks it and stops.
 - The parameters are `p` and then the controls of the current interval. `u` has one block
   of controls per output time of `I`, as for the integrators of CasADi: block `k` holds
   from output time `k - 1`, or from the initial time, to output time `k`. With more than
