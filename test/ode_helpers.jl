@@ -67,3 +67,14 @@ function ball_reference(x0, e, gravity, times)
     end
     finals, sums
 end
+
+"""
+The state at the time `t` of the decay x' = -r x from `x0` at the time 0, which doubles
+when r x falls to 0.55: the first event at x = 0.55 / r, then one event each time x halves.
+"""
+function refilled(t, x0, rate)
+    onset = log(rate * x0 / 0.55) / rate
+    t < onset && return x0 * exp(-rate * t)
+    events = 1 + floor((t - onset) * rate / log(2))
+    2 * 0.55 / rate * exp(-rate * (t - onset) + (events - 1) * log(2))
+end

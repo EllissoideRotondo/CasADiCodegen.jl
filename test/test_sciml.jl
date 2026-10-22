@@ -137,6 +137,12 @@ const CC = CasADiCodegen.casadi
             @test solution.u[1] ≈ first_state rtol = 1e-10
             @test solution.u[2] ≈ arc(first_state, -0.2, 1.5) rtol = 1e-10
         end
+        # A callback of the user runs after the change of the controls, so it sees the control of the new interval.
+        seen = Float64[]
+        record = SciMLBase.DiscreteCallback((_, t, _) -> t == 1.0, i -> push!(seen, i.p[2]); save_positions = (false, false))
+        solution = SciMLBase.solve(SciMLBase.ODEProblem(grid, [0.4, -0.3], [1.7]; u = [0.5, -0.2], callback = record), Vern9(); abstol = 1e-13, reltol = 1e-13)
+        @test seen == [-0.2]
+        @test solution.u[2] ≈ arc(first_state, -0.2, 1.5) rtol = 1e-10
         @test_throws "the controls must have 2 numbers" SciMLBase.ODEProblem(grid, [0.4, -0.3], [1.7]; u = [0.5])
     end
     @testset "algebraic states give a mass matrix" begin
@@ -150,6 +156,14 @@ const CC = CasADiCodegen.casadi
         final = 0.4 * exp(-1.7)
         @test solution.u[end] ≈ [final, -0.3 + 0.4 * (1 - exp(-1.7)) / 1.7, 1.7 * final] rtol = 1e-8
         @test_throws "the algebraic states must have 1 number" SciMLBase.ODEProblem(rule, [0.4, -0.3], [1.7])
+        # With an event: x doubles when z = r x falls to 0.55, and the algebraic state follows the jump.
+        y = MX.sym("y")
+        doubling = CC.Function("transition", Dict("x" => y, "post_x" => 2y), CC.event_in(), CC.event_out())
+        refill = CC.integrator("refill", "idas", Dict("x" => y, "z" => z, "p" => p, "ode" => -z, "alg" => z - p * y, "zero" => z - 0.55), 0.0, [0.4, 1.0, 1.6],
+                               Dict("transition" => doubling))
+        solution = SciMLBase.solve(SciMLBase.ODEProblem(refill, [1.0], [1.1]; z0 = [1.1]), Rodas5P(); abstol = 1e-11, reltol = 1e-11)
+        expected = [refilled(t, 1.0, 1.1) for t in (0.4, 1.0, 1.6)]
+        @test reduce(vcat, solution.u) ≈ vec([expected 1.1 * expected]') rtol = 1e-7
     end
     @testset "an event function and its transition give a callback" begin
         y, e, g = MX.sym("y", 2), MX.sym("e"), MX.sym("g")

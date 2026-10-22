@@ -162,17 +162,6 @@ end
 const DAE_SOLVER = Solver(Rodas5P(); abstol = 1e-11, reltol = 1e-11, specialize = SciMLBase.AutoSpecialize)
 dae_exact(x0, rate) = (final = x0[1] * exp(-rate); [final, x0[2] + x0[1] * (1 - exp(-rate)) / rate, rate * final])
 
-"""
-The state at the time `t` of the decay x' = -r x from `x0` at the time 0, which doubles
-when r x falls to 0.55: the first event at x = 0.55 / r, then one event each time x halves.
-"""
-function refilled(t, x0, rate)
-    onset = log(rate * x0 / 0.55) / rate
-    t < onset && return x0 * exp(-rate * t)
-    events = 1 + floor((t - onset) * rate / log(2))
-    2 * 0.55 / rate * exp(-rate * (t - onset) + (events - 1) * log(2))
-end
-
 @testset "integrator of this package with algebraic states" begin
     y, p = MX.sym("y", 3), MX.sym("p")
     model = Dict("x" => y, "p" => p, "ode" => C.vertcat([-y[3], y[1], y[3] - p * y[1]]))

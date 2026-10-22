@@ -339,6 +339,15 @@ end
             @test all_agree(evaluated(native(cost), cost, values), mx_casadi(cost, values); rtol = 1e-9)
         end
     end
+    # Collocation has unknowns for the algebraic states at each point; z = p x1 makes x1' = -z a decay.
+    @testset "algebraic states" begin
+        z = MX.sym("z")
+        rule = C.integrator("rule", "collocation", Dict("x" => x, "z" => z, "p" => p, "ode" => C.vertcat([-z, x[1]]), "alg" => z - p * x[1]), 0.0, [0.5, 1.0],
+                            Dict("number_of_finite_elements" => 2))
+        reached = rule(x, MX(0.3), p, MX(0, 1), MX(), MX(), MX())
+        f = CasADiCodegen.Function("f", [x, p], [reached[1], reached[2], C.jacobian(reached[2], p)])
+        @test all_agree(evaluated(native(f), f, values[1:2]), mx_casadi(f, values[1:2]); rtol = 1e-10)
+    end
     @testset "two adjoint directions at once" begin
         # CasADi asks for them for a Jacobian with two rows and many columns.
         wide = MX.sym("wide", 6)
