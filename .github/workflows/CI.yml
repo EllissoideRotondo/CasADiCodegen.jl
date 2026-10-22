@@ -40,6 +40,10 @@ jobs:
         with:
           version: ${{ matrix.version }}
       - uses: julia-actions/cache@v2
+        with:
+          # The cleanup of old caches runs Pkg.gc(), which deletes the packages of the test environment
+          # of Pkg.test, a temporary one, so that each run installed and compiled them again.
+          delete-old-caches: false
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
         with:
