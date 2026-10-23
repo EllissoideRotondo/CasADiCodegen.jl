@@ -325,3 +325,61 @@ end
     wrong = CasadiFunction("g", [x, z, u, p], [vertcat(z, z)])
     @test_throws "must have the size of z" CasADiCodegen.linearization(f, wrong, h)
 end
+
+# Index reduction. The reduced models are integrated by IDAS of CasADi, a solver
+# independent of the package, and compared with an exact or an independent solution.
+"The state and algebraic state at `tf` of the CasADi integrator IDAS on `dae` from `x0` (`z0` a guess)."
+function idas_final(dae, x0, z0, p, tf)
+    F = C.integrator("F", "idas", dae, 0.0, tf, Dict("abstol" => 1e-10, "reltol" => 1e-10))
+    result = F(Dict("x0" => C.DM(x0), "z0" => C.DM(z0), "p" => C.DM(p)))
+    (vec(Matrix(result["xf"])), vec(Matrix(result["zf"])))
+end
+
+@testset "index reduction of the pendulum, $T" for T in (SX, MX)
+    # x' = vx, vx' = λ x, y' = vy, vy' = λ y - g, 0 = x^2 + y^2 - L^2: index 3.
+    q, v, λ, p = T.sym("q", 2), T.sym("v", 2), T.sym("λ"), T.sym("p", 2)    # p = [g, L]
+    pendulum = Dict("x" => vertcat(q, v), "z" => λ, "p" => p,
+                    "ode" => vertcat(v, λ * q - vertcat(0, p[1])), "alg" => q[1]^2 + q[2]^2 - p[2]^2)
+    reduced = CasADiCodegen.reduce_index(pendulum)
+    @test reduced.index == 3 && reduced.differentiations == [2]
+    # From rest at the angle 0.5 from the vertical, against the angle ODE θ'' = -(g / L) sin θ.
+    g, L, θ0, tf = 9.81, 1.0, 0.5, 1.5
+    x0 = [L * sin(θ0), -L * cos(θ0), 0.0, 0.0]
+    xf, _ = idas_final(reduced.dae, x0, [0.0], [g, L], tf)
+    θ, ω = SX.sym("θ"), SX.sym("ω")
+    angle = C.integrator("A", "cvodes", Dict("x" => vertcat(θ, ω), "ode" => vertcat(ω, -g / L * sin(θ))), 0.0, tf,
+                         Dict("abstol" => 1e-12, "reltol" => 1e-12))
+    θf = Float64(angle(Dict("x0" => C.DM([θ0, 0.0])))["xf"][1])
+    @test xf[1:2] ≈ [L * sin(θf), -L * cos(θf)] atol = 1e-6
+    # The invariants: the length constraint and its time derivative.
+    invariants = CasadiFunction("I", [reduced.dae["x"], reduced.dae["z"], p], [reduced.invariants])
+    @test size(reduced.invariants) == (2, 1)
+    @test maximum(abs, Matrix(invariants(C.DM(xf), C.DM([0.0]), C.DM([g, L])))) < 1e-6
+    # A Baumgarte pole draws a start off the circle back to it.
+    stabilized = CasADiCodegen.reduce_index(pendulum; baumgarte_pole = -10.0)
+    xs, _ = idas_final(stabilized.dae, [1.01 * x0[1]; x0[2:4]], [0.0], [g, L], tf)
+    @test abs(xs[1]^2 + xs[2]^2 - L^2) < 1e-4 * abs((1.01 * x0[1])^2 + x0[2]^2 - L^2)
+end
+
+@testset "index reduction makes an algebraic state differential, $T" for T in (SX, MX)
+    # x' = z2, 0 = z1 - sin t, 0 = x - z1: z1 becomes a state, and x = sin t from x(0) = 0.
+    x, z, t = T.sym("x"), T.sym("z", 2), T.sym("t")
+    dae = Dict("x" => x, "z" => z, "t" => t, "ode" => z[2], "alg" => vertcat(z[1] - sin(t), x - z[1]))
+    reduced = CasADiCodegen.reduce_index(dae)
+    @test reduced.differentiations == [1, 1] && size(reduced.dae["x"]) == (2, 1) && size(reduced.dae["z"]) == (2, 1)
+    xf, zf = idas_final(Dict(k => v for (k, v) in reduced.dae if k != "p"), [0.0, 0.0], [1.0, 1.0], Float64[], 2.0)
+    @test xf ≈ [sin(2.0), sin(2.0)] rtol = 1e-7
+end
+
+@testset "index reduction of an index-1 model and of a singular one" begin
+    x, z = SX.sym("x"), SX.sym("z")
+    dae = Dict("x" => x, "z" => z, "ode" => -z, "alg" => z - x^2)
+    reduced = CasADiCodegen.reduce_index(dae)
+    @test reduced.index == 1 && reduced.differentiations == [0] && size(reduced.invariants, 1) == 0
+    @test all(C.is_equal(reduced.dae[k], dae[k]) for k in keys(dae)) && keys(reduced.dae) == keys(dae)
+    # z2 enters no equation, so no number of differentiations determines it.
+    w = SX.sym("w", 2)
+    singular = Dict("x" => x, "z" => w, "ode" => w[1], "alg" => vertcat(w[1] - x, w[1] + x))
+    refusal = try CasADiCodegen.reduce_index(singular) catch e e end
+    @test refusal isa ArgumentError && occursin("alg[2]", refusal.msg)
+end

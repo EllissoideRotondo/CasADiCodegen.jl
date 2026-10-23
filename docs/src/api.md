@@ -55,12 +55,13 @@ CasADiCodegen.Solvers
 CasADiCodegen.Solver
 ```
 
-## Linearization and the order of equations
+## Linearization, the order of equations and index reduction
 
 ```@docs
 CasADiCodegen.linearization
 CasADiCodegen.linearization_function
 CasADiCodegen.block_triangular_form
+CasADiCodegen.reduce_index
 ```
 
 ## Automatic differentiation rules and sparse matrices

@@ -9,9 +9,9 @@ fail. A modeling language removes these difficulties for its user: it joins the
 parts through connectors, eliminates the equations of the form `a = b`, sorts the
 algebraic equations and substitutes their solutions into the differential equations
 (tearing), and differentiates constraints until the DAE can be integrated (index
-reduction). CasADiCodegen.jl sorts the equations but provides no connectors, no tearing
-and no index reduction, so we write each of these steps in a few lines of Julia and let
-CasADi compute the derivatives that it needs.
+reduction). CasADiCodegen.jl sorts the equations and reduces the index of a DAE, but
+provides no connectors and no tearing, so we write these steps in a few lines of Julia
+and let CasADi compute the derivatives that they need.
 
 The examples need CasADiCodegen.jl, SciMLBase.jl, the standard library LinearAlgebra and
 the solver `Rodas5P` of OrdinaryDiffEqRosenbrock.jl, which integrates a DAE in mass-matrix
@@ -235,61 +235,75 @@ x' = v_x, \quad v_x' = T x, \quad y' = v_y, \quad v_y' = T y - g, \quad 0 = x^2 
 As a mass-matrix DAE these equations fail at the first step, since the constraint does
 not contain `T`, so the Jacobian of the algebraic equation by the algebraic unknown is
 zero and the Newton iterations of the solver cannot determine `T`. The DAE has index 3:
-the constraint must be differentiated twice in time before it contains `T`, and once
-more to give an equation for `T'`. The reduction to index 1 replaces the constraint by its
-second derivative, and the initial values must satisfy the constraint and its first
-derivative, `x v_x + y v_y = 0`. We build the model in a `DaeBuilder` of CasADi, whose
-variables are MX symbols, and let CasADi do the differentiation. Each variable is a
-scalar, so the time derivative of an expression is the sum of its partial derivatives
-times the derivatives of the states. `add` takes the causality and the variability of a
-variable; the five unknowns start as `"local"` variables, and the equations below make
-four of them states and `T` an algebraic unknown:
+the constraint must be differentiated twice in time before it contains `T`, which gives
+an equation of index 1 for `T`, and once more for an ordinary differential equation.
+[`reduce_index`](@ref CasADiCodegen.reduce_index) finds the differentiations to index 1
+from the sparsity pattern of the equations, by the algorithm of Pantelides, and lets
+CasADi compute the derivatives. It takes the DAE as a dictionary in the form of the
+CasADi integrators:
 
 ```@example dae
-pendulum = C.DaeBuilder("pendulum")
-x, vx, y, vy, T = (C.add(pendulum, name, "local", "continuous") for name in ("x", "vx", "y", "vy", "T"))
-g, L = (C.add(pendulum, name, "parameter", "tunable") for name in ("g", "L"))
-
-states, slopes = (x, vx, y, vy), (vx, T * x, vy, T * y - g)
-ddt(e) = sum(jacobian(e, s) * ds for (s, ds) in zip(states, slopes))
-
-constraint = x^2 + y^2 - L^2
-(jacobian(constraint, T), jacobian(ddt(constraint), T), jacobian(ddt(ddt(constraint)), T))
+x, vx, y, vy, T = (SX.sym(name) for name in ("x", "vx", "y", "vy", "T"))
+g, L = SX.sym("g"), SX.sym("L")
+pendulum = Dict("x" => vertcat(x, vx, y, vy), "z" => T, "p" => vertcat(g, L),
+                "ode" => vertcat(vx, T * x, vy, T * y - g), "alg" => x^2 + y^2 - L^2)
+reduced = CasADiCodegen.reduce_index(pendulum)
+reduced.index, reduced.differentiations
 ```
 
-CasADi prints a structural zero as `00`: the constraint and its first derivative do not
-depend on `T`, and the second derivative does, with the derivative `2(x^2 + y^2)`, which
-is nonzero on the circle. We declare the four differential equations with `der` and the
-reduced constraint as an algebraic equation:
+The algebraic equation of the reduced DAE is the second derivative of the constraint, in
+which the derivatives of the states are replaced by the right side `"ode"`, so that it
+contains `T` with the factor `2(x^2 + y^2)`, nonzero on the circle:
 
 ```@example dae
-for (s, ds) in zip(states, slopes)
-    C.eq(pendulum, C.der(pendulum, s), ds)
-end
-C.eq(pendulum, MX(0), ddt(ddt(constraint)))
-(C.x(pendulum), C.z(pendulum))
+reduced.dae["alg"]
 ```
 
-The DaeBuilder does not reduce the index itself, and the index reduction of CasADi
-(`dae_reduce_index`) is not available in Julia, so we derive the index-1 model by hand.
-[`ODEProblem`](@ref SciMLBase.ODEProblem(::CasADiCodegen.C.DaeBuilder, ::Union{Nothing,Tuple{Real,Real}}))
-of a DaeBuilder takes the initial values and the parameters from its start values, which
-must satisfy the algebraic equation. The pendulum starts at rest at `(1, 0)`, which
-satisfies the constraint and its derivative, and where the reduced constraint gives
-`T = 0`, the default start value:
+The constraint and its first derivative, `x v_x + y v_y = 0` up to a factor of 2, are
+no longer equations of the model but its invariants: they stay zero along an exact
+solution that starts where they are zero, and the initial values must satisfy them.
+`initializealg = BrownFullBasicInit()` corrects a guess of the algebraic state `T`, but
+it leaves the differential states as given, so these must satisfy the invariants; for a
+model where that point is not obvious, a CasADi `rootfinder` or `nlpsol` on
+`reduced.invariants` over the free states finds one. The pendulum starts at rest at
+`(1, 0)`, which satisfies both invariants and where the reduced constraint gives
+`T = 0`. Called directly, a CasADi integrator of the reduced dictionary with the plugin
+`"idas"` integrates it with IDAS; here the integrator carries the model and the output
+times to [`ODEProblem`](@ref SciMLBase.ODEProblem(::CasADiCodegen.Function, ::AbstractVector{<:Real}, ::AbstractVector{<:Real})),
+whose state is `[x; z]` with a mass matrix, whose time span runs from 0 to the last
+output time, and whose solution holds the states at the output times; `Rodas5P`
+integrates it:
 
 ```@example dae
-C.set_start(pendulum, "x", 1.0)
-C.set_start(pendulum, "g", 9.8)
-C.set_start(pendulum, "L", 1.0)
-problem = SciMLBase.ODEProblem(pendulum, (0.0, 10.0))
+times = collect(0.1:0.1:10.0)
+model = C.integrator("pendulum", "idas", reduced.dae, 0.0, times)
+problem = SciMLBase.ODEProblem(model, [1.0, 0.0, 0.0, 0.0], [9.8, 1.0]; z0 = [0.0])
 solution = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-8, reltol = 1e-8)
-maximum(abs, solution[:x] .^ 2 .+ solution[:y] .^ 2 .- 1)
+invariants = CasadiFunction("invariants", [reduced.dae["x"], reduced.dae["z"], reduced.dae["p"]], [reduced.invariants])
+nx = size(reduced.dae["x"], 1)
+drift(solution) = maximum(u -> maximum(abs, Matrix(invariants(u[1:nx], u[nx+1:end], solution.prob.p))), solution.u)
+drift(solution)
 ```
 
-The index-1 model holds the second derivative of the constraint at zero, not the
+The reduced DAE holds the second derivative of the constraint at zero, not the
 constraint itself, so the position leaves the circle slowly as the errors of the
-integration accumulate; with the tolerances `1e-8`, the residual of the constraint
-stays at the size printed above over the ten seconds of the solution. A longer
-simulation needs a projection back onto the circle, or the stabilization of the constraint by a combination of it and its
-derivatives (Baumgarte's method), which we can write in the same way through `ddt`.
+integration accumulate; with the tolerances `1e-8`, the largest residual of the
+invariants over the ten seconds is about `2e-8`. The reduced model keeps every state and
+enforces only the highest derivative of each constraint, since `reduce_index` does not
+select dummy derivatives, which would hold the constraint itself. Baumgarte's
+stabilization instead replaces the second derivative by a combination of it
+and the lower derivatives, `g'' - 2γ g' + γ² g = 0` for the pole `γ < 0` of the keyword
+`baumgarte_pole`, so that a deviation from the circle decays as `exp(γ t)`:
+
+```@example dae
+stabilized = CasADiCodegen.reduce_index(pendulum; baumgarte_pole = -5.0)
+model = C.integrator("pendulum", "idas", stabilized.dae, 0.0, times)
+problem = SciMLBase.ODEProblem(model, [1.0, 0.0, 0.0, 0.0], [9.8, 1.0]; z0 = [0.0])
+drift(SciMLBase.solve(problem, Rodas5P(); abstol = 1e-8, reltol = 1e-8))
+```
+
+The invariants of `stabilized` are those of `reduced`, so the same function measures
+the drift, which the stabilization makes a few times smaller over these ten seconds.
+The gain grows with the time: over 100 seconds, the residual reaches about `5e-6`
+without the stabilization and stays below `1e-8` with it. A larger
+`|γ|` pulls the solution back faster but makes the equations stiffer.

@@ -67,6 +67,7 @@ include("integrator.jl")
 include("rootfinder.jl")
 include("tools.jl")
 include("structure.jl")
+include("index_reduction.jl")
 include("rules.jl")
 include("cache.jl")
 

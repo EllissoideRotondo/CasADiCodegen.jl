@@ -44,7 +44,7 @@ SHAPED_ZEROS[] == 2 || throw(AssertionError("$(SHAPED_ZEROS[]) methods zero(::T)
 include("codegen.jl")
 
 using .Codegen: build_function, generate_julia, instruction_histogram, nan_trace, differentiable, Solvers, Solver,
-    Traced, traced, untraced, traced_function, block_triangular_form, linearization, linearization_function,
+    Traced, traced, untraced, traced_function, block_triangular_form, linearization, linearization_function, reduce_index,
     initialization_problem, traced_problem
 
 """
