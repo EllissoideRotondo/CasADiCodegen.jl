@@ -19,6 +19,21 @@ function written(f, nz; kwargs...)
     Base.invokelatest((r, a) -> src.Written.run_nonzeros!(r, a), [fill(NaN, n) for n in nnz_out(f)], Tuple(nz))
 end
 
+"The largest number of turns of a loop `for i = 1:n` in the expression `ex`."
+longest_loop(_) = 0
+function longest_loop(ex::Expr)
+    turns = 0
+    if ex.head === :for
+        ranges = ex.args[1].head === :block ? ex.args[1].args : [ex.args[1]]
+        for r in ranges
+            range = r.args[2]
+            range isa Expr && range.head === :call && range.args[1] === :(:) && all(a -> a isa Int, range.args[2:end]) &&
+                (turns = max(turns, length(range.args[2]:range.args[end])))
+        end
+    end
+    max(turns, maximum(longest_loop, ex.args; init = 0))
+end
+
 "Captured standard output of `run()`."
 function printed(run)
     text = ""
@@ -236,6 +251,31 @@ const TABLE_POINTS = [[0.3, 0.7], [1.0, 2.0], [4.99, 3.9], [-1.0, 5.0], [6.0, -2
         table = C.interpolant("table", "linear", [[0.0, 0.5, 1.0, 1.5], [1.0, 2.0, 3.0]], collect(1.0:12.0) .^ 1.5, Dict("lookup_mode" => ["exact", "exact"]))
         f = CasADiCodegen.Function("f", [x], [table(x), C.gradient(table(x), x)])
         @test all(all_agree(evaluated(native(f), f, [p]), mx_casadi(f, [p]); rtol = 1e-10) for p in ([0.2, 1.3], [1.2, 2.9], [0.5, 2.0], [-1.0, 0.0], [2.0, 3.5]))
+    end
+    # Bug: the code copied the grid and the values into the work vector at each call, so a call
+    # cost time in proportion to the table. The code reads them where they are, so no loop of
+    # the code is as long as the table.
+    @testset "tables read in place, $n points, values $(fixed ? "fixed" : "an argument")" for n in (101, 10001), fixed in (true, false)
+        grid = collect(range(0.0, 10.0; length = n))
+        table = C.interpolant("table", "linear", [grid], fixed ? grid .^ 2 : 1, Dict("inline" => true))
+        t, v = MX.sym("t"), MX.sym("v", n)
+        y = fixed ? table(t) : table(t, v)
+        f = CasADiCodegen.Function("f", [t, v], [y, C.jacobian(y, t)])
+        inputs = [[5.55], grid .^ 3]
+        code = build_function(f; nonzeros = true)
+        @test longest_loop(code) < n
+        g = build_function(f; nonzeros = true, expression = Val{false})
+        @test all_agree(evaluated(g, f, inputs), mx_casadi(f, inputs); rtol = 1e-10)
+        results, arguments = [zeros(k) for k in nnz_out(f)], Tuple(inputs)
+        g(results, arguments)
+        @test @allocated(g(results, arguments)) == 0
+        n == 101 || continue
+        # The derivative by the values, as code and with dual numbers, and the code split into sub-functions.
+        by_values = CasADiCodegen.Function("by_values", [t, v], [C.jacobian(y, v)])
+        @test all_agree(evaluated(native(by_values), by_values, inputs), mx_casadi(by_values, inputs); rtol = 1e-10)
+        J = ForwardDiff.jacobian(w -> g([similar(w, k) for k in nnz_out(f)], ([5.55], w))[1], inputs[2])
+        @test agree(vec(J), dense_values(by_values(C.DM(5.55), C.DM(inputs[2]))); rtol = 1e-10)
+        @test all_agree(evaluated(native(f; chunk_size = 2), f, inputs), mx_casadi(f, inputs); rtol = 1e-10)
     end
     @testset "the interpolant itself" begin
         table = C.interpolant("table", "bspline", TABLE_GRID, values)

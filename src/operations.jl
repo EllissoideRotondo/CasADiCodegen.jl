@@ -64,8 +64,9 @@ function low(w, grid, n, x, mode)
 end""",
     # The whole part of a value as an index, and -1, which is no index, for a value that has none.
     :whole => "whole(x) = abs(x) < 9.0e15 ? trunc(Int, x) : -1",
-    # Element `index`, from zero, of the `n` elements after `w[base]`, and NaN out of that range.
-    :gather => "gather(w, base, n, index) = 0 <= index < n ? w[base+index+1] : convert(eltype(w), NaN)",
+    # Element `index`, from zero, of the `n` elements after `w[base]`, and NaN out of that range, as a
+    # floating-point number: `w` can be an argument of integers.
+    :gather => "gather(w, base, n, index) = convert(promote_type(Float64, eltype(w)), 0 <= index < n ? w[base+index+1] : NaN)",
     # The sparse QR factorization of CasADi (`casadi_qr`) of the matrix whose nonzeros follow `w[a]`.
     # The index table `t` holds after `t[base]`: the numbers of columns, of rows of V and of nonzeros of
     # A, V and R; then the column starts and the rows of A, of V and of R, the place of each row, and

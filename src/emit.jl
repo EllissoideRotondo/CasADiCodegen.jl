@@ -225,21 +225,34 @@ whole_statements(alg::Algorithm, ref; kwargs...) =
 """
     framed_body(alg, frame, ref, key; place_in, place_out, results = true) -> Vector{Any}
 
-Return the statements that run code which works in the work vector only. `frame` is
+Return the statements that run code which works in the work vector. `frame` is
 `((offset_in, offset_out, total), statements)`: the layout of `work_layout` and the
 statements over `w`. The result binds `w`, copies the nonzeros of each array of `arg` into
 it, runs the statements and, with `results`, copies the nonzeros of each result to `res`.
+A layout `(offset_in, offset_out, total, true)` of matrix code (see `emission`) has
+statements that read argument `i` as the vector `input_name(i)` of its nonzeros; that
+name is bound to `arg[i]` itself where nonzero `k` is element `k`, without a copy.
 
 `place_in(i)` is the expression for the position in `arg[i]` of nonzero `k`, and
 `place_out(j)` is that in `res[j]`. Both are `k` by default.
 """
 function framed_body(alg, frame, ref, key; place_in = i -> :k, place_out = j -> :k, results::Bool = true)
-    (offset_in, offset_out, total), statements = frame
+    layout, statements = frame
+    offset_in, offset_out, total = layout
+    direct = length(layout) > 3 && layout[4]::Bool
     loop(n, statement) = :(for k in 1:$n; $statement; end)
-    loads = Any[loop(n, :(w[$(offset_in[i]) + k] = arg[$i][$(place_in(i))])) for (i, n) in enumerate(alg.nnz_in) if n > 0]
+    loads, names = Any[], Any[]
+    for (i, n) in enumerate(alg.nnz_in)
+        if direct && (n == 0 || place_in(i) === :k)
+            push!(names, :($(input_name(i)) = arg[$i]))
+        elseif n > 0
+            push!(loads, loop(n, :(w[$(offset_in[i]) + k] = arg[$i][$(place_in(i))])))
+            direct && push!(names, :($(input_name(i)) = view(w, $(offset_in[i] + 1):$(offset_in[i] + n))))
+        end
+    end
     stores = !results ? Any[] :
         Any[loop(n, :(res[$j][$(place_out(j))] = w[$(offset_out[j]) + k])) for (j, n) in enumerate(alg.nnz_out) if n > 0]
-    Any[work_vector(ref, key, total), inbounds_block(Any[loads..., statements..., stores...])]
+    Any[work_vector(ref, key, total), inbounds_block(Any[loads..., names..., statements..., stores...])]
 end
 
 """

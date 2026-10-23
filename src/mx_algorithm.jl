@@ -869,7 +869,9 @@ scalar algorithm when CasADi can expand it.
 a call, or an operation of `COPY_OPERATIONS`, `LINEAR_OPERATIONS`,
 `INDEX_OPERATIONS`, `TABLE_OPERATIONS` or `PASS_OPERATIONS`. A called function
 that is neither SX nor MX must be one that `read_callee` replaces; `refuse`
-throws for any other.
+throws for any other. A call of a matrix function that has more argument nonzeros
+than instructions, such as an interpolant, is replaced by those instructions (see
+`inline_calls`), because a call copies its arguments.
 """
 MXAlgorithm(f::C.Function; expand::Bool = false) = read_mx(f, expand, Dict{Int,Any}())
 
@@ -882,6 +884,7 @@ function read_mx(f::C.Function, expand::Bool, callees::Dict{Int,Any})
     n = C.n_instructions(f)
     instructions = Vector{MXInstruction}(undef, n)
     slot_nnz = Int[]
+    inlined = Set{Int}()                         # the calls that are replaced by the instructions of the callee
     function write_slots(slots, sizes)
         for (s, size) in zip(slots, sizes)
             s == 0 && continue
@@ -913,6 +916,7 @@ function read_mx(f::C.Function, expand::Bool, callees::Dict{Int,Any})
         elseif op === :OP_CONST
             MXInstruction(op, out, Int[], Vector{Float64}(C.nonzeros(C.evalf(node))))
         elseif op === :OP_CALL
+            callee isa MXAlgorithm && sum(callee.nnz_in; init = 0) > length(callee.instructions) && push!(inlined, k)
             MXInstruction(op, out, operands, callee)
         elseif op in COPY_OPERATIONS
             MXInstruction(op, out, operands, copy_maps(node, operands, op in ADDING_OPERATIONS))
@@ -930,11 +934,89 @@ function read_mx(f::C.Function, expand::Bool, callees::Dict{Int,Any})
         end
     end
     replace!(slot_nnz, -1 => 0)                  # a slot that no instruction writes
-    MXAlgorithm(C.name(f), instructions, slot_nnz,
-                [C.sparsity_in(f, j) for j in 0:C.n_in(f)-1],
-                [C.sparsity_out(f, j) for j in 0:C.n_out(f)-1],
-                [C.name_in(f, j) for j in 0:C.n_in(f)-1],
-                [C.name_out(f, j) for j in 0:C.n_out(f)-1])
+    alg = MXAlgorithm(C.name(f), instructions, slot_nnz,
+                      [C.sparsity_in(f, j) for j in 0:C.n_in(f)-1],
+                      [C.sparsity_out(f, j) for j in 0:C.n_out(f)-1],
+                      [C.name_in(f, j) for j in 0:C.n_in(f)-1],
+                      [C.name_out(f, j) for j in 0:C.n_out(f)-1])
+    inline_calls(alg, inlined)
+end
+
+"""
+    inline_calls(alg, calls) -> MXAlgorithm
+
+Return `alg` with each call at a position in `calls`, which must call an
+`MXAlgorithm`, replaced by the instructions of the called algorithm (see
+`spliced`). The result computes the same values without a frame for the called
+function, so that its arguments are not copied.
+"""
+function inline_calls(alg::MXAlgorithm, calls::Set{Int})
+    isempty(calls) && return alg
+    @requires all(k -> alg.instructions[k].op === :OP_CALL && alg.instructions[k].data isa MXAlgorithm, calls) "only a call of a matrix algorithm can be inlined"
+    slot_nnz = copy(alg.slot_nnz)
+    instructions = MXInstruction[]
+    for (k, ins) in enumerate(alg.instructions)
+        k in calls ? append!(instructions, spliced(ins, slot_nnz)) : push!(instructions, ins)
+    end
+    MXAlgorithm(alg.name, instructions, slot_nnz, alg.sparsity_in, alg.sparsity_out, alg.names_in, alg.names_out)
+end
+
+"""
+    spliced(call, slot_nnz) -> Vector{MXInstruction}
+
+Return the instructions of the algorithm that the instruction `call` calls, in
+the work slots of the caller. The slots of the callee follow those in
+`slot_nnz`, which gains them (mutated). An input of the callee is read in the
+slot of the argument, without a copy. The results are copied to the result
+slots of `call` after the last instruction, because a result slot can be that
+of an argument which a later instruction of the callee reads.
+"""
+function spliced(call::MXInstruction, slot_nnz::Vector{Int})
+    callee = call.data::MXAlgorithm
+    base = length(slot_nnz)
+    append!(slot_nnz, callee.slot_nnz)
+    current = Dict{Int,Int}()                    # callee slot => caller slot that holds its value
+    at(s) = get(current, s, base + s)
+    last_write = zeros(Int, length(callee.slot_nnz))
+    for (k, ins) in enumerate(callee.instructions), s in ins.out
+        s == 0 || (last_write[s] = k)
+    end
+    identity_copy(to, from, n) = MXInstruction(:OP_GETNONZEROS, [to], [from], [[collect(1:n)]])
+    segments = [Tuple{Int,Int}[] for _ in call.out]      # (offset, slot) of each part of each result
+    result = MXInstruction[]
+    for (k, ins) in enumerate(callee.instructions)
+        if ins.op === :OP_INPUT
+            (d, offset), s = ins.data, ins.out[1]
+            if offset == 0 && callee.slot_nnz[s] == callee.nnz_in[d]
+                current[s] = call.in[d]
+            else
+                delete!(current, s)
+                push!(result, MXInstruction(:OP_GETNONZEROS, [base + s], [call.in[d]], [[collect(offset+1:offset+callee.slot_nnz[s])]]))
+            end
+        elseif ins.op === :OP_OUTPUT
+            (j, offset), s = ins.data, ins.in[1]
+            call.out[j] == 0 && continue
+            source = at(s)
+            if haskey(current, s) || last_write[s] > k
+                # A slot of the caller, or one that the callee writes again: the result is kept in a slot of its own.
+                push!(slot_nnz, callee.slot_nnz[s])
+                push!(result, identity_copy(length(slot_nnz), source, callee.slot_nnz[s]))
+                source = length(slot_nnz)
+            end
+            push!(segments[j], (offset, source))
+        else
+            push!(result, MXInstruction(ins.op, [s == 0 ? 0 : base + s for s in ins.out], [at(s) for s in ins.in], ins.data))
+            foreach(s -> delete!(current, s), ins.out)
+        end
+        # Loop invariant: the value of callee slot s after instruction k is in caller slot `at(s)`.
+    end
+    for (j, slot) in enumerate(call.out)
+        slot == 0 && continue
+        n = slot_nnz[slot]
+        maps = [[offset < i <= offset + slot_nnz[source] ? i - offset : 0 for i in 1:n] for (offset, source) in segments[j]]
+        push!(result, MXInstruction(:OP_VERTCAT, [slot], [source for (_, source) in segments[j]], [maps]))
+    end
+    result
 end
 
 """
@@ -1035,7 +1117,8 @@ function inline_bspline(f::C.Function, inputs::Vector{MX})
     table = C.interpolant(C.name(f), "bspline", grid, m, options)
     c = MX.sym("c", prod(length, grid) * m)
     linear = C.Function("linear_" * C.name(f), [inputs[1], c], [C.jtimes(table(inputs[1], c), c, c)])
-    grid, linear(inputs[1], isempty(values) ? inputs[2] : MX(C.DM(Float64.(values))))
+    # The graph of `linear` itself, not a call, so that the values are not copied to a frame.
+    grid, only(as_list(C.call(linear, MX[inputs[1], isempty(values) ? inputs[2] : MX(C.DM(Float64.(values)))], true, false)))
 end
 
 """

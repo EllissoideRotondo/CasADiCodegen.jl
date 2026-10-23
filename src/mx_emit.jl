@@ -1,10 +1,12 @@
 # Julia code for a matrix algorithm. As in the CasADi virtual machine, every
-# value lives in one work vector `w`, and each instruction becomes a few loops
-# over its nonzeros. A called function is emitted once, with the signature
+# value is written to one work vector `w`, and each instruction becomes a few
+# loops over its nonzeros. A called function is emitted once, with the signature
 # `(w)`: it has a part of the work vector of its own, its frame, which starts
 # with the nonzeros of its inputs and of its outputs. A function takes the
 # work vector only, because a call between runtime generated functions can
-# allocate memory for a tuple of arrays.
+# allocate memory for a tuple of arrays. An input and a constant are not copied
+# to a work slot: the instructions read them where they are (see `Place`), so
+# that a call does not cost time in proportion to a table that it reads.
 
 """
     Emission
@@ -40,6 +42,40 @@ end
 
 element(offset::Int, i::Int) = :(w[$(offset + i)])
 element(offset::Int, i) = offset == 0 ? :(w[$i]) : :(w[$offset + $i])
+
+"""
+    Place(array, offset, convert)
+    Place(offset)
+    Place(value)
+
+Where a value of a matrix algorithm is read: nonzero `i` is `array[offset + i]`. The
+array is the work vector `w` (the second form), the constant table, or the argument
+`input_name(k)`, which the entry point reads in place. With `convert`, a read gives
+the element type of `w`, as a copy to the work vector would. In the third form, every
+nonzero is the number `value`.
+"""
+struct Place
+    array::Union{Symbol,Float64}
+    offset::Int
+    convert::Bool
+end
+Place(offset::Int) = Place(:w, offset, false)
+Place(value::Float64) = Place(value, 0, false)
+
+shifted(p::Place, by::Int) = Place(p.array, p.offset + by, p.convert)
+in_work(p::Place, offset::Int) = p.array === :w && p.offset == offset
+
+"The name under which the entry point reads its argument `k` in place."
+input_name(k::Int) = Symbol(:input_, k)
+
+"The element at the index expression `index` of the array of `p`."
+function element_at(p::Place, index)
+    p.array isa Float64 && return p.array
+    read = :($(p.array)[$index])
+    p.convert ? :(convert(eltype(w), $read)) : read
+end
+element(p::Place, i) = p.array === :w ? element(p.offset, i) :
+    element_at(p, i isa Int ? p.offset + i : p.offset == 0 ? i : :($(p.offset) + $i))
 
 loop(n::Int, statement) = n == 0 ? Any[] : n == 1 ? Any[statement(1)] :
     Any[Expr(:for, :(i = 1:$n), Expr(:block, statement(:i)))]
@@ -140,13 +176,17 @@ function indexed(em::Emission, tuples::Vector{NTuple{N,Int}}, statement) where {
 end
 
 """
-    copy_statements(maps, operand_offsets, result_offset) -> Vector{Any}
+    copy_statements(maps, operands, result_offset) -> Vector{Any}
 
 Return the statements of a copy operation for one result, which starts after
-`w[result_offset]`. `maps[d]` is the map of the operand that starts after
-`w[operand_offsets[d]]`. An operand at the offset of the result stays in place.
+`w[result_offset]`. `maps[d]` is the map of operand `d`, which is read at the
+`Place` `operands[d]`, or after `w[operands[d]]` for an integer. An operand at the
+offset of the result stays in place.
 """
-function copy_statements(maps::Vector{Vector{Int}}, operand_offsets::Vector{Int}, result_offset::Int)
+copy_statements(maps::Vector{Vector{Int}}, operand_offsets::Vector{Int}, result_offset::Int) =
+    copy_statements(maps, Place.(operand_offsets), result_offset)
+
+function copy_statements(maps::Vector{Vector{Int}}, operands::Vector{Place}, result_offset::Int)
     n = length(first(maps))
     statements = Any[]
     fed = [any(m -> m[k] != 0, maps) for k in 1:n]
@@ -154,17 +194,17 @@ function copy_statements(maps::Vector{Vector{Int}}, operand_offsets::Vector{Int}
         append!(statements, loop(len, i -> :($(element(result_offset + k - 1, i)) = zero(eltype(w)))))
     end
     seen = falses(n)
-    order = sortperm([offset != result_offset for offset in operand_offsets])    # in place first
+    order = sortperm([!in_work(p, result_offset) for p in operands])    # in place first
     for d in order
         from = maps[d]
-        if operand_offsets[d] != result_offset
+        if !in_work(operands[d], result_offset)
             for first_use in (true, false)
                 keep = [from[k] != 0 && seen[k] != first_use for k in 1:n]
                 for b in blocks(runs(from, keep))
                     k, source, step, _, _, dk, dsource = b
                     shift(index, by, j) = j == 0 ? index : index isa Int && by == 0 ? index : :($index + $by * $j)
                     target(i, j) = :(w[$(shift(i isa Int ? result_offset + k - 1 + i : :($(result_offset + k - 1) + $i), dk, j))])
-                    value(i, j) = :(w[$(shift(stride(operand_offsets[d] + source, step, i), dsource, j))])
+                    value(i, j) = element_at(operands[d], shift(stride(operands[d].offset + source, step, i), dsource, j))
                     append!(statements, copy_loop(b) do i, j
                         first_use ? :($(target(i, j)) = $(value(i, j))) : :($(target(i, j)) += $(value(i, j)))
                     end)
@@ -176,69 +216,89 @@ function copy_statements(maps::Vector{Vector{Int}}, operand_offsets::Vector{Int}
     statements
 end
 
-function instruction_statements(em::Emission, alg::MXAlgorithm, ins::MXInstruction, offsets, scratch, offset_in, offset_out)
+"""
+    reads_in_place(ins) -> Bool
+
+Whether the statements of `ins` read each operand at its `Place`, so that an operand
+in the constant table or in an argument needs no copy to its work slot first. The
+grid of `:OP_LOW` must be an array (see `needs_copy`).
+"""
+function reads_in_place(ins::MXInstruction)
+    op = ins.op
+    (op === :OP_OUTPUT || op in COPY_OPERATIONS || haskey(INDEX_OPERATIONS, op)) && return true
+    op === :OP_CALL && return !(ins.data isa JuliaCall)
+    !(op in (:OP_INPUT, :OP_CONST) || haskey(LINEAR_OPERATIONS, op) || haskey(PASS_OPERATIONS, op) || haskey(TABLE_OPERATIONS, op))
+end
+
+"Whether `ins` reads its operand slot `s`, now at `place`, in the work vector only."
+needs_copy(ins::MXInstruction, s::Int, place::Place) = place.array !== :w &&
+    (!reads_in_place(ins) || ins.op === :OP_LOW && s == ins.in[1] && place.array isa Float64)
+
+"""
+    instruction_statements(em, alg, ins, reads, writes, scratch, offset_out) -> Vector{Any}
+
+Return the statements of one instruction other than `:OP_INPUT` and `:OP_CONST`, which
+give an operand a `Place` and no statements (see `body!`). Operand slot `s` is
+read at `reads[s]`, which is in the work vector unless `reads_in_place(ins)`; result slot
+`s` is written after `w[writes[s]]`. Nonzero `k` of result `j` of the function is
+`w[offset_out[j] + k]`, and `scratch` is the offset of the work space of `scratch_size`.
+"""
+function instruction_statements(em::Emission, alg::MXAlgorithm, ins::MXInstruction, reads::Vector{Place}, writes::Vector{Int}, scratch, offset_out)
     op = ins.op
     nnz(s) = alg.slot_nnz[s]
-    if op === :OP_INPUT
-        slot, (argument, offset) = ins.out[1], ins.data
-        loop(nnz(slot), i -> :($(element(offsets[slot], i)) = $(element(offset_in[argument] + offset, i))))
-    elseif op === :OP_OUTPUT
+    @requires !(op in (:OP_INPUT, :OP_CONST)) "$op has no statements"
+    in_place = reads_in_place(ins)
+    @requires !any(s -> needs_copy(ins, s, reads[s]), ins.in) "$op reads its operands in the work vector only"
+    at = in_place ? Int[] : Int[reads[s].offset for s in ins.in]
+    if op === :OP_OUTPUT
         slot, (result, offset) = ins.in[1], ins.data
-        loop(nnz(slot), i -> :($(element(offset_out[result] + offset, i)) = $(element(offsets[slot], i))))
-    elseif op === :OP_CONST
-        slot, values = ins.out[1], ins.data
-        if isempty(values) || all(isequal(first(values)), values)
-            loop(nnz(slot), i -> :($(element(offsets[slot], i)) = $(first(values))))
-        else
-            base = length(em.constants)
-            append!(em.constants, values)
-            loop(nnz(slot), i -> :($(element(offsets[slot], i)) = $(em.constants_name)[$(stride(base + 1, 1, i))]))
-        end
+        loop(nnz(slot), i -> :($(element(offset_out[result] + offset, i)) = $(element(reads[slot], i))))
     elseif op === :OP_CALL && ins.data isa JuliaCall
-        julia_call_statements(em, ins, offsets)
+        julia_call_statements(em, ins, at, writes)
     elseif op === :OP_CALL
         # Copy the arguments to the frame of the function, call it, and copy the results that are read.
         name, callee_in, callee_out = callee!(em, ins.data)
         statements = Any[]
         for (d, slot) in enumerate(ins.in)
-            append!(statements, loop(ins.data.nnz_in[d], i -> :($(element(callee_in[d], i)) = $(element(offsets[slot], i)))))
+            append!(statements, loop(ins.data.nnz_in[d], i -> :($(element(callee_in[d], i)) = $(element(reads[slot], i)))))
         end
         push!(statements, :($name(w)))
         for (o, slot) in enumerate(ins.out)
-            slot == 0 || append!(statements, loop(ins.data.nnz_out[o], i -> :($(element(offsets[slot], i)) = $(element(callee_out[o], i)))))
+            slot == 0 || append!(statements, loop(ins.data.nnz_out[o], i -> :($(element(writes[slot], i)) = $(element(callee_out[o], i)))))
         end
         statements
     elseif op in COPY_OPERATIONS
         statements = Any[]
         for (o, slot) in enumerate(ins.out)
-            slot == 0 || append!(statements, copy_statements((ins.data::Vector{Vector{Vector{Int}}})[o], offsets[ins.in], offsets[slot]))
+            slot == 0 || append!(statements, copy_statements((ins.data::Vector{Vector{Vector{Int}}})[o], reads[ins.in], writes[slot]))
         end
         statements
     elseif haskey(LINEAR_OPERATIONS, op)
-        linear_statements(em, ins, offsets[ins.out[1]], offsets[ins.in], alg.slot_nnz[ins.in], scratch)
+        linear_statements(em, ins, writes[ins.out[1]], at, alg.slot_nnz[ins.in], scratch)
     elseif haskey(INDEX_OPERATIONS, op)
-        index_statements(em, ins, offsets[ins.out[1]], offsets[ins.in], alg.slot_nnz[ins.in])
+        index_statements(em, ins, writes[ins.out[1]], reads[ins.in], alg.slot_nnz[ins.in])
     elseif haskey(PASS_OPERATIONS, op)
-        pass_statements(em, ins, offsets[ins.out[1]], offsets[ins.in], nnz(ins.out[1]))
+        pass_statements(em, ins, writes[ins.out[1]], at, nnz(ins.out[1]))
     elseif haskey(TABLE_OPERATIONS, op)
-        table_statements(em, ins, offsets[ins.out[1]], offsets[ins.in], alg.slot_nnz[ins.in], nnz(ins.out[1]), scratch)
+        table_statements(em, ins, writes[ins.out[1]], at, alg.slot_nnz[ins.in], nnz(ins.out[1]), scratch)
     else
         slot = ins.out[1]
         n = nnz(slot)
-        operand(s, i) = element(offsets[s], nnz(s) == n ? i : 1)
-        loop(n, i -> :($(element(offsets[slot], i)) = $(OPERATIONS[op].build(em.ref, (operand(s, i) for s in ins.in)...))))
+        operand(s, i) = element(reads[s], nnz(s) == n ? i : 1)
+        loop(n, i -> :($(element(writes[slot], i)) = $(OPERATIONS[op].build(em.ref, (operand(s, i) for s in ins.in)...))))
     end
 end
 
 """
-    julia_call_statements(em, ins, offsets) -> Vector{Any}
+    julia_call_statements(em, ins, at, writes) -> Vector{Any}
 
 Return statements that call a Julia function directly and copy each result
-that is read to its work slot. The function gets views of the work vector, as
-vectors or as matrices. It returns only the results that have nonzeros. A
-result of the wrong length throws `DimensionMismatch`.
+that is read to its work slot. Operand `d` is read after `w[at[d]]`, and result
+slot `s` is written after `w[writes[s]]`. The function gets views of the work
+vector, as vectors or as matrices. It returns only the results that have
+nonzeros. A result of the wrong length throws `DimensionMismatch`.
 """
-function julia_call_statements(em::Emission, ins::MXInstruction, offsets)
+function julia_call_statements(em::Emission, ins::MXInstruction, at::Vector{Int}, writes::Vector{Int})
     call = ins.data
     name = Symbol(em.prefix, :_julia_, length(em.julia) + 1)
     known = findfirst(entry -> entry[2] === call.f, em.julia)
@@ -246,7 +306,7 @@ function julia_call_statements(em::Emission, ins::MXInstruction, offsets)
     part(start, n) = :(view(w, $(start + 1):$(start + n)))
     arguments = map(1:call.nargs) do d
         dims = call.shapes_in[d]
-        values = part(offsets[ins.in[d]], call.nnz_in[d])
+        values = part(at[d], call.nnz_in[d])
         length(dims) == 1 ? values : :(reshape($values, $(dims[1]), $(dims[2])))
     end
     copies = Any[]
@@ -257,7 +317,7 @@ function julia_call_statements(em::Emission, ins::MXInstruction, offsets)
         value = returned[end] == 1 ? :(y isa Tuple ? y[1] : y) : :(y[$(returned[o])])
         push!(copies, :(length($value) == $n || throw(DimensionMismatch(
             string($("Julia function \"$(call.name)\": result $o needs $n elements, got "), length($value))))))
-        push!(copies, :(copyto!($(part(offsets[slot], n)), $value)))
+        push!(copies, :(copyto!($(part(writes[slot], n)), $value)))
     end
     # The call is not a part of the code that runs without bounds checks.
     Any[Expr(:let, :(y = $(em.ref(:Helpers, :checked))($name, $(arguments...))), Expr(:block, copies...))]
@@ -351,14 +411,14 @@ end
     index_statements(em, ins, out, at, sizes) -> Vector{Any}
 
 Return the statements of an operation of `INDEX_OPERATIONS`, with the arguments
-of `linear_statements`. They follow `index_model`: an index out of range reads
-NaN and writes nothing.
+of `linear_statements`, except that operand `d` is read at the `Place` `at[d]`.
+They follow `index_model`: an index out of range reads NaN and writes nothing.
 """
-function index_statements(em::Emission, ins::MXInstruction, out, at, sizes)
+function index_statements(em::Emission, ins::MXInstruction, out, at::Vector{Place}, sizes)
     op, data = ins.op, ins.data
     helper(name) = em.ref(:Helpers, name)
     op === :OP_LOW &&
-        return loop(sizes[2], i -> :($(element(out, i)) = $(helper(:low))(w, $(at[1]), $(sizes[1]), $(element(at[2], i)), $(data.mode))))
+        return loop(sizes[2], i -> :($(element(out, i)) = $(helper(:low))($(at[1].array), $(at[1].offset), $(sizes[1]), $(element(at[2], i)), $(data.mode))))
     form = data::IndexForm
     reads = op === :OP_GETNONZEROS_PARAM
     keys = at[(reads ? 2 : 3):end]
@@ -369,9 +429,11 @@ function index_statements(em::Emission, ins::MXInstruction, out, at, sizes)
         offset isa Integer && offset == 0 ? sum : :($offset + $sum)
     end
     tuples = [(e, form.offsets[e], form.first[e], two ? form.second[e] : 0) for e in eachindex(form.offsets)]
-    reads && return indexed(em, tuples, (e, offset, a, b) ->
-        :($(element(out, e)) = $(helper(:gather))(w, $(at[1]), $(sizes[1]), $(index(offset, a, b)))))
-    copied = at[1] == out ? Any[] : loop(sizes[1], i -> :($(element(out, i)) = $(element(at[1], i))))
+    uniform = at[1].array isa Float64
+    reads && return indexed(em, tuples, (e, offset, a, b) -> :($(element(out, e)) = $(uniform ?
+        :(ifelse(0 <= $(index(offset, a, b)) < $(sizes[1]), $(at[1].array), NaN)) :
+        :($(helper(:gather))($(at[1].array), $(at[1].offset), $(sizes[1]), $(index(offset, a, b)))))))
+    copied = in_work(at[1], out) ? Any[] : loop(sizes[1], i -> :($(element(out, i)) = $(element(at[1], i))))
     update = op === :OP_SETNONZEROS_PARAM ? :(=) : :(+=)
     Any[copied..., indexed(em, tuples, (e, offset, a, b) ->
         Expr(:let, :(index = $(index(offset, a, b))),
@@ -479,6 +541,9 @@ function callee!(em::Emission, alg)
     em.callees[alg] = (name, offset_in, offset_out)
 end
 
+"The ranges of the instructions of each sub-function of an algorithm of `n` instructions; one range for none."
+chunks(em::Emission, n::Int) = chunk_ranges(n, chunk_size_for(n, em.chunk_size; limit = DEFAULT_CHUNK_SIZE))
+
 """
     chunked!(em, name, parts) -> Vector{Any}
 
@@ -487,7 +552,7 @@ When they exceed the chunk size, add sub-functions to `em` and return the calls
 to them.
 """
 function chunked!(em::Emission, name::Symbol, parts)
-    ranges = chunk_ranges(length(parts), chunk_size_for(length(parts), em.chunk_size; limit = DEFAULT_CHUNK_SIZE))
+    ranges = chunks(em, length(parts))
     length(ranges) <= 1 && return reduce(vcat, parts; init = Any[])
     calls = Any[]
     for (c, range) in enumerate(ranges)
@@ -520,14 +585,45 @@ function body!(em::Emission, alg::Algorithm, name::Symbol)
     (Any[:($(chunk_name(name, c))(w)) for c in eachindex(chunks)], base .+ offset_in, base .+ offset_out)
 end
 
-function body!(em::Emission, alg::MXAlgorithm, name::Symbol)
+# A value is written to its work slot, but an input and a constant are read where they
+# are: input `i` in the frame, or as `input_name(i)` with `direct`, a constant of several
+# values in the constant table, and one of equal values as that number. `reads[s]` is the
+# place of the value of slot `s`, until an instruction writes the slot. An instruction
+# that reads in the work vector only (see `needs_copy`) first copies such an operand to
+# its slot.
+function body!(em::Emission, alg::MXAlgorithm, name::Symbol; direct::Bool = false)
     own = sum(alg.slot_nnz)
     # Instructions run one after the other, so they share one work space after the slots.
     unused = maximum(scratch_size, alg.instructions; init = 0)
     offset_in, offset_out, start = frame!(em, alg, own + unused)
-    offsets = start .+ cumsum(alg.slot_nnz) .- alg.slot_nnz
-    parts = [instruction_statements(em, alg, ins, offsets, start + own, offset_in, offset_out)
-             for ins in alg.instructions]
+    home = start .+ cumsum(alg.slot_nnz) .- alg.slot_nnz
+    inputs = direct ? [Place(input_name(i), 0, true) for i in eachindex(offset_in)] : Place.(offset_in)
+    reads = Place.(home)
+    parts = map(alg.instructions) do ins
+        if ins.op === :OP_INPUT
+            (argument, offset), slot = ins.data, ins.out[1]
+            reads[slot] = shifted(inputs[argument], offset)
+            return Any[]
+        elseif ins.op === :OP_CONST
+            values = ins.data::Vector{Float64}
+            uniform = isempty(values) || all(isequal(first(values)), values)
+            reads[ins.out[1]] = uniform ? Place(isempty(values) ? 0.0 : first(values)) : Place(em.constants_name, length(em.constants), false)
+            uniform || append!(em.constants, values)
+            return Any[]
+        end
+        statements = Any[]
+        for s in unique(ins.in)
+            needs_copy(ins, s, reads[s]) || continue
+            append!(statements, loop(alg.slot_nnz[s], i -> :($(element(home[s], i)) = $(element(reads[s], i)))))
+            reads[s] = Place(home[s])
+        end
+        append!(statements, instruction_statements(em, alg, ins, reads, home, start + own, offset_out))
+        for s in ins.out
+            s == 0 || (reads[s] = Place(home[s]))
+        end
+        # Loop invariant: `reads[s]` holds the value that slot `s` has after this instruction.
+        statements
+    end
     (chunked!(em, name, parts), offset_in, offset_out)
 end
 
@@ -575,13 +671,16 @@ end
 
 Emit the matrix algorithm `alg` with the entry point `name`. `em` holds the
 sub-functions and the tables. `frame` is
-`((offset_in, offset_out, total), statements)`: the layout of the work vector
-and the statements that run the algorithm in it (see `framed_body`).
+`((offset_in, offset_out, total, direct), statements)`: the layout of the work vector
+and the statements that run the algorithm in it (see `framed_body`). With `direct`,
+the statements read argument `i` as `input_name(i)`, because they are not split into
+sub-functions, which get the work vector only.
 """
 function emission(alg::MXAlgorithm, name::Symbol, chunk_size::ChunkSize, ref)
     em = Emission(name, chunk_size, ref)
-    statements, offset_in, offset_out = body!(em, alg, name)
-    em, ((offset_in, offset_out, em.free[]), statements)
+    direct = length(chunks(em, length(alg.instructions))) <= 1
+    statements, offset_in, offset_out = body!(em, alg, name; direct)
+    em, ((offset_in, offset_out, em.free[], direct), statements)
 end
 
 """

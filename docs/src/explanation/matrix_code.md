@@ -16,8 +16,13 @@ fastest code for a model of moderate size but repeats the body of a called funct
 at each call, so a model with many calls of a large function compiles slowly and can
 run slower (see [Cost of the two kinds of code](@ref)). With `expand = false` the
 generated code keeps the matrix operations, and each called function becomes one
-Julia function that is compiled once. With the default `expand = true`, the package
-first asks CasADi to expand the whole function; when the function calls Julia
+Julia function that is compiled once, except a function with more argument nonzeros
+than operations, such as an interpolant with the option `inline` and its table as an
+argument, whose operations take the place of the call. Matrix code reads a constant,
+and an argument unless the code is split into sub-functions (see
+[Large functions and the cache on disk](@ref)), where they are, without a copy, so that
+a lookup in such a table costs the same for any size of the table. With the default
+`expand = true`, the package first asks CasADi to expand the whole function; when the function calls Julia
 functions at its top level, it expands the operations before, between and after
 those calls instead, which still gives scalar code (see
 [Call a Julia function from the model](@ref)); and only when CasADi cannot expand

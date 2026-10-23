@@ -174,14 +174,15 @@ part of the Julia function, not of the parameters, so new data need a new callba
 new `ODEFunction`; with the default `specialize = SciMLBase.FullSpecialize`, the solver is
 then compiled again (see [Compilation for each new model](@ref)), and each callback stays
 in memory for the rest of the session (see [How the code reaches the function](@ref)).
-In exchange, the cost of a call of the callback does not grow with the table, while that
-of a CasADi interpolant grows with its number of points: its generated code copies the
-grid and the values, whether constants or parameters, into its work space at each call,
-whereas the callback receives only the time and searches the table of the Julia object.
-One call of the right side took:
+For speed the two routes are close: the generated code of a linear interpolant reads the
+grid and the values where they are, in its constants or in the parameter vector, so that
+a call costs a search in the grid whatever the number of points, as the callback, which
+receives only the time and searches the table of the Julia object. The B-spline with
+values as parameters is the exception, since it fits its coefficients at each call. One
+call of the right side took:
 
 | right side | 101 points | 10001 points |
 |---|---|---|
-| linear interpolant, values as parameters | 76 ns | 9 µs |
+| linear interpolant, values as parameters | 23 ns | 28 ns |
 | B-spline, values as parameters | 10 µs | |
-| callback of DataInterpolations.jl | 21 ns | 21 ns |
+| callback of DataInterpolations.jl | 18 ns | 21 ns |
