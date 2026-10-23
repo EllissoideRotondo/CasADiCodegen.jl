@@ -164,7 +164,11 @@ solution[:x][end], solution[:energy][end], SciMLBase.remake(problem; p = [:k => 
 An argument may join named symbols with `vertcat`. A function whose arguments are not made of named symbols, or in which a name of a symbol
 or of a result occurs twice, gets no names, and a second result is then an error. The residual of
 `ImplicitDiscreteFunction` has one result and no observed variables. A `sys` given to the constructor
-replaces the names and the observed variables.
+replaces the names and the observed variables. Packages that read a problem through
+SymbolicIndexingInterface.jl find the same names: for the name of a state, a parameter or
+an observed variable, `SymbolicIndexingInterface.observed(problem, name)` returns a
+function `(u, p, t) -> value`, which `observe_state` of DynamicalSystemsBase.jl calls for a
+state (see [Attractors and their basins](@ref)).
 
 ## Static arrays
 

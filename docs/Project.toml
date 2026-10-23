@@ -1,4 +1,5 @@
 [deps]
+Attractors = "f3fd9213-ca85-4dba-9dfd-7fc91308fec7"
 BifurcationKit = "0f109fa4-8a5d-4b75-95aa-f515264e7665"
 CasADiCodegen = "2e42ddf9-3b2b-405e-8fd5-d52a4b84c49f"
 ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"

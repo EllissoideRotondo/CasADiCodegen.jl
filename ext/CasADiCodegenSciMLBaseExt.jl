@@ -957,7 +957,8 @@ end
 The symbolic system of a SciML function made from a CasADi function: a
 `SciMLBase.SymbolCache` with the names of the states, the parameters and the time, and the
 functions `(u, p, t) -> value`, or `(u, p) -> value` without time, of the observed
-variables by name. A property of it is an `ObservedName`, as SciMLBase expects of the
+variables by name; `SII.observed` also gives such a function for a state, a parameter or
+the time by name. A property of it is an `ObservedName`, as SciMLBase expects of the
 system of an observed variable. `blocks` holds the indices of each parameter symbol of
 several elements by its name; these names are parameters but not `parameter_symbols`, so
 that `remake` writes each element once.
@@ -982,8 +983,15 @@ SII.is_observed(n::Names, name::Symbol) = haskey(getfield(n, :observed), name)
 SII.is_observed(::Names, ::ObservedName) = true
 SII.is_observed(n::Names, names::Union{AbstractArray,Tuple}) = any(name -> SII.is_observed(n, name), names)
 SII.is_observed(n::Names, other) = SII.is_observed(getfield(n, :cache), other)
-SII.observed(n::Names, name::Symbol) = getfield(n, :observed)[name]
-SII.observed(n::Names, name::ObservedName) = getfield(n, :observed)[name.name]
+# A state, a parameter or the time by name is also an observed function, as in ModelingToolkit.jl;
+# `observe_state` of DynamicalSystemsBase.jl asks for it.
+function SII.observed(n::Names, name::Symbol)
+    haskey(getfield(n, :observed), name) && return getfield(n, :observed)[name]
+    cache = getfield(n, :cache)
+    @requires SII.is_variable(cache, name) || SII.is_parameter(n, name) || SII.is_independent_variable(cache, name) "the system has no state, parameter or observed variable named $name"
+    getter(n, name)
+end
+SII.observed(n::Names, name::ObservedName) = SII.observed(n, name.name)
 SII.observed(n::Names, other) = SII.observed(getfield(n, :cache), other)
 function SII.observed(n::Names, names::Union{AbstractArray,Tuple})
     getters = map(name -> getter(n, name), names)
@@ -1051,7 +1059,6 @@ function named_system(f::CasADiCodegen.Function, arguments, values, time::Bool, 
     taken = Set([states; parameters; clock; outputs; elements])
     blocks = Dict{Symbol,UnitRange{Int}}(filter(block -> first(block) ∉ taken, symbol_blocks(parameters)))
     cache = time ? SciMLBase.SymbolCache(states, parameters, only(clock)) : SciMLBase.SymbolCache(states, parameters)
-    isempty(values) && isempty(blocks) && return (; sys = cache)
     (; sys = Names(cache, isempty(values) ? Dict{Symbol,Any}() : observed_functions(f, arguments, values, codegen), blocks))
 end
 
@@ -1070,7 +1077,9 @@ argument. Each further result, a column vector, is an observed variable. Set `ja
 `paramjac` to `false` to leave that Jacobian out.
 
 The function has the names of the symbols of `f` as its `sys`, so that `solution[:x]`,
-`remake(problem; p = [:k => 2.0])` and `problem.ps[:k]` work:
+`remake(problem; p = [:k => 2.0])`, `problem.ps[:k]` and the observed function
+`SymbolicIndexingInterface.observed(problem, :x)` of a state, a parameter or a further
+result work:
 
 - The states, the parameters and the time have the names of the scalar symbols of the
   arguments of `f`. The elements of one symbol of several elements, such as
@@ -1885,7 +1894,7 @@ function SciMLBase.ODEProblem(dae::CasADiCodegen.C.DaeBuilder, tspan::Union{Noth
     # CasADi replaces a constant by its value, which is NaN until `set(dae, name, value)` gives it.
     @requires all(isfinite, C.nonzeros(rhs(C.DM(u0), C.DM(p0), C.DM(float(span[1]))))) "$label: the right side is not finite at the start values; give each constant its value with set(dae, name, value)"
     scalar = length(u0) == length(differential) + length(algebraic) && length(p0) == length(constant) + length(inputs)
-    names = scalar ? (; sys = SciMLBase.SymbolCache(Symbol.([differential; algebraic]), Symbol.([constant; inputs]), :t)) : (;)
+    names = scalar ? (; sys = Names(SciMLBase.SymbolCache(Symbol.([differential; algebraic]), Symbol.([constant; inputs]), :t), Dict{Symbol,Any}(), Dict{Symbol,UnitRange{Int}}())) : (;)
     mass = nz == 0 ? (;) : (; mass_matrix = LinearAlgebra.Diagonal([ones(nx); zeros(nz)]))
     f = SciMLBase.ODEFunction(rhs; jac, paramjac, sparse, specialize, chunk_size, split_above, optlevel, cache, mass..., names...)
     SciMLBase.ODEProblem(f, u0, float.(span), p0; options...)

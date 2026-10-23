@@ -33,6 +33,7 @@ makedocs(;
             "tutorials/linear_analysis.md",
             "tutorials/independent_variable.md",
             "tutorials/perturbation.md",
+            "tutorials/attractors.md",
             "tutorials/parameter_estimation.md",
             "tutorials/dynamic_optimization.md",
             "tutorials/large_models.md",

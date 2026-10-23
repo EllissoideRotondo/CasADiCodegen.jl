@@ -322,6 +322,7 @@ end
     solution = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-11, reltol = 1e-11)
     @test solution[:x][end] ≈ 0.5 + 0.5 * cos(1.0) rtol = 1e-8
     @test solution[:z][end] ≈ 2 * solution[:x][end] rtol = 1e-8
+    @test SciMLBase.SymbolicIndexingInterface.observed(problem, :z)(problem.u0, problem.p, 0.0) == 2.0
     # The time span of the DaeBuilder is the default; CasADi leaves it unset.
     @test_throws "set the start and stop times" SciMLBase.ODEProblem(dae)
     CC.set_start_time(dae, 0.0)
@@ -495,6 +496,10 @@ end
     observed_twice = CasADiCodegen.Function("observed_twice", [vertcat(x, v), SX.sym("x")], [vertcat(v, -x), x^2])
     @test_throws "need distinct names" SciMLBase.ODEFunction(observed_twice)
     @test SciMLBase.ODEFunction(rhs; sys = SciMLBase.SymbolCache([:a, :b], [:c], :s)).sys isa SciMLBase.SymbolCache
+    # Bug: `observed` of a state name threw on a function without further results, which
+    # `observe_state` of DynamicalSystemsBase.jl calls for a state, as ModelingToolkit allows.
+    plain = SciMLBase.ODEProblem(SciMLBase.ODEFunction(CasADiCodegen.Function("plain", [vertcat(x, v), k, τ], [vertcat(v, -k * x)])), [1.0, 2.0], (0.0, 1.0), [4.0])
+    @test SciMLBase.SymbolicIndexingInterface.observed(plain, :v)([3.0, 5.0], [4.0], 0.0) == 5.0
     # A parameter symbol of several elements, here the values of an interpolant, is also one
     # parameter with its name (bug: the parameters of `vertcat(s, w)` had no names).
     w, s, t = MX.sym("w", 12), MX.sym("s"), MX.sym("t")
