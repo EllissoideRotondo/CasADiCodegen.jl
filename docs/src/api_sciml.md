@@ -1,7 +1,8 @@
 # SciML problems and functions
 
 The methods of this page exist once SciMLBase.jl is loaded, which each SciML solver
-package does. Their names follow the conventions of the [API reference](@ref).
+package does, and the bifurcation problem once BifurcationKit.jl is loaded too. Their
+names follow the conventions of the [API reference](@ref).
 
 ## SciML problems from solvers and models of CasADi
 
@@ -29,6 +30,12 @@ SciMLBase.ImplicitDiscreteFunction(::CasADiCodegen.Function)
 SciMLBase.NonlinearFunction(::CasADiCodegen.Function)
 SciMLBase.OptimizationFunction(::CasADiCodegen.Function, ::Union{Nothing,CasADiCodegen.Function})
 CasADiCodegen.initialization_problem(::SciMLBase.ODEProblem)
+```
+
+## Bifurcation problems
+
+```@docs
+BifurcationKit.BifurcationProblem(::CasADiCodegen.Function, ::Any, ::Any, ::Union{Symbol,Integer})
 ```
 
 ## Constraints of an Opti object

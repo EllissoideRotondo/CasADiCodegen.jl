@@ -1,12 +1,12 @@
 using Documenter
 using CasADiCodegen
-import SciMLBase, ChainRulesCore, SparseArrays, OptimizationIpopt
+import SciMLBase, ChainRulesCore, SparseArrays, OptimizationIpopt, BifurcationKit
 
 extension(name) = Base.get_extension(CasADiCodegen, name)
 
 makedocs(;
     sitename = "CasADiCodegen.jl",
-    modules = [CasADiCodegen, CasADiCodegen.Codegen, extension(:CasADiCodegenSciMLBaseExt), extension(:CasADiCodegenChainRulesCoreExt), extension(:CasADiCodegenSparseArraysExt), extension(:CasADiCodegenOptimizationBaseExt)],
+    modules = [CasADiCodegen, CasADiCodegen.Codegen, extension(:CasADiCodegenSciMLBaseExt), extension(:CasADiCodegenChainRulesCoreExt), extension(:CasADiCodegenSparseArraysExt), extension(:CasADiCodegenOptimizationBaseExt), extension(:CasADiCodegenBifurcationKitExt)],
     format = Documenter.HTML(;
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://AstroGuild.github.io/CasADiCodegen.jl",
@@ -28,6 +28,7 @@ makedocs(;
             "tutorials/stochastic.md",
             "tutorials/discrete.md",
             "tutorials/callable_parameters.md",
+            "tutorials/bifurcation.md",
             "tutorials/parameter_estimation.md",
             "tutorials/dynamic_optimization.md",
             "tutorials/large_models.md",
