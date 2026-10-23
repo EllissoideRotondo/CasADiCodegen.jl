@@ -288,3 +288,27 @@ end
     @test_throws "must take the arguments (x, u, p)" CasADiCodegen.linearization(g, h)
     @test CasADiCodegen.linearization(f, h; expression = Val{true}) isa Expr
 end
+
+@testset "linearization of a model with algebraic states" begin
+    # 0 = z^3 + z - x1 - u has no closed-form solution, but dz = k (dx1 + du) with k = 1 / (3z^2 + 1).
+    model(T) = (x = T.sym("x", 2); z = T.sym("z"); u = T.sym("u"); p = T.sym("p");
+                (CasadiFunction("f", [x, z, u, p], [vertcat(x[2], -p * x[1] + z)]),
+                 CasadiFunction("g", [x, z, u, p], [z^3 + z - x[1] - u]),
+                 CasadiFunction("h", [x, z, u, p], [z + x[2]])))
+    z0, x0, p0 = 0.5, [0.2, -0.3], [4.0]
+    point = (x0, [z0], [z0^3 + z0 - x0[1]], p0)                # a point where g = 0
+    k = 1 / (3z0^2 + 1)
+    expected = ([0 1; k-4 0], [0; k;;], [k 1], [k;;])
+    lin, lin! = CasADiCodegen.linearization(model(SX)...)
+    @test all(map(≈, lin(point...), expected))
+    @test all(map(≈, first(CasADiCodegen.linearization(model(MX)...))(point...), expected))
+    _, sparse! = CasADiCodegen.linearization(model(SX)...; sparse = true)
+    lin_casadi = CasADiCodegen.linearization_function(model(SX)...; sparse = true)
+    out = map(i -> SparseMatrixCSC(C.sparsity_out(lin_casadi, i)), (0, 1, 2, 3))
+    sparse!(out, point)
+    @test all(map((S, E) -> Matrix(S) ≈ E, out, expected))
+    f, g, h = model(SX)
+    x, z, u, p = SX.sym("x", 2), SX.sym("z"), SX.sym("u"), SX.sym("p")
+    wrong = CasadiFunction("g", [x, z, u, p], [vertcat(z, z)])
+    @test_throws "must have the size of z" CasADiCodegen.linearization(f, wrong, h)
+end

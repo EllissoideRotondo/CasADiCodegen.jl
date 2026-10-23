@@ -2,6 +2,7 @@
 BifurcationKit = "0f109fa4-8a5d-4b75-95aa-f515264e7665"
 CasADiCodegen = "2e42ddf9-3b2b-405e-8fd5-d52a4b84c49f"
 ChainRulesCore = "d360d2e6-b24c-11e9-a2a3-2a2ae2dbcce4"
+ControlSystemsBase = "aaaaaaaa-a6ca-5380-bf3e-84a91bcd477e"
 DataInterpolations = "82cc6244-b520-54b8-b5a6-8a565e85f1d0"
 DiffEqNoiseProcess = "77a26b50-5914-5dd7-bc55-306e6241c503"
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"

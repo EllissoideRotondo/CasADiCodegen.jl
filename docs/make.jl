@@ -30,6 +30,7 @@ makedocs(;
             "tutorials/callable_parameters.md",
             "tutorials/bifurcation.md",
             "tutorials/traced_problems.md",
+            "tutorials/linear_analysis.md",
             "tutorials/parameter_estimation.md",
             "tutorials/dynamic_optimization.md",
             "tutorials/large_models.md",

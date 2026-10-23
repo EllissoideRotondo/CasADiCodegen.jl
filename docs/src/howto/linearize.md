@@ -24,7 +24,7 @@ A, B, C, D = lin([0.0, 0.0], [0.0], [9.81, 2.0])
 A
 ```
 
-`lin` returns each of the four matrices as a `Matrix`, also `B`, which has one column for
+`lin` returns each of the four matrices as a `Matrix` (an `SMatrix` when `x` is a static array), also `B`, which has one column for
 one input: `linearization` builds the functions with `vector_columns = false`, so that no
 matrix becomes a vector. `lin!(out, (x, u, p))` writes the four matrices into the arrays
 of the tuple `out`, which are dense by default. With `expression = Val{true}`,
@@ -43,9 +43,31 @@ lin_sparse!(out, ([0.0, 0.0], [0.0], [9.81, 2.0]))
 out[1]
 ```
 
-The model must have no algebraic states. The package has no function that eliminates
-them, so a model with algebraic equations needs their solutions substituted by hand, as
-in [Model physical systems with differential-algebraic equations](@ref).
+## Linearize a model with algebraic states
+
+A model with the algebraic states `z`, `x' = f(x, z, u, p)`, `0 = g(x, z, u, p)` and
+`y = h(x, z, u, p)`, is linearized by `linearization(f, g, h)`, with three CasADi functions
+of `(x, z, u, p)`. The generated code eliminates the deviation of `z` by a solve with the
+Jacobian `∂g/∂z`, which must be invertible, so `lin(x, z, u, p)` returns the matrices of
+the same form as above, in the deviations of `x` and `u` alone. The point must satisfy
+`g = 0`, but need not be a steady state; the generated code neither solves for `z` nor
+checks the condition. In the
+example, the algebraic state `z` follows `x[1]` through `z + z^3 = x[1]`, and at `x[1] = 2`,
+where `z = 1`, the slope of `z` is `1 / (1 + 3z^2) = 1/4`:
+
+```@example linearize
+x, z, u = SX.sym("x", 2), SX.sym("z"), SX.sym("u")
+p = SX.sym("p", 0, 1)                                         # no parameter
+f = CasadiFunction("f", [x, z, u, p], [vertcat(x[2], -z + u)])
+g = CasadiFunction("g", [x, z, u, p], [z + z^3 - x[1]])
+h = CasadiFunction("h", [x, z, u, p], [z])
+lin_dae, _ = CasADiCodegen.linearization(f, g, h)
+A, B, C, D = lin_dae([2.0, 0.0], [1.0], [0.0], Float64[])
+A, C
+```
+
+[Linear analysis of a feedback loop](@ref) linearizes a circuit with an algebraic current at
+several operating points.
 
 ## Order equations by their dependencies
 
