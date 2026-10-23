@@ -663,13 +663,16 @@ const C = CasADiCodegen.C
 struct Call{N,G}
     g!::G
 end
-# The calls are inline, so that the tuples of arrays stay in registers; the code of a small
-# function comes inline with them (see `Codegen.Inlined`).
-(c::Call{1})(out, u, p, t) = (@inline c.g!((out,), (u,)); nothing)
-(c::Call{2})(out, u, p, t) = (@inline c.g!((out,), (u, given(p))); nothing)
-(c::Call{3})(out, u, p, t) = (@inline c.g!((out,), (u, given(p), t)); nothing)
-(c::Call{1})(out, u, p) = (@inline c.g!((out,), (u,)); nothing)
-(c::Call{2})(out, u, p) = (@inline c.g!((out,), (u, given(p))); nothing)
+# The calls of `g!` are inline, so that the tuples of arrays stay in registers; the code of a
+# small function comes inline with them (see `Codegen.Inlined`). The methods themselves are
+# not inline: inline in the step of a solver, the length checks and their error paths make a
+# step of a small system about a quarter slower (Tsit5, three states), and one call per
+# evaluation costs less.
+@noinline (c::Call{1})(out, u, p, t) = (@inline c.g!((out,), (u,)); nothing)
+@noinline (c::Call{2})(out, u, p, t) = (@inline c.g!((out,), (u, given(p))); nothing)
+@noinline (c::Call{3})(out, u, p, t) = (@inline c.g!((out,), (u, given(p), t)); nothing)
+@noinline (c::Call{1})(out, u, p) = (@inline c.g!((out,), (u,)); nothing)
+@noinline (c::Call{2})(out, u, p) = (@inline c.g!((out,), (u, given(p))); nothing)
 
 """
     given(p)

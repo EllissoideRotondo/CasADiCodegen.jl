@@ -30,7 +30,9 @@ is_stored(a) = false""",
     :checked => "checked(f, arguments...) = f(arguments...)",
     # The error of a wrong number or size of arrays in a call of generated code. It is a
     # function of its own, so that the checks keep the code of a call small enough to inline.
-    :shape_error => "@noinline shape_error(parts...) = throw(ArgumentError(string(parts...)))",
+    # Its arguments have concrete types, so that the count is not boxed and a call of
+    # generated code needs no GC frame for this error path.
+    :shape_error => "@noinline shape_error(message::String, count::Int) = throw(ArgumentError(string(message, count)))",
     # The place of `x` in the rising grid `w[grid+1:grid+n]`, from zero, as the CasADi routine `casadi_low`:
     # mode 0 searches from the start, mode 1 computes the place in a grid with equal steps, and mode 2
     # halves the range. A value that is no number, or too large for a whole number, has the place 0 in
