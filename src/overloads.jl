@@ -339,3 +339,14 @@ A chained comparison such as `lb <= x <= ub` cannot give it: Julia evaluates
 """
 Front.bounded(lb::AbstractVecOrMat{<:Real}, ex::MX, ub) = Front.bounded(casadi_matrix(MX, lb), ex, ub)
 Front.bounded(lb::Union{Real,C.DM,MX}, ex::MX, ub::AbstractVecOrMat{<:Real}) = Front.bounded(lb, ex, casadi_matrix(MX, ub))
+
+# The value of a symbol in `substitute` and the point of a Taylor series are matrices of the
+# graph of the expression in CasADi; a number, a Julia array of numbers or a DM converts.
+const NumericValue = Union{Real,AbstractVecOrMat{<:Real},C.DM}
+as_graph(::Type{T}, v::Union{Real,C.DM}) where {T<:Symbolic} = convert(T, v)
+as_graph(::Type{T}, v::AbstractVecOrMat{<:Real}) where {T<:Symbolic} = casadi_matrix(T, v)
+C.substitute(ex::T, v::T, vdef::NumericValue) where {T<:Symbolic} = C.substitute(ex, v, as_graph(T, vdef))
+C.taylor(ex::SX, x::SX, a::NumericValue, order::Integer = 1) = C.taylor(ex, x, as_graph(SX, a), order)
+C.mtaylor(ex::SX, x::SX, a::NumericValue, order::Integer = 1) = C.mtaylor(ex, x, as_graph(SX, a), order)
+C.mtaylor(ex::SX, x::SX, a::NumericValue, order::Integer, order_contributions::AbstractVector{<:Integer}) =
+    C.mtaylor(ex, x, as_graph(SX, a), order, order_contributions)

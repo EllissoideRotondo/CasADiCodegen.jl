@@ -3,7 +3,8 @@
 In this tutorial, we write a small differential equation with CasADi and solve it with
 OrdinaryDiffEq.jl. We then extend it step by step: new values of the parameters, an
 intermediate variable that the solution computes on demand, an input that depends on
-time or on tabulated data, a model made of two components, and its sparse Jacobian.
+time or on tabulated data, a model made of two components, its sparse Jacobian, and an
+equation of the second order.
 At the end we fit the parameters of a Lotka-Volterra model to data, which needs a new
 problem for each set of parameters and derivatives of the loss through the solver.
 The examples need CasADiCodegen.jl, SciMLBase.jl, OrdinaryDiffEqTsit5.jl,
@@ -190,6 +191,38 @@ f_sparse.jac_prototype
 For a model of two states, the sparse form saves nothing and adds the work of the
 sparse linear algebra; it pays off for a large model whose states each depend on a few
 others, as in a model made of many components.
+
+## An equation of higher order
+
+The solvers of OrdinaryDiffEq.jl take equations of the first order, so an equation of order
+``n`` in ``x`` becomes ``n`` equations of the first order, whose states are ``x`` and its
+derivatives up to the order ``n - 1``. We take a variant of the Lorenz equations in which
+the first one is of the second order:
+
+```math
+\ddot{x} = \sigma (y - x), \qquad \dot{y} = x (\rho - z) - y, \qquad \dot{z} = x y - \beta z.
+```
+
+The velocity ``\dot{x}`` becomes a state of its own, with a symbol `vx`, whose derivative
+is the right side of the second-order equation, while the derivative of ``x`` is `vx`. We
+take the values of the example of ModelingToolkit.jl, ``\sigma = 28``, ``\rho = 10`` and
+``\beta = 8/3``, in which ``\sigma`` and ``\rho`` are exchanged from the usual values of the
+Lorenz system:
+
+```@example ode
+x, vx, y, z, t = SX.sym("x"), SX.sym("vx"), SX.sym("y"), SX.sym("z"), SX.sym("t")
+σ, ρ, β = SX.sym("σ"), SX.sym("ρ"), SX.sym("β")
+lorenz = CasadiFunction("lorenz", [vertcat(x, vx, y, z), vertcat(σ, ρ, β), t],
+                        [vertcat(vx, σ * (y - x), x * (ρ - z) - y, x * y - β * z)])
+problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(lorenz), [1.0, 2.0, 0.0, 0.0], (0.0, 100.0),
+                               [28.0, 10.0, 8 / 3])
+solution = SciMLBase.solve(problem, Tsit5())
+solution[[:x, :vx]][end]
+```
+
+The initial state needs the initial velocity, here ``\dot{x}(0) = 2``, besides the initial
+values of ``x``, ``y`` and ``z``, and the solution holds the velocity under the name of its
+symbol. An equation of a higher order adds one symbol for each derivative in the same way.
 
 ## Fit the parameters to data
 

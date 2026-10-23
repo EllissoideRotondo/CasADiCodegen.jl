@@ -21,7 +21,9 @@ with CasADi 3.8.1. Its calls are those of Python, and the
 apply in Julia:
 
 - The front end exports the common names: `SX`, `MX`, `DM`, `jacobian`, `gradient`,
-  `hessian`, `vertcat`, `horzcat`, `substitute` and others.
+  `hessian`, `vertcat`, `horzcat`, `substitute` and others. A number or a Julia array of
+  numbers is accepted as the value of a symbol in `substitute` and as the point of the
+  Taylor series `CasADiCodegen.C.taylor` and `CasADiCodegen.C.mtaylor`.
 - Each other function of CasADi is in the module `CasADiCodegen.C`, for example
   `CasADiCodegen.C.sumsqr` and `CasADiCodegen.C.nlpsol`.
 - `CasadiFunction` makes a function of CasADi, because a bare `Function` is the abstract

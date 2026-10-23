@@ -170,6 +170,19 @@ end
     @test vec(Matrix(f([1, 2], C.DM([1.0 2.0; 3.0 4.0]), 1)[1])) == [5.0, 11.0]
 end
 
+@testset "numbers as the value of substitute and the point of taylor, $T" for T in (SX, MX)
+    # Regression: a number or a Julia array as the value threw a SwigError.
+    x, y = T.sym("x"), T.sym("y", 2)
+    e = sin(x) * y
+    @test vec(numeric(substitute(e, x, 0.5), (y,), ([2.0, 3.0],))) ≈ sin(0.5) .* [2.0, 3.0]
+    @test vec(numeric(substitute(e, y, [2, 3]), (x,), (0.5,))) ≈ sin(0.5) .* [2.0, 3.0]
+    @test vec(numeric(substitute(e, y, C.DM([2.0, 3.0])), (x,), (0.5,))) ≈ sin(0.5) .* [2.0, 3.0]
+    if T === SX                     # CasADi has Taylor series of SX only
+        @test only(numeric(C.taylor(exp(x), x, 0, 2), (x,), (0.1,))) ≈ 1 + 0.1 + 0.1^2 / 2
+        @test only(numeric(C.mtaylor(y[1] * y[2], y, [1, 2], 1), (y,), ([1.5, 2.5],))) ≈ 2 + 2 * 0.5 + 1 * 0.5
+    end
+end
+
 @testset "tools: operations of a function and the first NaN" begin
     x, p = SX.sym("x", 2), SX.sym("p")
     f = CasADiCodegen.Function("f", [x, p], [vertcat(sqrt(x[1] - p) * x[2], log(x[2]) + sin(x[1]))])
