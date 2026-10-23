@@ -86,7 +86,9 @@ problem.lcons, problem.ucons
   are defined while the constructor runs, so a Julia function that makes the SciML
   function and then solves its problem must call `solve` through `Base.invokelatest`.
 - The other keywords go to the SciML constructor.
-- A function that has no parameters ignores the parameters of the problem.
+- A function that has no parameters ignores the parameters of the problem. A function of
+  the time without parameters takes an empty parameter argument, `f(u, SX(0, 1), t)` (or
+  `MX(0, 1)`), and its problem needs no parameters.
 - `ODEFunction(f; initialization = c)` adds conditions `c(u, p, t) = 0` on the initial
   values, which the solver solves together with the algebraic equations before its first
   step, and `solved_parameters` makes parameters unknowns of that problem; see
@@ -143,7 +145,10 @@ f.lag_hess_prototype
 function, so that a solution and a problem can be indexed by name, as in
 `solution[:x]` or `remake(problem; p = [:k => 9.0])`. A state built from scalar symbols has their names; the
 elements of one symbol of several elements, such as `SX.sym("u", 2)`, are `u_0` and
-`u_1`, the names that CasADi gives them. Each result of the CasADi function after the
+`u_1`, the names that CasADi gives them. A parameter symbol of several elements, such as
+`MX.sym("w", 2)`, is also one parameter under its own name, the vector of its elements, so
+that `remake(problem; p = [:w => [1.0, 2.0]])` replaces all of them (see
+[Data as parameters](@ref)). Each result of the CasADi function after the
 first one is an observed variable, which the solution computes from the state with
 generated code, under the name of that result:
 
@@ -156,7 +161,7 @@ solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12)
 solution[:x][end], solution[:energy][end], SciMLBase.remake(problem; p = [:k => 9.0]).p
 ```
 
-A function whose arguments are not made of named symbols, or in which a name of a symbol
+An argument may join named symbols with `vertcat`. A function whose arguments are not made of named symbols, or in which a name of a symbol
 or of a result occurs twice, gets no names, and a second result is then an error. The residual of
 `ImplicitDiscreteFunction` has one result and no observed variables. A `sys` given to the constructor
 replaces the names and the observed variables.

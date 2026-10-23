@@ -666,10 +666,20 @@ end
 # The calls are inline, so that the tuples of arrays stay in registers; the code of a small
 # function comes inline with them (see `Codegen.Inlined`).
 (c::Call{1})(out, u, p, t) = (@inline c.g!((out,), (u,)); nothing)
-(c::Call{2})(out, u, p, t) = (@inline c.g!((out,), (u, p)); nothing)
-(c::Call{3})(out, u, p, t) = (@inline c.g!((out,), (u, p, t)); nothing)
+(c::Call{2})(out, u, p, t) = (@inline c.g!((out,), (u, given(p))); nothing)
+(c::Call{3})(out, u, p, t) = (@inline c.g!((out,), (u, given(p), t)); nothing)
 (c::Call{1})(out, u, p) = (@inline c.g!((out,), (u,)); nothing)
-(c::Call{2})(out, u, p) = (@inline c.g!((out,), (u, p)); nothing)
+(c::Call{2})(out, u, p) = (@inline c.g!((out,), (u, given(p))); nothing)
+
+"""
+    given(p)
+
+The parameters `p` as the generated code takes them: a problem without parameters
+(`SciMLBase.NullParameters`) gives an empty vector, which a parameter argument without
+elements accepts.
+"""
+given(p) = p
+given(::SciMLBase.NullParameters) = StaticArrays.SVector{0,Float64}()
 
 """
     Allocating{K}(call, shape)
@@ -722,10 +732,10 @@ struct Static{N,S,G}
     g::G
 end
 (s::Static{1})(u, p, t) = shaped(s, s.g(u))
-(s::Static{2})(u, p, t) = shaped(s, s.g(u, p))
-(s::Static{3})(u, p, t) = shaped(s, s.g(u, p, t))
+(s::Static{2})(u, p, t) = shaped(s, s.g(u, given(p)))
+(s::Static{3})(u, p, t) = shaped(s, s.g(u, given(p), t))
 (s::Static{1})(u, p) = shaped(s, s.g(u))
-(s::Static{2})(u, p) = shaped(s, s.g(u, p))
+(s::Static{2})(u, p) = shaped(s, s.g(u, given(p)))
 shaped(::Static{N,Nothing}, a) where {N} = a
 shaped(::Static{N,Tuple{R,C}}, a) where {N,R,C} = StaticArrays.SMatrix{R,C}(Tuple(a))
 
@@ -890,9 +900,9 @@ const SII = SciMLBase.SymbolicIndexingInterface
     element_names(f, i) -> Vector{Symbol} or nothing
 
 Return the names of the elements of argument `i` (from 0) of `f`: the names of its scalar
-symbols, or for one MX symbol of several elements, its name and the index from 0, as CasADi
-names the elements of an SX symbol. Return `nothing` when the argument has other symbols or
-is not dense.
+symbols, and for an MX symbol of several elements, its name and the index from 0, as CasADi
+names the elements of an SX symbol. An MX argument may join column symbols with `vertcat`.
+Return `nothing` when the argument has other symbols or is not dense.
 """
 function element_names(f::CasADiCodegen.Function, i::Int)
     C.is_dense(C.sparsity_in(f, i)) || return nothing
@@ -907,8 +917,33 @@ function element_names(f::CasADiCodegen.Function, i::Int)
     if C.is_symbolic(e)
         return n == 1 ? [Symbol(C.name(e))] : [Symbol(C.name(e), "_", k - 1) for k in 1:n]
     end
-    parts = C.symvar(e)
-    length(parts) == n && all(part -> C.numel(part) == 1, parts) ? [Symbol(C.name(part)) for part in parts] : nothing
+    C.is_valid_input(e) || return nothing
+    parts = C.primitives(e)
+    all(part -> C.size2(part) == 1 && C.is_dense(C.sparsity(part)), parts) && sum(C.numel, parts; init = 0) == n || return nothing
+    names = [C.numel(part) == 1 ? [Symbol(C.name(part))] : [Symbol(C.name(part), "_", k - 1) for k in 1:C.numel(part)] for part in parts]
+    reduce(vcat, names; init = Symbol[])
+end
+
+"""
+    symbol_blocks(names) -> Vector{Pair{Symbol,UnitRange{Int}}}
+
+Return `x => i:j` for each run `names[i:j] == [x_0, x_1, ...]` of more than one name, the
+names of the elements of one symbol `x` of several elements.
+"""
+function symbol_blocks(names::AbstractVector)
+    blocks = Pair{Symbol,UnitRange{Int}}[]
+    i = 1
+    while i <= length(names)
+        head = match(r"^(.+)_0$", String(names[i]))
+        stop = i
+        while head !== nothing && stop < length(names) && names[stop+1] == Symbol(head[1], "_", stop + 1 - i)
+            stop += 1
+        end
+        stop > i && push!(blocks, Symbol(head[1]) => i:stop)
+        @assert stop >= i
+        i = stop + 1
+    end
+    blocks
 end
 
 "The name of an observed variable as a property of `Names`, through which SciMLBase looks up a `Symbol`."
@@ -923,11 +958,14 @@ The symbolic system of a SciML function made from a CasADi function: a
 `SciMLBase.SymbolCache` with the names of the states, the parameters and the time, and the
 functions `(u, p, t) -> value`, or `(u, p) -> value` without time, of the observed
 variables by name. A property of it is an `ObservedName`, as SciMLBase expects of the
-system of an observed variable.
+system of an observed variable. `blocks` holds the indices of each parameter symbol of
+several elements by its name; these names are parameters but not `parameter_symbols`, so
+that `remake` writes each element once.
 """
 struct Names{S}
     cache::S
     observed::Dict{Symbol,Any}
+    blocks::Dict{Symbol,UnitRange{Int}}
 end
 Base.getproperty(n::Names, name::Symbol) = ObservedName(name)
 Base.propertynames(n::Names) = collect(keys(getfield(n, :observed)))
@@ -936,6 +974,10 @@ SII.symbolic_container(n::Names) = getfield(n, :cache)
 SII.is_time_dependent(n::Names) = SII.is_time_dependent(getfield(n, :cache))
 SII.constant_structure(::Names) = true
 SII.all_symbols(n::Names) = [SII.all_symbols(getfield(n, :cache)); collect(keys(getfield(n, :observed)))]
+SII.is_parameter(n::Names, name::Symbol) = haskey(getfield(n, :blocks), name) || SII.is_parameter(getfield(n, :cache), name)
+SII.is_parameter(n::Names, other) = SII.is_parameter(getfield(n, :cache), other)
+SII.parameter_index(n::Names, name::Symbol) = get(() -> SII.parameter_index(getfield(n, :cache), name), getfield(n, :blocks), name)
+SII.parameter_index(n::Names, other) = SII.parameter_index(getfield(n, :cache), other)
 SII.is_observed(n::Names, name::Symbol) = haskey(getfield(n, :observed), name)
 SII.is_observed(::Names, ::ObservedName) = true
 SII.is_observed(n::Names, names::Union{AbstractArray,Tuple}) = any(name -> SII.is_observed(n, name), names)
@@ -958,7 +1000,7 @@ function getter(n::Names, name)
     SII.is_observed(n, name) && !(name isa Union{AbstractArray,Tuple}) && return SII.observed(n, name)
     cache = getfield(n, :cache)
     SII.is_variable(cache, name) && return (index = SII.variable_index(cache, name); (u, p, t...) -> u[index])
-    SII.is_parameter(cache, name) && return (index = SII.parameter_index(cache, name); (u, p, t...) -> p[index])
+    SII.is_parameter(n, name) && return (index = SII.parameter_index(n, name); (u, p, t...) -> p[index])
     SII.is_independent_variable(cache, name) && return (u, p, t) -> t
     SII.observed(cache, name)
 end
@@ -975,7 +1017,7 @@ function observed_functions(f::CasADiCodegen.Function, arguments, values, codege
     for (o, value) in enumerate(values)
         name = C.name_out(f, o)
         g = G.build_function(CasADiCodegen.Function("sciml_observed_" * name, arguments, [value]); expression = Val{false}, codegen...)[1]
-        call = length(arguments) == 1 ? (u, p, t...) -> g(u) : length(arguments) == 2 ? (u, p, t...) -> g(u, p) : (u, p, t) -> g(u, p, t)
+        call = length(arguments) == 1 ? (u, p, t...) -> g(u) : length(arguments) == 2 ? (u, p, t...) -> g(u, given(p)) : (u, p, t) -> g(u, given(p), t)
         n = C.size1(C.sparsity(value))
         observed[Symbol(name)] = n == 1 ? (arguments...) -> call(arguments...)[1] : (arguments...) -> collect(vec(call(arguments...)))
         for k in 1:(n == 1 ? 0 : n)
@@ -1005,8 +1047,12 @@ function named_system(f::CasADiCodegen.Function, arguments, values, time::Bool, 
             allunique([states; parameters; clock; outputs; elements])
     @requires named || isempty(values) "the further results of \"$(C.name(f))\" are observed variables, which need distinct names for the symbols of its arguments and for its results"
     named || return (;)
+    # A parameter symbol of several elements is also one parameter, the vector of its elements.
+    taken = Set([states; parameters; clock; outputs; elements])
+    blocks = Dict{Symbol,UnitRange{Int}}(filter(block -> first(block) ∉ taken, symbol_blocks(parameters)))
     cache = time ? SciMLBase.SymbolCache(states, parameters, only(clock)) : SciMLBase.SymbolCache(states, parameters)
-    (; sys = isempty(values) ? cache : Names(cache, observed_functions(f, arguments, values, codegen)))
+    isempty(values) && isempty(blocks) && return (; sys = cache)
+    (; sys = Names(cache, isempty(values) ? Dict{Symbol,Any}() : observed_functions(f, arguments, values, codegen), blocks))
 end
 
 """
@@ -1029,7 +1075,12 @@ The function has the names of the symbols of `f` as its `sys`, so that `solution
 - The states, the parameters and the time have the names of the scalar symbols of the
   arguments of `f`. The elements of one symbol of several elements, such as
   `MX.sym("x", 2)`, are `x_0` and `x_1`, as CasADi names the elements of `SX.sym("x", 2)`.
-  Without a third argument the time is `t`.
+  A parameter symbol of several elements is also one parameter by its own name, so that
+  `remake(problem; p = [:x => [1.0, 2.0]])` replaces all its elements. Without a third
+  argument the time is `t`.
+
+A function of the time without parameters takes an empty parameter argument, such as
+`SX(0, 1)`; its problem then needs no parameters.
 - An observed variable has the name of its result (see `C.name_out`). A result of more
   than one element `y` also gives `y_0`, `y_1`, ..., one per element.
 
@@ -1329,15 +1380,15 @@ struct ImplicitCall{N,G}
     g!::G
 end
 (c::ImplicitCall{2})(out, v, u, p, t) = (@inline c.g!((out,), (v, u)); nothing)
-(c::ImplicitCall{3})(out, v, u, p, t) = (@inline c.g!((out,), (v, u, p)); nothing)
-(c::ImplicitCall{4})(out, v, u, p, t) = (@inline c.g!((out,), (v, u, p, t)); nothing)
+(c::ImplicitCall{3})(out, v, u, p, t) = (@inline c.g!((out,), (v, u, given(p))); nothing)
+(c::ImplicitCall{4})(out, v, u, p, t) = (@inline c.g!((out,), (v, u, given(p), t)); nothing)
 "A generated out-of-place function `g` of `N` of the arguments (u⁺, u, p, t), which returns a static vector."
 struct ImplicitStatic{N,G}
     g::G
 end
 (s::ImplicitStatic{2})(v, u, p, t) = s.g(v, u)
-(s::ImplicitStatic{3})(v, u, p, t) = s.g(v, u, p)
-(s::ImplicitStatic{4})(v, u, p, t) = s.g(v, u, p, t)
+(s::ImplicitStatic{3})(v, u, p, t) = s.g(v, u, given(p))
+(s::ImplicitStatic{4})(v, u, p, t) = s.g(v, u, given(p), t)
 SciMLBase.numargs(::ImplicitCall) = [5]
 SciMLBase.numargs(::ImplicitStatic) = [4]
 

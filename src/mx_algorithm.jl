@@ -954,11 +954,13 @@ const LOOKUP_MODES = ("linear", "exact", "binary")
 Return an MX function with the inputs and the results of the interpolant `f`,
 made of nodes that this package has code for. A CasADi interpolant has no
 instruction list, so its grid, values and lookup modes are read from the C
-code that CasADi generates for it (see `c_source`).
+code that CasADi generates for it (see `c_source`). A grid or values that are
+arguments of `f` stay arguments of the function that replaces it; CasADi has
+no B-spline on a grid that is an argument.
 
 | class of `f`           | the function that replaces it                                        |
 |------------------------|----------------------------------------------------------------------|
-| `BSplineInterpolant`   | a B-spline node; values that are an argument are first fitted, with the matrix of CasADi |
+| `BSplineInterpolant`   | a B-spline node; values that are an argument are first fitted, with the matrix of CasADi; with the option `inline`, MX code (see `inline_bspline`) |
 | `LinearInterpolant`    | the linear interpolant of CasADi with the option `inline`           |
 | `LinearInterpolantJac` | the Jacobian of that interpolant by the point                        |
 
@@ -971,7 +973,10 @@ function interpolant_function(f::C.Function)
     inputs = MX[MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
     modes(lookup) = Dict{String,Any}("lookup_mode" => [LOOKUP_MODES[mode+1] for mode in lookup])
     split(values, offsets) = [values[offsets[d]+1:offsets[d+1]] for d in 1:length(offsets)-1]
-    if class == "BSplineInterpolant"
+    if class == "BSplineInterpolant" && c_call(source, "nd_boor_eval") === nothing
+        grid, value = inline_bspline(f, inputs)
+        results = MX[value]
+    elseif class == "BSplineInterpolant"
         data = bspline_data(source)
         coefficients = data.coefficients === nothing ? fitted_coefficients(source, inputs[2], data.m) : MX(C.DM(data.coefficients))
         grid = split(data.knots, data.offsets)
@@ -981,22 +986,56 @@ function interpolant_function(f::C.Function)
         a = c_call(source, gradient ? "interpn_grad" : "interpn")
         @requires a !== nothing "the C code of CasADi has no linear interpolant for function \"$name\""
         n, m = parse(Int, a[2]), parse(Int, a[8])
-        grid = split(source.reals[a[3]], source.ints[a[4]][1:n+1])
-        fixed = get(source.reals, a[5], nothing)
+        offsets = source.ints[a[4]][1:n+1]
+        # A grid or values that are not a table of the C code are arguments of `f`, after the point.
+        fixed_grid, fixed = get(source.reals, a[3], nothing), get(source.reals, a[5], nothing)
+        grid = fixed_grid === nothing ? diff(offsets) : split(fixed_grid, offsets)
         table = C.interpolant(name, "linear", grid, fixed === nothing ? m : fixed, merge(modes(source.ints[a[7]][1:n]), Dict("inline" => true)))
-        value = fixed === nothing ? table(inputs[1], inputs[2]) : table(inputs[1])
+        value = table(inputs[1:1+(fixed_grid === nothing)+(fixed === nothing)]...)
         # CasADi gives no derivative by the values, so each other result of the derivative is a structural zero.
         results = gradient ? MX[C.project(C.jacobian(value, inputs[1]), C.sparsity_out(f, 0)); [MX(C.sparsity_out(f, j)) for j in 1:C.n_out(f)-1]] : MX[value]
     end
     g = C.Function(name, inputs, results, [C.name_in(f, i) for i in 0:C.n_in(f)-1], [C.name_out(f, j) for j in 0:C.n_out(f)-1])
+    # The check takes a grid argument of increasing points, 0, 1, 2, ... in each dimension.
+    parametric_grid = grid isa Vector{Int}
+    knots = parametric_grid ? [collect(0.0:length-1) for length in grid] : grid
     for fraction in (0.37, 0.81, 0.0, 1.0, -0.2, 1.3)
         values = [C.DM(C.sparsity_in(f, i), C.DM([sin(0.7 * k) + 0.1 * k for k in 1:C.nnz_in(f, i)])) for i in 0:C.n_in(f)-1]
-        values[1] = C.DM([first(knots) + fraction * (last(knots) - first(knots)) for knots in grid])
+        values[1] = C.DM([first(points) + fraction * (last(points) - first(points)) for points in knots])
+        parametric_grid && (values[2] = C.DM(reduce(vcat, knots)))
         expected, actual = f(values...), g(values...)
         nonzeros(r) = reduce(vcat, (Vector{Float64}(C.nonzeros(C.densify(x))) for x in (r isa C.DM ? (r,) : r)))
         @ensures isapprox(nonzeros(actual), nonzeros(expected); rtol = 1e-7, atol = 1e-10, nans = true) "the function that replaces the interpolant \"$name\" must agree with it at the point $(Vector{Float64}(C.nonzeros(values[1])))"
     end
     g
+end
+
+"""
+    inline_bspline(f, inputs) -> (grid, value)
+
+Return the grid of the B-spline interpolant `f` made with the option `inline`, and its
+value at the symbols `inputs`, as MX code without a B-spline node. CasADi writes such an
+interpolant as inline code, which extends the polynomials of the first and the last
+interval beyond the grid, whereas the B-spline node is zero there. The value of a
+B-spline is linear in the values at the grid points, so that it equals the derivative
+in the direction of those values, `J c`, which CasADi gives as MX code. The grid, the
+values and the lookup modes come from the serial form of `f`, and the interpolant is
+made again with the values as an argument and the default degree and algorithm;
+`interpolant_function` checks the result against `f`, so that other options of `f`
+give an error instead of another function.
+"""
+function inline_bspline(f::C.Function, inputs::Vector{MX})
+    bytes = serial_bytes(f)
+    points, offsets = Float64.(serial_value(bytes, "Interpolant::grid")), Int.(serial_value(bytes, "Interpolant::offset"))
+    values, modes = serial_value(bytes, "Interpolant::values"), serial_value(bytes, "Interpolant::lookup_modes")
+    m = Int(serial_value(bytes, "Interpolant::m"))
+    grid = [points[offsets[d]+1:offsets[d+1]] for d in 1:length(offsets)-1]
+    options = Dict{String,Any}("inline" => true)
+    isempty(modes) || (options["lookup_mode"] = String.(modes))
+    table = C.interpolant(C.name(f), "bspline", grid, m, options)
+    c = MX.sym("c", prod(length, grid) * m)
+    linear = C.Function("linear_" * C.name(f), [inputs[1], c], [C.jtimes(table(inputs[1], c), c, c)])
+    grid, linear(inputs[1], isempty(values) ? inputs[2] : MX(C.DM(Float64.(values))))
 end
 
 """

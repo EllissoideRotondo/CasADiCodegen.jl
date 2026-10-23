@@ -453,6 +453,27 @@ end
     observed_twice = CasADiCodegen.Function("observed_twice", [vertcat(x, v), SX.sym("x")], [vertcat(v, -x), x^2])
     @test_throws "need distinct names" SciMLBase.ODEFunction(observed_twice)
     @test SciMLBase.ODEFunction(rhs; sys = SciMLBase.SymbolCache([:a, :b], [:c], :s)).sys isa SciMLBase.SymbolCache
+    # A parameter symbol of several elements, here the values of an interpolant, is also one
+    # parameter with its name (bug: the parameters of `vertcat(s, w)` had no names).
+    w, s, t = MX.sym("w", 12), MX.sym("s"), MX.sym("t")
+    data = CasADiCodegen.Function("data", [MX.sym("y"), vertcat(s, w), t], [s * C.interpolant("table", "linear", [collect(0.0:11.0)], 1)(t, w)])
+    problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(data), [0.0], (0.0, 11.0), [2.0; ones(12)])
+    @test problem.ps[:w] == ones(12) && problem.ps[:w_11] == 1.0 && problem.ps[:s] == 2.0
+    # Bug: `remake` wrote the vector and then the former value of each element, in the order of a Dict.
+    remade = SciMLBase.remake(problem; p = [:w => [zeros(11); 1.0]])
+    @test remade.p == [2.0; zeros(11); 1.0] && isapprox(SciMLBase.solve(remade, Vern9(); tstops = [10.0]).u[end][1], 1.0; rtol = 1e-10)
+end
+
+# Bug: an empty parameter argument with a problem without parameters threw on `length(::NullParameters)`.
+@testset "a function of the time without parameters" begin
+    y, t = SX.sym("y"), SX.sym("t")
+    forced = CasADiCodegen.Function("forced", [y, SX(0, 1), t], [cos(t) - y, y^2])
+    problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(forced), [0.0], (0.0, 1.0))
+    solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12)
+    @test solution.u[end][1] ≈ (cos(1) + sin(1) - exp(-1)) / 2 rtol = 1e-9
+    @test solution[:o1][end] ≈ solution.u[end][1]^2
+    static = SciMLBase.ODEFunction(forced; inplace = false)
+    @test static.f(SVector(1.0), SciMLBase.NullParameters(), 0.0) == SVector(0.0)
 end
 
 @testset "NonlinearFunction of more equations than unknowns" begin

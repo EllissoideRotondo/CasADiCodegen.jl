@@ -215,6 +215,23 @@ const TABLE_POINTS = [[0.3, 0.7], [1.0, 2.0], [4.99, 3.9], [-1.0, 5.0], [6.0, -2
         g = native(f)
         @test all(all_agree(evaluated(g, f, [p, coefficients]), mx_casadi(f, [p, coefficients]); rtol = 1e-8) for p in TABLE_POINTS)
     end
+    # Bug: the grid was read as constant data, so a grid that is an argument threw a KeyError.
+    @testset "linear with a grid that is an argument, values $(fixed ? "fixed" : "an argument")" for fixed in (true, false)
+        g, v = MX.sym("g", 9), MX.sym("v", 20)
+        table = fixed ? C.interpolant("table", "linear", [5, 4], values) : C.interpolant("table", "linear", [5, 4], 1)
+        y = fixed ? table(x, g) : table(x, g, v)
+        f = CasADiCodegen.Function("f", fixed ? [x, g] : [x, g, v], [y, C.jacobian(y, x)])
+        inputs(p) = fixed ? [p, reduce(vcat, TABLE_GRID)] : [p, reduce(vcat, TABLE_GRID), values]
+        @test all(all_agree(evaluated(native(f), f, inputs(p)), mx_casadi(f, inputs(p)); rtol = 1e-10) for p in TABLE_POINTS)
+    end
+    # Bug: with `inline`, CasADi writes the B-spline as inline code, which had no B-spline for this package to read.
+    @testset "bspline with inline, values $(fixed ? "fixed" : "an argument")" for fixed in (true, false)
+        table = C.interpolant("table", "bspline", TABLE_GRID, fixed ? values : 2, Dict("inline" => true, "lookup_mode" => ["binary", "linear"]))
+        y = fixed ? table(x) : table(x, c)
+        f = CasADiCodegen.Function("f", fixed ? [x] : [x, c], [y, C.jacobian(y, fixed ? x : c)])
+        inputs(p) = fixed ? [p] : [p, coefficients]
+        @test all(all_agree(evaluated(native(f), f, inputs(p)), mx_casadi(f, inputs(p)); rtol = 1e-8) for p in TABLE_POINTS)
+    end
     @testset "a grid with equal steps and the exact lookup" begin
         table = C.interpolant("table", "linear", [[0.0, 0.5, 1.0, 1.5], [1.0, 2.0, 3.0]], collect(1.0:12.0) .^ 1.5, Dict("lookup_mode" => ["exact", "exact"]))
         f = CasADiCodegen.Function("f", [x], [table(x), C.gradient(table(x), x)])

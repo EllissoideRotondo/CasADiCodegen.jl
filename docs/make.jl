@@ -27,6 +27,7 @@ makedocs(;
             "tutorials/events.md",
             "tutorials/stochastic.md",
             "tutorials/discrete.md",
+            "tutorials/callable_parameters.md",
             "tutorials/parameter_estimation.md",
             "tutorials/dynamic_optimization.md",
             "tutorials/large_models.md",

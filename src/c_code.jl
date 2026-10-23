@@ -88,6 +88,7 @@ after it. A value starts with a letter for its type.
 | `J`    | 8-byte integer                         |
 | `i`    | 4-byte integer                         |
 | `b`    | `Bool`                                 |
+| `s`    | `String`: its length, then its bytes   |
 | `V`    | vector: its length, then its elements  |
 """
 function serial_read(bytes::Vector{UInt8}, i::Integer)
@@ -96,6 +97,10 @@ function serial_read(bytes::Vector{UInt8}, i::Integer)
     tag == 'J' && return (Int(reinterpret(Int64, bytes[i+1:i+8])[1]), i + 9)
     tag == 'i' && return (Int(reinterpret(Int32, bytes[i+1:i+4])[1]), i + 5)
     tag == 'b' && return (bytes[i+1] != 0, i + 2)
+    if tag == 's'
+        n, start = serial_read(bytes, i + 1)
+        return (String(bytes[start:start+n-1]), start + n)
+    end
     @requires tag == 'V' "the serial form of CasADi has a value of the unknown type '$tag'"
     count, i = serial_read(bytes, i + 1)
     values = Any[]
