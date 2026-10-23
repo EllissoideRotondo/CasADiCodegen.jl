@@ -71,8 +71,52 @@ Base.ifelse(condition::T, a::Union{T,Real}, b::Union{T,Real}) where {T<:Symbolic
 # functions of the same name work too.
 LinearAlgebra.dot(a::T, b::T) where {T<:Symbolic} = Front.dot(a, b)
 LinearAlgebra.cross(a::T, b::T) where {T<:Symbolic} = Front.cross(a, b)
-# As in LinearAlgebra, `norm` is the Frobenius norm: the 2-norm of a vector.
-LinearAlgebra.norm(x::Symbolic) = C.norm_fro(x)
+"""
+    norm(x::Union{SX,MX}, p::Real = 2)
+
+Return the `p`-norm of the elements of `x` as a 1 x 1 matrix, as `LinearAlgebra.norm` of a
+Julia matrix: `x` is a vector of all its elements, structural zeros included.
+`p = 2` gives the Frobenius norm, `p = Inf` and `p = -Inf` the largest and the smallest
+absolute value, and `p = 0` the number of nonzero elements. The norm of an empty `x` is 0.
+`opnorm` gives the matrix norm induced by a vector norm.
+"""
+function LinearAlgebra.norm(x::T, p::Real = 2) where {T<:Symbolic}
+    size(x, 1) * size(x, 2) == 0 && return T(0.0)
+    p == 2 && return C.norm_fro(x)
+    # The 1 and infinity norms of CasADi are those of the elements, not of the matrix.
+    p == 1 && return C.norm_1(x)
+    p == Inf && return C.norm_inf(x)
+    p == -Inf && return C.mmin(C.abs(x))
+    p == 0 && return C.sum(C.ne(x, T(0.0)))
+    # A structural zero gives an infinite term when p < 0.
+    a = C.abs(p < 0 ? C.densify(x) : x)
+    # CasADi takes the exponent as a Float64.
+    q = Float64(p)
+    -1 <= q <= 1 && return C.power(C.sum(C.power(a, T(q))), T(inv(q)))
+    # As LinearAlgebra, scale by the largest (p > 1) or smallest (p < -1) absolute value
+    # against overflow; a scale that is 0 or infinite is the norm.
+    scale = p > 1 ? C.norm_inf(x) : C.mmin(a)
+    scaled = scale * C.power(C.sum(C.power(a / scale, T(q))), T(inv(q)))
+    C.if_else(C.or(C.eq(scale, T(0.0)), C.eq(scale, T(Inf))), scale, scaled)
+end
+
+"""
+    opnorm(A::Union{SX,MX}, p::Real = 2)
+
+Return the norm of the matrix `A` induced by the vector `p`-norm, as a 1 x 1 matrix, as
+`LinearAlgebra.opnorm`: the largest sum of absolute values of a column for `p = 1`, of a row
+for `p = Inf`. CasADi has no symbolic singular values, so `p = 2` takes a row or a column only,
+where it is the 2-norm. Throws `ArgumentError` for another `p` or a matrix with `p = 2`.
+"""
+function LinearAlgebra.opnorm(A::T, p::Real = 2) where {T<:Symbolic}
+    p in (1, 2, Inf) || throw(ArgumentError("opnorm: p must be 1, 2 or Inf, got $p"))
+    size(A, 1) * size(A, 2) == 0 && return T(0.0)
+    p == 1 && return C.mmax(C.sum1(C.abs(A)))
+    p == Inf && return C.mmax(C.sum2(C.abs(A)))
+    1 in size(A) || throw(ArgumentError("opnorm: p = 2 needs a row or a column, but the matrix has size $(size(A)); " *
+                                         "use p = 1 or p = Inf, or norm(A) for the Frobenius norm"))
+    C.norm_fro(A)
+end
 
 # Julia array code on symbols. A CasADi matrix is not an `AbstractArray`, so the methods
 # below give it the reductions, the iteration and the mixed arithmetic of an array; a
@@ -147,7 +191,20 @@ function Base.hvcat(rows::Tuple{Vararg{Int}}, x::CasadiMatrix, xs::CatPart...)
     Front.vertcat([Front.horzcat(parts[e-n+1:e]) for (n, e) in zip(rows, ends)])
 end
 
-LinearAlgebra.norm(a::AbstractArray{T}) where {T<:Symbolic} = C.norm_fro(casadi_matrix(T, a))
+# As LinearAlgebra, an element of a Julia array that is not a scalar enters with its 2-norm.
+function LinearAlgebra.norm(a::AbstractArray{T}, p::Real = 2) where {T<:Symbolic}
+    elements = all(e -> size(e) == (1, 1), a) ? vec(a) : T[LinearAlgebra.norm(e) for e in vec(a)]
+    LinearAlgebra.norm(casadi_matrix(T, elements), p)
+end
+LinearAlgebra.opnorm(A::AbstractMatrix{T}, p::Real = 2) where {T<:Symbolic} = LinearAlgebra.opnorm(casadi_matrix(T, A), p)
+
+# CasADi has no conversion between the two graphs, so one expression holds SX or MX only.
+mixed_graphs(x, T) =
+    ArgumentError("cannot join an $(typeof(x)) to an $T: CasADi cannot combine SX and MX in one expression; " *
+                  "build the SX part from MX symbols, or call an SX Function of it on MX arguments, " *
+                  "or expand an MX Function to SX")
+Front._ascat(::Type{MX}, x::SX) = throw(mixed_graphs(x, MX))
+Front._ascat(::Type{SX}, x::MX) = throw(mixed_graphs(x, SX))
 
 # The elements of a symbolic matrix are its 1 x 1 matrices; those of a `DM` are numbers.
 Base.iterate(x::Symbolic, k::Int = 1) = k > length(x) ? nothing : (x[k], k + 1)

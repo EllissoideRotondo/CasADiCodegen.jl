@@ -62,6 +62,12 @@ compiled_for(g, types) = any(mi -> mi.specTypes <: Tuple{typeof(g),types...}, It
     @test out == "2 true"
     # A compilation writes a new file; a load leaves the file in its place.
     @test !isempty(before) && compiled_files(h!) == before
+
+    # Without vector_columns, an output of one column is a matrix in the precompiled in-place call,
+    # which the static out-of-place function does not make.
+    m, m! = build_function(f; expression = Val{false}, cache = directory, force_SA = true, vector_columns = false)
+    @test compiled_for(m!, (Tuple{Matrix{Float64},Matrix{Float64}}, Tuple{Arrays...}))
+    @test Base.invokelatest(m, SVector{3}(xv), SMatrix{2,2}(pv))[1] isa SMatrix{2,1,Float64}
 end
 
 @testset "cache: function on nonzeros and a Julia function of a package" begin

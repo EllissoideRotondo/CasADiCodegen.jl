@@ -26,31 +26,38 @@ function dependency(name::Symbol)
     first(loaded)
 end
 
-"The type of a dense array with the shape of `sp`, as source text: ordinary or static."
-function array_type(sp, static::Bool)
+"""
+    array_type(sp, static; vector_columns = true) -> String
+
+Return the type of a dense array with the shape of `sp`, as source text: ordinary or static.
+A pattern of one column is a vector, or a matrix of one column without `vector_columns`.
+"""
+function array_type(sp, static::Bool; vector_columns::Bool = true)
     rows, columns = C.size1(sp), C.size2(sp)
-    static && return columns == 1 ? "StaticArrays.SVector{$rows,Float64}" : "StaticArrays.SMatrix{$rows,$columns,Float64,$(rows * columns)}"
-    columns == 1 ? "Vector{Float64}" : "Matrix{Float64}"
+    vector = vector_columns && columns == 1
+    static && return vector ? "StaticArrays.SVector{$rows,Float64}" : "StaticArrays.SMatrix{$rows,$columns,Float64,$(rows * columns)}"
+    vector ? "Vector{Float64}" : "Matrix{Float64}"
 end
 
 tuple_type(types) = "Tuple{" * join(types, ",") * "}"
 
 """
-    precompile_statements(alg, name, nonzeros, force_SA) -> Vector{String}
+    precompile_statements(alg, name, nonzeros, force_SA; vector_columns = true) -> Vector{String}
 
 Return the `precompile` statements of a cached package, for `Float64`. With `nonzeros` they
 are for the function on nonzeros. Otherwise they are for the in-place function on ordinary
 arrays and for the out-of-place function on ordinary arrays, or on static arrays with
-`force_SA`.
+`force_SA`. The results of the in-place function have the shapes that the out-of-place
+function returns with `vector_columns`.
 """
-function precompile_statements(alg, name::Symbol, nonzeros::Bool, force_SA::Bool)
+function precompile_statements(alg, name::Symbol, nonzeros::Bool, force_SA::Bool; vector_columns::Bool = true)
     if nonzeros
         arguments = tuple_type(fill("Vector{Float64}", length(alg.nnz_in)))
         results = ("Vector{Vector{Float64}}", tuple_type(fill("Vector{Float64}", length(alg.nnz_out))))
         return String["precompile(Generated.$(core_name(name)), ($result, $arguments))" for result in results]
     end
     sparsity_in, sparsity_out = alg.sparsity_in::Vector{C.Sparsity}, alg.sparsity_out::Vector{C.Sparsity}
-    inputs, outputs = [array_type(sp, false) for sp in sparsity_in], [array_type(sp, false) for sp in sparsity_out]
+    inputs, outputs = [array_type(sp, false) for sp in sparsity_in], [array_type(sp, false; vector_columns) for sp in sparsity_out]
     given = force_SA ? [array_type(sp, true) for sp in sparsity_in] : inputs
     String["precompile(Generated.$name, ($(tuple_type(outputs)), $(tuple_type(inputs))))",
      "precompile(Generated.$(outofplace_name(name)), ($(join(given, ", ")),))"]
@@ -97,20 +104,20 @@ function cached_module(generated::String, statements, imports, directory::String
 end
 
 """
-    cached_functions(f, directory; nonzeros, force_SA, name, options...) -> functions
+    cached_functions(f, directory; nonzeros, force_SA, name, expand, vector_columns, options...) -> functions
 
 Return the result of `build_function` with `expression = Val{false}`, as the functions of
 a cached package in `directory`. `options` are those of `generate_julia`, whose limits
 hold. Each Julia function in the graph must be a named function of a package, not of `Main`.
 """
 function cached_functions(f, directory::String; nonzeros::Bool, force_SA::Bool, name::Symbol, expand::Bool,
-                          solvers::Union{Nothing,Solvers} = nothing, options...)
+                          vector_columns::Bool, solvers::Union{Nothing,Solvers} = nothing, options...)
     alg = algorithm(f; expand, solvers)
     seen = Set{Symbol}()
-    generated = sprint(io -> generate_julia(alg, io; module_name = :Generated, force_SA, name, seen, options...))
+    generated = sprint(io -> generate_julia(alg, io; module_name = :Generated, force_SA, name, seen, vector_columns, options...))
     @requires !(:Main in seen) "the cache needs each Julia function in the graph to belong to a package, not to Main"
     imports = sort!(collect(setdiff(seen, (:Base, :Core))))
-    statements = precompile_statements(alg, name, nonzeros, force_SA)
+    statements = precompile_statements(alg, name, nonzeros, force_SA; vector_columns)
     # The solvers of integrators compile with the package.
     occursin("\nconst OBJECTS = ", generated) && pushfirst!(statements, "foreach(Generated.CasADiCodegen.Codegen.warm, Generated.OBJECTS)")
     loaded = cached_module(generated, statements, imports, directory)

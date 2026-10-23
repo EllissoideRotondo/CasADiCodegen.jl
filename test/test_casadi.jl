@@ -1,4 +1,5 @@
 # Properties that use CasADi itself as the oracle.
+import LinearAlgebra
 import SpecialFunctions
 using RuntimeGeneratedFunctions: RuntimeGeneratedFunction
 
@@ -197,4 +198,40 @@ end
     f = CasADiCodegen.Function("free", [x], [x * p], Dict("allow_free" => true))
     err = try generate_julia(f, IOBuffer()); nothing catch e; e end
     @test err isa ArgumentError && occursin("free", err.msg)
+end
+
+# The norms of LinearAlgebra on symbols take the same Julia code on numbers as the oracle.
+const NORM_PS = (2, 1, Inf, -Inf, 0, 3, 1//2, -0.5, -1.5)
+
+@testset "norm and opnorm of symbols as on numbers, $T" for T in (SX, MX)
+    M = T.sym("M", 2, 3)
+    d = T.sym("d", 3)
+    D = C.diag(d)                                           # structural zeros count as elements
+    outputs = [[LinearAlgebra.norm(M, p) for p in NORM_PS]; [LinearAlgebra.norm(D, p) for p in NORM_PS];
+               [LinearAlgebra.norm([M[1, 1], M[2, 2], M[1, 3]], p) for p in NORM_PS];
+               LinearAlgebra.norm([M[:, 1], M[:, 2]], 1); LinearAlgebra.opnorm(M, 1); LinearAlgebra.opnorm(M, Inf);
+               LinearAlgebra.opnorm(M[:, 1]); LinearAlgebra.opnorm(M[1, :])]
+    f = CasADiCodegen.Function("norms", [M, d], outputs)
+    # Values with a zero element; all zeros, where the scaled formula must not give NaN; an infinite element.
+    for (Mv, dv) in (([1.0 -2.0 0.5; 3.0 0.0 -1.0], [2.0, -0.5, 4.0]), (zeros(2, 3), zeros(3)),
+                     ([1.0 -Inf 0.5; 3.0 0.25 -1.0], [2.0, -0.5, 4.0]))
+        Dv = LinearAlgebra.diagm(dv)
+        expected = [[LinearAlgebra.norm(Mv, p) for p in NORM_PS]; [LinearAlgebra.norm(Dv, p) for p in NORM_PS];
+                    [LinearAlgebra.norm([Mv[1, 1], Mv[2, 2], Mv[1, 3]], p) for p in NORM_PS];
+                    LinearAlgebra.norm([Mv[:, 1], Mv[:, 2]], 1); LinearAlgebra.opnorm(Mv, 1); LinearAlgebra.opnorm(Mv, Inf);
+                    LinearAlgebra.opnorm(Mv[:, 1:1]); LinearAlgebra.opnorm(Mv[1:1, :])]
+        @test all(map((a, b) -> isequal(a, b) || a ≈ b, [only(Matrix(r)) for r in f(C.DM(Mv), C.DM(dv))], expected))
+    end
+    @test Float64(LinearAlgebra.norm(T(2, 0), 3)) == LinearAlgebra.norm(zeros(2, 0), 3)
+    @test_throws ArgumentError LinearAlgebra.opnorm(M)
+    @test_throws ArgumentError LinearAlgebra.opnorm(M, 3)
+end
+
+@testset "a concatenation of SX and MX throws ArgumentError" begin
+    s, m = SX.sym("s", 2), MX.sym("m", 2)
+    err = try [s; m]; nothing catch e; e end
+    @test err isa ArgumentError && occursin("SX", err.msg) && occursin("MX", err.msg)
+    @test_throws ArgumentError [m s]
+    @test_throws ArgumentError vertcat([s, m])
+    @test_throws ArgumentError [m; [s[1], s[2]]]
 end
