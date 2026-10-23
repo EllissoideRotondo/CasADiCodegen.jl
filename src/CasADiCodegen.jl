@@ -28,6 +28,7 @@ include("front_end.jl")
 Base.include_dependency(CasADiSWIG_jll.casadi_native_body)
 Base.include_dependency(CasADiSWIG_jll.casadi_jl)
 include(typed_front_end, CasADiSWIG_jll.casadi_native_body)
+SHAPED_ZEROS[] == 2 || throw(AssertionError("$(SHAPED_ZEROS[]) methods zero(::T) and one(::T) of the front end were found, not 2; the front end has changed"))
 
 include("codegen.jl")
 

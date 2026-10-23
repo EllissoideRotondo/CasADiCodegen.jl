@@ -109,10 +109,10 @@ const ELEMENT_TYPE = :(T = promote_type(Float64, map(eltype, arg)...))
 
 Return the definition of the function `signature(arg1, arg2, ...)` that makes a `Vector` or
 a `Matrix` per result, fills them with `inplace`, the function on arrays in matrix shape,
-and returns them.
+and returns them. The statements of `warning`, from `static_warning`, come first.
 """
-outofplace_function(alg, signature, inplace, ref) =
-    Expr(:function, signature, Expr(:block, :(arg = $(Expr(:tuple, argument_names(alg)...))), ELEMENT_TYPE,
+outofplace_function(alg, signature, inplace, ref; warning = Any[]) =
+    Expr(:function, signature, Expr(:block, warning..., :(arg = $(Expr(:tuple, argument_names(alg)...))), ELEMENT_TYPE,
         :(res = $(Expr(:tuple, (:(Array{T}(undef, $(dimensions(sp)...))) for sp in alg.sparsity_out)...))),
         :($inplace(res, arg)),
         :(return $(returned([:(res[$j]) for j in eachindex(alg.sparsity_out)])))))
@@ -154,10 +154,14 @@ core_name(name::Symbol) = Symbol(outofplace_name(name), :_nonzeros!)
 
 """
 Largest number of elements, summed over the outputs, of the out-of-place method with
-static arrays. The method writes each element of each output into its code, so a large
-output makes code that is slow to compile or that Julia cannot parse.
+static arrays. The method writes each element of each output into its code. Measured on
+dense and diagonal Jacobians, above about 1000 elements it compiles more slowly than the
+method with ordinary arrays, and for a dense Jacobian its call is also slower; far above,
+Julia cannot parse it.
 """
-const STATIC_LIMIT = 4096
+const STATIC_LIMIT = 1024
+
+output_elements(alg) = sum(sp -> prod(dimensions(sp)), alg.sparsity_out; init = 0)
 
 """
     methods_wanted(alg, force_SA) -> (ordinary, static)
@@ -167,9 +171,31 @@ arrays. A function without inputs, or with more than `STATIC_LIMIT` output eleme
 no method for static arrays unless `force_SA` asks for it, which the second case refuses.
 """
 function methods_wanted(alg, force_SA::Bool)
-    elements = sum(sp -> prod(dimensions(sp)), alg.sparsity_out; init = 0)
+    elements = output_elements(alg)
     @requires !force_SA || elements <= STATIC_LIMIT "$(alg.name): the outputs have $elements elements, and static arrays (`force_SA = true`) take at most $STATIC_LIMIT"
     (!force_SA, force_SA || (!isempty(alg.sparsity_in) && elements <= STATIC_LIMIT))
+end
+
+"""
+    static_warning(alg, static, ref, id) -> Vector{Any}
+
+Return the statement, for the method with ordinary arrays, that warns once when its first
+argument is a static array, which happens when the outputs exceed `STATIC_LIMIT`; an empty
+vector when `static` (the method with static arrays exists) or `alg` has no input. `id` is the
+`_id` of the log record: a symbol unique in the session, or `nothing` in a source file,
+where each expansion of `@warn` gets its own.
+"""
+function static_warning(alg, static::Bool, ref, id)
+    (static || isempty(alg.sparsity_in)) && return Any[]
+    message = "$(alg.name): the outputs have $(output_elements(alg)) elements, and static arrays hold at most " *
+              "$STATIC_LIMIT, so a static array as argument gives `Vector` and `Matrix` results; pass ordinary arrays " *
+              "to avoid this warning"
+    options = Any[Expr(:(=), :maxlog, 1)]
+    id === nothing || push!(options, Expr(:(=), :_id, QuoteNode(id)))
+    # `@warn` needs a line number to expand; a source file gets its own when Julia parses it.
+    line = id === nothing ? nothing : LineNumberNode(0, :generated)
+    warn = Expr(:macrocall, GlobalRef(Base, Symbol("@warn")), line, message, options...)
+    Any[:($(first(argument_names(alg))) isa $(ref(:StaticArraysCore, :StaticArray)) && $warn)]
 end
 
 """
@@ -180,10 +206,12 @@ Return the named definitions that follow those of the function on nonzeros
 function `name(res, arg)`, and the out-of-place function, whose name is `name` without `!`.
 
 The out-of-place function has a method for a static array as its first argument, which
-returns static arrays. With `force_SA` that is its only method, for any argument. `julia`
-is that of `mx_definitions`.
+returns static arrays. With `force_SA` that is its only method, for any argument. Above
+`STATIC_LIMIT` the method with ordinary arrays warns once for a static argument, with the
+log id `log_id` (see `static_warning`). `julia` is that of `mx_definitions`.
 """
-function form_definitions(alg, name::Symbol, chunk_size::ChunkSize, ref, force_SA::Bool; key = identity, julia = identity)
+function form_definitions(alg, name::Symbol, chunk_size::ChunkSize, ref, force_SA::Bool; key = identity, julia = identity,
+                          log_id::Union{Nothing,Symbol} = nothing)
     base, arguments = outofplace_name(name), argument_names(alg)
     table(kind, k) = Symbol(base, :_index_, kind, k)
     check(kind, k) = Symbol(base, :_check_, kind, k)
@@ -195,7 +223,8 @@ function form_definitions(alg, name::Symbol, chunk_size::ChunkSize, ref, force_S
     ordinary, static = methods_wanted(alg, force_SA)
     typed = force_SA || !static ? arguments : Any[:($(arguments[1])::$(ref(:StaticArraysCore, :StaticArray))), arguments[2:end]...]
     push!(definitions, inplace_function(alg, :($name(res, arg)), frame, core_name(name), table, check, ref, key(name)))
-    ordinary && push!(definitions, outofplace_function(alg, :($base($(arguments...))), name, ref))
+    warning = static_warning(alg, static, ref, log_id)
+    ordinary && push!(definitions, outofplace_function(alg, :($base($(arguments...))), name, ref; warning))
     static && push!(definitions, static_function(alg, :($base($(typed...))), frame, table, ref, key(name)))
     named_calls(alg, definitions, julia)
 end
@@ -235,7 +264,8 @@ function runtime_forms(alg, chunk_size::ChunkSize, ref, force_SA::Bool)
     arguments = argument_names(alg)
     signature = Expr(:tuple, arguments...)
     ordinary, static = methods_wanted(alg, force_SA)
-    with_arrays = ordinary ? generate(outofplace_function(alg, signature, hold(inplace), ref)) : nothing
+    warning = static_warning(alg, static, ref, Symbol(key, :_static))
+    with_arrays = ordinary ? generate(outofplace_function(alg, signature, hold(inplace), ref; warning)) : nothing
     with_static = static ? generate(static_function(alg, signature, frame, index, ref, key)) : nothing
     outofplace = !ordinary ? with_static : !static ? with_arrays :
         generate(Expr(:function, signature, Expr(:block,

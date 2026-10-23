@@ -65,14 +65,44 @@ function derivative_definition!(ex, count::Ref{Int})
     ex
 end
 
+"The number of methods that `shaped_zero_definitions!` has rewritten: 2 when the front end is loaded."
+const SHAPED_ZEROS = Ref(0)
+
+"""
+    shaped_zero_definitions!(ex) -> ex
+
+Rewrite the methods `zero(::T)` and `one(::T)` of the matrix types `T` in `ex`, which return
+a scalar for a matrix of any shape, so that `zero(x)` is the zero of the shape of
+`x` and `one(x)` the identity of the square matrix `x`, as for a Julia matrix (see
+`Codegen.zero_matrix` and `Codegen.identity_matrix`). The methods of the types,
+`zero(::Type{T})` and `one(::Type{T})`, keep their scalars. `SHAPED_ZEROS` counts the
+rewritten methods.
+"""
+function shaped_zero_definitions!(ex)
+    ex isa Expr || return ex
+    if Meta.isexpr(ex, :(=)) && Meta.isexpr(ex.args[1], :call) && length(ex.args[1].args) == 2
+        name, argument = ex.args[1].args
+        if name in (:(Base.zero), :(Base.one)) && Meta.isexpr(argument, :(::), 1) && Meta.isexpr(argument.args[1], :$)
+            method = name == :(Base.zero) ? :zero_matrix : :identity_matrix
+            ex.args[1].args[2] = Expr(:(::), :x, argument.args[1])
+            ex.args[2] = :($(Expr(:., CODEGEN, QuoteNode(method)))(x))
+            SHAPED_ZEROS[] += 1
+        end
+        return ex
+    end
+    foreach(shaped_zero_definitions!, ex.args)
+    ex
+end
+
 """
     typed_front_end(ex)
 
 The expression `ex` of the convenience layer of the front end, with the include of
-the generated module `casadi` given `typed_module` as its `mapexpr`.
+the generated module `casadi` given `typed_module` as its `mapexpr`, and with the methods
+`zero` and `one` of a matrix rewritten by `shaped_zero_definitions!`.
 """
 function typed_front_end(ex)
-    Meta.isexpr(ex, :call) && ex.args[1] === :include && length(ex.args) == 2 || return ex
+    Meta.isexpr(ex, :call) && ex.args[1] === :include && length(ex.args) == 2 || return shaped_zero_definitions!(ex)
     Expr(:call, :include, typed_module, ex.args[2])
 end
 

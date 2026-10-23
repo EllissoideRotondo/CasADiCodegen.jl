@@ -193,8 +193,7 @@ The module holds:
 The module does not need CasADiCodegen.jl. A package that includes the file must have each
 package of `DEPENDENCIES` as a dependency. The module imports:
 
-- StaticArraysCore.jl, for the method with static arrays, unless `f` has no input or its
-  outputs have more than 4096 elements in all;
+- StaticArraysCore.jl, for the method with static arrays, unless `f` has no input;
 - NaNMath.jl, when the code has an operation with a limited domain, such as `sqrt` or
   `log`, unless `nanmath = false`;
 - SparseArrays.jl, when an input or an output has structural zeros, as most Jacobians have,

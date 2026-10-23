@@ -87,8 +87,12 @@ stationarity condition by least squares. CasADi makes the derivatives of the
 solution from these results, since it reads the active bounds from the signs of the
 multipliers, so derivatives of any order need no other code. A bound counts as active
 when ``|x - \mathrm{bound}| \le 10^{-6} \max(1, |\mathrm{bound}|)``. The problem is solved with `Float64` only and with dense matrices, and the first
-guesses of the multipliers are not used. The options of the solver of CasADi, such as
-those of `ipopt`, are not read, so they must go with the algorithm.
+guesses of the multipliers are not used. The code holds the Hessians of the objective and
+of the constraints only for an algorithm that declares them as needed through the traits
+`SciMLBase.requireshessian`, `requiresconshess` or `requireslagh`; for an algorithm of the
+first order, such as Ipopt with `hessian_approximation = "limited-memory"`, they are not
+built. The options of the solver of CasADi, such as those of `ipopt`, are not read, so
+they must go with the algorithm.
 
 `generate_julia` writes a replaced solver to the module under the rule for
 integrators (see [Write the model to a file](@ref)): the algorithm and its options

@@ -114,20 +114,18 @@ returns its total energy, which the exact solution conserves:
 n = 5
 z = SX.sym("z", 6n)
 m = SX.sym("m", n)
-pos(i, k) = z[3(i-1)+k]
-vel(i, k) = z[3n+3(i-1)+k]
-acceleration = [SX(0) for _ in 1:3n]
-energy = sum(0.5 * m[i] * vel(i, k)^2 for i in 1:n, k in 1:3)
+pos(i) = z[3i-2:3i]
+vel(i) = z[3n+3i-2:3n+3i]
+acceleration = zeros(SX, 3n)
+energy = sum(0.5 * m[i] * sum(abs2, vel(i)) for i in 1:n)
 for i in 1:n, j in i+1:n
-    d = [pos(j, k) - pos(i, k) for k in 1:3]
-    r2 = d[1]^2 + d[2]^2 + d[3]^2 + 0.01
-    for k in 1:3
-        acceleration[3(i-1)+k] += m[j] * d[k] / (r2 * sqrt(r2))
-        acceleration[3(j-1)+k] -= m[i] * d[k] / (r2 * sqrt(r2))
-    end
+    d = pos(j) - pos(i)
+    r2 = sum(abs2, d) + 0.01
+    acceleration[3i-2:3i] .+= m[j] .* d ./ (r2 * sqrt(r2))
+    acceleration[3j-2:3j] .-= m[i] .* d ./ (r2 * sqrt(r2))
     global energy -= m[i] * m[j] / sqrt(r2)
 end
-bodies = CasadiFunction("bodies", [z, m], [vertcat(z[3n+1:6n], vertcat(acceleration...)), energy],
+bodies = CasadiFunction("bodies", [z, m], [vertcat(z[3n+1:6n], acceleration...), energy],
                         ["z", "m"], ["rhs", "energy"])
 nothing # hide
 ```
@@ -172,8 +170,8 @@ A, B, C, D = lin(x0, [0.0], [1.0, 5.0])
 B[1], C[N÷2], D[1]
 ```
 
-The generated code returns a matrix of one column as a `Vector`, so that `B`, with one
-input, is a vector, and `C`, with one output, is a matrix of one row. Only the first cell
+With one input, `B` is a matrix of one column, and with one output, `C` is a matrix of one
+row. Only the first cell
 sees the input, and only the middle cell is measured. The matrix
 `A` is the tridiagonal Jacobian of the right side at `x0`, and its eigenvalues are real
 and negative, with the slowest mode set by the diffusion across the whole rod:
@@ -207,14 +205,12 @@ loop_lin, _ = CasADiCodegen.linearization(loop_f, loop_h)
 A_loop, B_loop, C_loop, D_loop = loop_lin([0.0], [0.0], [1.0, 1.0])
 ```
 
-The closed loop has its pole at `-2`. With one state and one input, `A_loop` and
-`B_loop` are vectors of one element, and `C_loop` and `D_loop` are vectors of one element
-per output. The
-transfer function `C (s - A)⁻¹ B + D` of each output is then a ratio of scalars, which we
-evaluate at a few frequencies `s`:
+The closed loop has its pole at `-2`. The transfer function `C (sI - A)⁻¹ B + D` from `d`
+to the two outputs is a matrix of two rows and one column, which we evaluate at a few
+frequencies `s`:
 
 ```@example large
-transfer(s) = C_loop .* B_loop[1] ./ (s - A_loop[1]) .+ D_loop
+transfer(s) = C_loop * ((s * I - A_loop) \ B_loop) + D_loop
 transfer(0.0), transfer(1.0im)
 ```
 

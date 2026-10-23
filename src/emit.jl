@@ -380,8 +380,9 @@ Both functions take arrays in matrix shape; a column is a vector.
 
 - `g` takes one array per input. It returns one array for one output, and a tuple of
   arrays otherwise. The arrays are `SVector` and `SMatrix` when the first argument is a
-  static array, and `Vector` and `Matrix` otherwise. Outputs with more than
-  4096 elements in all give `Vector` and `Matrix` for any argument.
+  static array, and `Vector` and `Matrix` otherwise. Outputs with more than 1024
+  elements in all give `Vector` and `Matrix` for any argument, with a warning at the
+  first call with a static array.
 - `g!` fills the arrays of the tuple `res` from the tuple `arg` and returns `res`. An array
   of `res` can be a mutable static array.
 - A structural zero of an output is set to zero. A structural zero of an input is not read.
@@ -400,7 +401,7 @@ Both functions take arrays in matrix shape; a column is a vector.
 - `expression = Val{true}`: `Val{true}` returns an `Expr`, and `Val{false}` returns
   compiled functions.
 - `force_SA = false`: with `true`, `g` returns static arrays for any argument. It throws
-  an `ArgumentError` for outputs with more than 4096 elements in all.
+  an `ArgumentError` for outputs with more than 1024 elements in all.
 - `nonzeros = false`: with `true`, return the single function `(res, arg) -> res` on which
   the others are built. `arg[i]` holds the structural nonzeros of input `i`, and `res[j]`
   receives those of output `j`, as CasADi evaluates a function.
@@ -479,7 +480,7 @@ function build_function(f; expression = Val{true},
     end
     if expression_flag(expression)
         Expr(:block, function_definitions(alg, core_name(name), chunk_size, ref; key = unique_key)...,
-             form_definitions(alg, name, chunk_size, ref, force_SA; key = unique_key)...)
+             form_definitions(alg, name, chunk_size, ref, force_SA; key = unique_key, log_id = unique_key(Symbol(name, :_static)))...)
     else
         runtime_forms(alg, chunk_size, ref, force_SA)
     end

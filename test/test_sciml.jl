@@ -22,6 +22,8 @@ using StaticArrays: SVector, SMatrix
     @test J ≈ ForwardDiff.jacobian(u -> (d = zeros(eltype(u), 4); f(d, u, ODE_MU, 0.0); d), ODE_X0)
     f.paramjac(P, ODE_X0, ODE_MU, 0.0)
     @test vec(P) ≈ [0.0, 0.0, -ODE_X0[1] / r3, -ODE_X0[2] / r3]
+    # The out-of-place Jacobians return new matrices.
+    @test f.jac(ODE_X0, ODE_MU, 0.0) == J && f.paramjac(ODE_X0, ODE_MU, 0.0) == P
     @test (@allocated f(du, ODE_X0, ODE_MU, 0.0)) == 0 && (@allocated f.jac(J, ODE_X0, ODE_MU, 0.0)) == 0
     # A solver takes it, and gives the state of the integrator of this package.
     problem = SciMLBase.ODEProblem(f, ODE_X0, (0.0, 3.0), ODE_MU)
@@ -48,7 +50,7 @@ end
     f(r, [1.0, 2.0], [0.5, 1.0])
     @test r == [2.5, 3.0]
     f.jac(J, [1.0, 2.0], [0.5, 1.0])
-    @test J == [3.0 1.0; 0.0 2.0]
+    @test J == [3.0 1.0; 0.0 2.0] && f.jac([1.0, 2.0], [0.5, 1.0]) == J
     solution = SciMLBase.solve(SciMLBase.NonlinearProblem(f, [1.0, 1.0], [9.0, 2.0]), SimpleNewtonRaphson(); abstol = 1e-12)
     @test solution.u ≈ [2.0, 1.0]
     @test_throws ArgumentError SciMLBase.NonlinearFunction(CasADiCodegen.Function("w", [z], [z[1]]))
@@ -67,6 +69,8 @@ end
     @test J isa SparseMatrixCSC && nnz(J) == 3n - 2
     f.jac(J, u, p, 1.0)
     @test J == Jd && (@allocated f.jac(J, u, p, 1.0)) == 0
+    Jo = f.jac(u, p, 1.0)
+    @test Jo isa SparseMatrixCSC && Jo == Jd
     D = fill(NaN, n, n)
     f.jac(D, u, p, 1.0)
     @test D == Jd                               # a dense matrix gets the same values
@@ -100,8 +104,8 @@ end
     r = SciMLBase.NonlinearFunction(CasADiCodegen.Function("r", [z, k], [vertcat(z[1]^2 - k, z[2] - z[1])]); inplace = false)
     @test SciMLBase.solve(SciMLBase.NonlinearProblem(r, SVector(1.0, 1.0), ks), SimpleNewtonRaphson(); abstol = 1e-12).u ≈ SVector(2.0, 2.0)
     @test_throws ArgumentError SciMLBase.ODEFunction(rhs; inplace = false, sparse = true)
-    # A Jacobian of 65 by 65 states is above the limit of static arrays.
-    v = SX.sym("v", 65)
+    # A Jacobian of 33 by 33 states is above the limit of static arrays.
+    v = SX.sym("v", 33)
     @test_throws ArgumentError SciMLBase.ODEFunction(CasADiCodegen.Function("big", [v], [-v]); inplace = false)
 end
 
@@ -154,6 +158,8 @@ end
     f.cons_h(each, xv, pv)
     @test each[1] ≈ ForwardDiff.hessian(u -> cons(u)[1], xv) && each[2] ≈ ForwardDiff.hessian(u -> cons(u)[2], xv)
     @test (@allocated f.f(xv, pv)) == 0 && (@allocated f.grad(G, xv, pv)) == 0 && (@allocated f.cons_h(each, xv, pv)) == 0
+    # Each derivative also has an out-of-place method.
+    @test f.grad(xv, pv) == G && f.hess(xv, pv) == H && f.cons(xv, pv) == c && f.cons_j(xv, pv) == J && f.cons_h(xv, pv) == each
     # The dense form has no Hessian of the Lagrange function.
     @test f.lag_h === nothing
     # No constraints, and no parameters.
@@ -176,6 +182,7 @@ end
         sparse.hess(Hs, xv, pv)
         sparse.cons_j(Js, xv, pv)
         @test Hs ≈ ForwardDiff.hessian(cost, xv) && Js ≈ ForwardDiff.jacobian(cons, xv)
+        @test sparse.hess(xv, pv) isa SparseMatrixCSC && sparse.hess(xv, pv) == Hs
         # lag_h writes the upper triangle of σ∇²f + Σμ∇²g, in the order of the stored values of lag_hess_prototype.
         σ, μ = 0.5, [2.0, -3.0]
         lagrange = ForwardDiff.hessian(u -> σ * cost(u) + μ' * cons(u), xv)
@@ -203,13 +210,19 @@ end
 using OrdinaryDiffEqRosenbrock: Rodas5P
 const CC = CasADiCodegen.casadi
 
+# The tests check the problems, not the code of the solver, which AutoSpecialize compiles once for all of them.
+# The set still takes more than 15 s, because each callback and each mass matrix compiles a solver of its own,
+# and each inner set is the one case of its behavior.
+const AUTO = (; specialize = SciMLBase.AutoSpecialize)
+
 @testset "ODEProblem from an integrator of CasADi" begin
     x, p, t, c = MX.sym("x", 2), MX.sym("p"), MX.sym("t"), MX.sym("c")
     dae = Dict("x" => x, "p" => p, "t" => t, "ode" => -p * x * t, "quad" => x[1])
     exact(x0, rate, time) = x0 .* exp(-rate * time^2 / 2)
     @testset "$plugin" for plugin in ("cvodes", "rk")
         rule = CC.integrator("rule", plugin, dae, 0.5, [1.0, 2.0])
-        problem = SciMLBase.ODEProblem(rule, [0.4, -0.3], [1.7])
+        problem = SciMLBase.ODEProblem(rule, [0.4, -0.3], [1.7]; AUTO...)
+        @test SciMLBase.specialization(problem.f) === SciMLBase.AutoSpecialize && !haskey(problem.kwargs, :specialize)
         @test problem.tspan == (0.5, 2.0) && problem.u0 == [0.4, -0.3, 0.0] && problem.p == [1.7]
         @test problem.kwargs[:saveat] == [1.0, 2.0]
         # The tolerances of a solver of CasADi with a variable step are those of the problem.
@@ -232,15 +245,16 @@ const CC = CasADiCodegen.casadi
     end
     @testset "controls of one interval are parameters" begin
         rule = CC.integrator("rule", "cvodes", Dict("x" => x, "p" => p, "u" => c, "ode" => -p * x + c), 0.0, 1.0)
-        problem = SciMLBase.ODEProblem(rule, [0.4, -0.3], [1.7]; u = [0.5], abstol = 1e-12)
+        problem = SciMLBase.ODEProblem(rule, [0.4, -0.3], [1.7]; u = [0.5], abstol = 1e-12, AUTO...)
         @test problem.p == [1.7, 0.5] && problem.kwargs[:abstol] == 1e-12
+        @test SciMLBase.specialization(SciMLBase.ODEProblem(rule, [0.4, -0.3], [1.7]; u = [0.5]).f) === SciMLBase.FullSpecialize   # the default
         @test_throws "the controls must have 1 number" SciMLBase.ODEProblem(rule, [0.4, -0.3], [1.7])
         @test_throws "the initial state must have 2 numbers" SciMLBase.ODEProblem(rule, [0.4], [1.7]; u = [0.5])
     end
     # One control per interval between the output times: the right side jumps at each output time.
     @testset "controls of several intervals change at the output times" begin
         grid = CC.integrator("rule", "cvodes", Dict("x" => x, "p" => p, "u" => c, "ode" => -p * x + c), 0.0, [1.0, 2.5])
-        problem = SciMLBase.ODEProblem(grid, [0.4, -0.3], [1.7]; u = [0.5, -0.2])
+        problem = SciMLBase.ODEProblem(grid, [0.4, -0.3], [1.7]; u = [0.5, -0.2], AUTO...)
         arc(start, control, span) = start .* exp(-1.7 * span) .+ control / 1.7 * (1 - exp(-1.7 * span))
         first_state = arc([0.4, -0.3], 0.5, 1.0)
         # The second solve starts from the first control again.
@@ -253,7 +267,7 @@ const CC = CasADiCodegen.casadi
         # A callback of the user runs after the change of the controls, so it sees the control of the new interval.
         seen = Float64[]
         record = SciMLBase.DiscreteCallback((_, t, _) -> t == 1.0, i -> push!(seen, i.p[2]); save_positions = (false, false))
-        solution = SciMLBase.solve(SciMLBase.ODEProblem(grid, [0.4, -0.3], [1.7]; u = [0.5, -0.2], callback = record), Vern9(); abstol = 1e-13, reltol = 1e-13)
+        solution = SciMLBase.solve(SciMLBase.ODEProblem(grid, [0.4, -0.3], [1.7]; u = [0.5, -0.2], callback = record, AUTO...), Vern9(); abstol = 1e-13, reltol = 1e-13)
         @test seen == [-0.2]
         @test solution.u[2] ≈ arc(first_state, -0.2, 1.5) rtol = 1e-10
         @test_throws "the controls must have 2 numbers" SciMLBase.ODEProblem(grid, [0.4, -0.3], [1.7]; u = [0.5])
@@ -262,7 +276,7 @@ const CC = CasADiCodegen.casadi
         z = MX.sym("z")
         # z = p x1 at each time, so that x1' = -z is a decay with the rate p.
         rule = CC.integrator("rule", "idas", Dict("x" => x, "z" => z, "p" => p, "ode" => CC.vertcat([-z, x[1]]), "alg" => z - p * x[1]), 0.0, 1.0)
-        problem = SciMLBase.ODEProblem(rule, [0.4, -0.3], [1.7]; z0 = [0.68])
+        problem = SciMLBase.ODEProblem(rule, [0.4, -0.3], [1.7]; z0 = [0.68], AUTO...)
         @test problem.u0 == [0.4, -0.3, 0.68]
         @test problem.f.mass_matrix == [1 0 0; 0 1 0; 0 0 0]
         solution = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-11, reltol = 1e-11)
@@ -274,7 +288,7 @@ const CC = CasADiCodegen.casadi
         doubling = CC.Function("transition", Dict("x" => y, "post_x" => 2y), CC.event_in(), CC.event_out())
         refill = CC.integrator("refill", "idas", Dict("x" => y, "z" => z, "p" => p, "ode" => -z, "alg" => z - p * y, "zero" => z - 0.55), 0.0, [0.4, 1.0, 1.6],
                                Dict("transition" => doubling))
-        solution = SciMLBase.solve(SciMLBase.ODEProblem(refill, [1.0], [1.1]; z0 = [1.1]), Rodas5P(); abstol = 1e-11, reltol = 1e-11)
+        solution = SciMLBase.solve(SciMLBase.ODEProblem(refill, [1.0], [1.1]; z0 = [1.1], AUTO...), Rodas5P(); abstol = 1e-11, reltol = 1e-11)
         expected = [refilled(t, 1.0, 1.1) for t in (0.4, 1.0, 1.6)]
         @test reduce(vcat, solution.u) ≈ vec([expected 1.1 * expected]') rtol = 1e-7
     end
@@ -283,7 +297,7 @@ const CC = CasADiCodegen.casadi
         jump = CC.Function("transition", Dict("x" => y, "p" => e, "post_x" => CC.vertcat([y[1], -e * y[2]])), CC.event_in(), CC.event_out())
         dae = Dict("x" => y, "p" => e, "u" => g, "ode" => CC.vertcat([y[2], -g]), "quad" => y[2]^2, "zero" => y[1])
         ball = CC.integrator("ball", "cvodes", dae, 0.0, [0.6, 1.4, 2.5], Dict("transition" => jump))
-        problem = SciMLBase.ODEProblem(ball, [1.5, 2.0], [0.8]; u = [9.81, 5.0, 12.0])
+        problem = SciMLBase.ODEProblem(ball, [1.5, 2.0], [0.8]; u = [9.81, 5.0, 12.0], AUTO...)
         solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-13, reltol = 1e-13)
         finals, sums = ball_reference([1.5, 2.0], 0.8, [9.81, 5.0, 12.0], [0.6, 1.4, 2.5])
         @test reduce(vcat, solution.u) ≈ vec([reshape(finals, 2, 3); sums']) rtol = 1e-9
@@ -378,14 +392,16 @@ end
     CC.minimize(opti, (z[1] - a)^2 + z[2]^2)
     CC.subject_to(opti, z[1] + z[2] >= 1)
     CC.subject_to(opti, z[1] <= 3)
+    # Julia lowers -1 <= z <= 4 to &&, which needs a Bool; bounded gives the constraint with two bounds.
+    CC.subject_to(opti, bounded([-1.0, -2.0], z, [4.0, 5.0]))
     CC.set_value(opti, a, CC.DM(0.25))
     CC.set_initial(opti, z, CC.DM([2.0, 1.5]))
     problem = SciMLBase.OptimizationProblem(opti; sparse = true)
     # The initial values, the values of the parameters and the bounds of the constraints come from the Opti object.
-    @test (problem.u0, problem.p, problem.lcons, problem.ucons) == ([2.0, 1.5], [0.25], [1.0, -Inf], [Inf, 3.0])
-    c = zeros(2)
+    @test (problem.u0, problem.p, problem.lcons, problem.ucons) == ([2.0, 1.5], [0.25], [1.0, -Inf, -1.0, -2.0], [Inf, 3.0, 4.0, 5.0])
+    c = zeros(4)
     problem.f.cons(c, [2.0, 1.5], [0.25])
-    @test problem.f.f([2.0, 1.5], [0.25]) ≈ 1.75^2 + 1.5^2 && c == [3.5, 2.0]
+    @test problem.f.f([2.0, 1.5], [0.25]) ≈ 1.75^2 + 1.5^2 && c == [3.5, 2.0, 2.0, 1.5]
     unset = CC.Opti()
     w, b = CC.variable(unset), CC.parameter(unset)
     CC.minimize(unset, (w - b)^2)

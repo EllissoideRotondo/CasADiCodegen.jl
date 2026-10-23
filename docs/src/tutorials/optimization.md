@@ -50,17 +50,14 @@ nothing # hide
 ```
 
 Ipopt, an interior-point method for nonlinear problems, uses the gradient and the
-Hessian of the function. We silence its output with the option `print_level` and its
-banner with `sb`, and pass
-`verbose = false` to `solve`, since Optimization.jl otherwise warns that the problem
-declares no automatic differentiation for the second derivatives, which the function
-already holds:
+Hessian of the function, and we silence its output with the option `print_level` and its
+banner with `sb`:
 
 ```@example optimization
 using OptimizationIpopt: IpoptOptimizer
 
 ipopt = IpoptOptimizer(additional_options = Dict{String,Any}("print_level" => 0, "sb" => "yes"))
-solution = SciMLBase.solve(problem, ipopt; verbose = false)
+solution = SciMLBase.solve(problem, ipopt)
 solution.u
 ```
 
@@ -78,7 +75,7 @@ problem with other values of ``a`` and ``b`` reuses the same function. `remake` 
 the parameters, and with ``a = 1/2`` the minimum moves to ``(1/2, 1/4)``:
 
 ```@example optimization
-solution = SciMLBase.solve(SciMLBase.remake(problem; p = [0.5, 100.0]), ipopt; verbose = false)
+solution = SciMLBase.solve(SciMLBase.remake(problem; p = [0.5, 100.0]), ipopt)
 solution.u
 ```
 
@@ -119,7 +116,7 @@ inside the disk:
 ```@example optimization
 problem = SciMLBase.OptimizationProblem(f, [0.14, 0.14], [1.0, 100.0];
                                         lb = [-2.0, -1.0], ub = [2.0, 3.0], lcons = [-Inf], ucons = [1.0])
-solution = SciMLBase.solve(problem, ipopt; verbose = false)
+solution = SciMLBase.solve(problem, ipopt)
 solution.u
 ```
 
@@ -142,9 +139,10 @@ one object, and `SciMLBase.OptimizationProblem(opti)` makes the SciML problem fr
 Its functions, such as `variable` and `subject_to`, are those of the Python API of
 CasADi, in the module `CasADiCodegen.C` that holds the whole CasADi front end. A
 comparison such as `w[1]^2 + w[2]^2 <= 1` gives an expression of CasADi that `subject_to`
-takes as a constraint. Julia lowers a chain such as `-2 <= w[1] <= 2` to `&&`, which
-needs a `Bool`, so we bound the vector `w` from below and from above with two
-constraints:
+takes as a constraint. A chain such as `-2 <= w[1] <= 2` cannot be one, because Julia
+evaluates it as `-2 <= w[1] && w[1] <= 2`, and `&&` takes a `Bool` only;
+[`bounded`](@ref CasADiCodegen.bounded)`(lb, w, ub)`, the `opti.bounded` of Python, gives
+the constraint with its two bounds:
 
 ```@example optimization
 C = CasADiCodegen.C
@@ -153,8 +151,7 @@ w = C.variable(opti, 2)
 pa, pb = C.parameter(opti), C.parameter(opti)
 C.minimize(opti, (pa - w[1])^2 + pb * (w[2] - w[1]^2)^2)
 C.subject_to(opti, w[1]^2 + w[2]^2 <= 1)
-C.subject_to(opti, w >= DM([-2.0, -1.0]))
-C.subject_to(opti, w <= DM([2.0, 3.0]))
+C.subject_to(opti, bounded([-2.0, -1.0], w, [2.0, 3.0]))
 C.set_initial(opti, w, DM([0.14, 0.14]))
 C.set_value(opti, pa, DM(1.0))
 C.set_value(opti, pb, DM(100.0))
@@ -163,12 +160,12 @@ problem = SciMLBase.OptimizationProblem(opti; sparse = true)
 problem.lcons, problem.ucons
 ```
 
-`opti` keeps a bound on a variable as a constraint, so the problem has five constraints
-and no `lb` and `ub`: the disk, then the lower bounds of the two variables, then their
-upper bounds, in the order of the calls of `subject_to`. Ipopt reaches the same minimum:
+`opti` keeps a bound on a variable as a constraint, so the problem has three constraints
+and no `lb` and `ub`: the disk, then the two bounded variables, in the order of the calls
+of `subject_to`. Ipopt reaches the same minimum:
 
 ```@example optimization
-solution = SciMLBase.solve(problem, ipopt; verbose = false)
+solution = SciMLBase.solve(problem, ipopt)
 solution.u
 ```
 

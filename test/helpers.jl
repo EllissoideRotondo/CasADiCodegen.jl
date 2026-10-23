@@ -6,6 +6,9 @@ using Supposition
 using Supposition: Data
 
 const C = CasADiCodegen.C
+# The exhaustive tier: checks that repeat a behavior of the default run in a case that compiles
+# much code again, mostly a solver for dual numbers. The environment variable CASADI_TEST_EXHAUSTIVE selects it.
+const EXHAUSTIVE = haskey(ENV, "CASADI_TEST_EXHAUSTIVE")
 const Algorithm = CasADiCodegen.Codegen.Algorithm
 const I = CasADiCodegen.Codegen.Instruction
 

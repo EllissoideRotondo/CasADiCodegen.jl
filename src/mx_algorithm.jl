@@ -461,7 +461,7 @@ function slice_write_data(op::Symbol, node, slots)
     f, place = rebuilt_function(node, [C.dep(node, d - 1) for d in 1:3])
     x = [MX.sym("x$i", C.sparsity_in(f, i - 1)) for i in 1:C.n_in(f)]
     seed = MX.sym("seed", C.sparsity_out(f, 0))
-    read = C.Function("read", [seed; x], [Front.jtimes(f(x...), x[place[2]], seed, true) / 2])
+    read = C.Function("read", MX[seed; x], [Front.jtimes(f(x...), x[place[2]], seed, true) / 2])
     range, count, nk = C.nnz(C.sparsity_out(f, 0)), C.nnz(C.sparsity_in(f, place[2] - 1)), C.nnz(C.sparsity_in(f, place[3] - 1))
     @requires nk > 0 && count % nk == 0 refusal
     function casadi(tags, keys)

@@ -147,8 +147,8 @@ For a small system, a state of static arrays keeps the solver off the heap. With
 `inplace = false`, `ODEFunction` and `NonlinearFunction` hold out-of-place functions that
 return an `SVector` for the right side and an `SMatrix` for each Jacobian, which
 keeps the shape of a matrix also for one state or one parameter, as the implicit solvers
-need. Each of these arrays holds at most 4096 elements, so that a Jacobian limits the
-system to 64 states, and a larger system throws an `ArgumentError`:
+need. Each of these arrays holds at most 1024 elements, so that a Jacobian limits the
+system to 32 states, and a larger system throws an `ArgumentError`:
 
 ```@example sciml
 using StaticArrays: SVector

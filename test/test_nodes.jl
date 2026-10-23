@@ -361,8 +361,11 @@ end
         g = native(f)
         @test all_agree(evaluated(g, f, values), mx_casadi(f, values); rtol = 1e-10)
         # Dual numbers go through the loop of steps, which both methods share, so one method shows it.
+        # A function of the quadrature alone keeps short the code that compiles again for dual numbers.
         if plugin == "rk"
-            slope = ForwardDiff.derivative(s -> g([zeros(typeof(s), n) for n in nnz_out(f)], (values[1], [s], values[3]))[2][3], values[2][1])
+            area = CasADiCodegen.Function("area", [x, p, u], [quadrature])
+            h = native(area)
+            slope = ForwardDiff.derivative(s -> h([zeros(typeof(s), n) for n in nnz_out(area)], (values[1], [s], values[3]))[1][3], values[2][1])
             @test slope ≈ mx_casadi(f, values)[4][3] rtol = 1e-8
         end
         # The adjoint sensitivities are the reverse derivative of the same loop, so one method shows them too.

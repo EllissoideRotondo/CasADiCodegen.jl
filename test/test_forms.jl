@@ -165,17 +165,27 @@ end
     @test_throws ArgumentError g!((zeros(2), zeros(2, 2), zeros(3, 3), zeros(2, 2)), forms_inputs(f, mx_inputs(f)))
 end
 
-# An output with more elements than STATIC_LIMIT has no method with static arrays. The
-# static method of a 2000 by 2000 diagonal Jacobian was one literal of 4 million values,
-# which Julia refused to parse ("expression too large").
-@testset "output forms: no static method for a large output" begin
-    x = SX.sym("x", 65)
-    f = CasADiCodegen.Function("diagonal", [x], [C.jacobian(x .^ 2, x)])     # 4225 elements
+# Outputs with more elements than STATIC_LIMIT (1024) have no method with static arrays.
+# The static method of a 2000 by 2000 diagonal Jacobian was one literal of 4 million
+# values, which Julia refused to parse ("expression too large"). A static argument then
+# gets ordinary arrays and one warning per function, and not a silent change of type.
+@testset "output forms: limit of static arrays" begin
+    diagonal(n) = (x = SX.sym("x", n); CasADiCodegen.Function("diagonal", [x], [C.jacobian(x .^ 2, x)]))
+    g = build_function(diagonal(32); expression = Val{false})[1]     # 1024 elements
+    @test (@test_logs g(SVector{32}(1.0:32.0))) isa SMatrix{32,32,Float64}
+
+    large = diagonal(33)                                             # 1089 elements
+    s = SVector{33}(1.0:33.0)
+    g = build_function(large; expression = Val{false})[1]
+    J = @test_logs (:warn, r"1089") (g(s); g(s))
+    @test J isa Matrix{Float64} && J[end, end] == 66.0 && J[1, 2] == 0.0
+    @test (@test_logs g(collect(s))) == J
+
     src = Module()
-    Base.include_string(src, sprint(io -> generate_julia(f, io; module_name = :Large)))
-    J = Base.invokelatest((a...) -> getglobal(src, :Large).diagonal(a...), SVector{65}(1.0:65.0))
-    @test J isa Matrix{Float64} && J[end, end] == 130.0 && J[1, 2] == 0.0
-    @test_throws ArgumentError build_function(f; force_SA = true)
+    Base.include_string(src, sprint(io -> generate_julia(large, io; module_name = :Large)))
+    J = @test_logs (:warn, r"1089") Base.invokelatest(() -> (getglobal(src, :Large).diagonal(s); getglobal(src, :Large).diagonal(s)))
+    @test J isa Matrix{Float64} && J[end, end] == 66.0
+    @test_throws ArgumentError build_function(large; force_SA = true)
 end
 
 # A random pattern for a 3-by-3 input, from a mask of 9 entries with at least one nonzero.

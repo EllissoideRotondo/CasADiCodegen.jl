@@ -26,7 +26,7 @@ SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 [extensions]
 CasADiCodegenChainRulesCoreExt = "ChainRulesCore"
 CasADiCodegenDifferentiationInterfaceExt = ["ADTypes", "DifferentiationInterface"]
-CasADiCodegenOptimizationBaseExt = ["OptimizationBase", "SciMLBase"]
+CasADiCodegenOptimizationBaseExt = ["DifferentiationInterface", "OptimizationBase", "SciMLBase"]
 CasADiCodegenSciMLBaseExt = "SciMLBase"
 CasADiCodegenSparseArraysExt = "SparseArrays"
 
@@ -42,7 +42,7 @@ NaNMath = "1.1"
 OptimizationBase = "5"
 PrecompileTools = "1"
 RuntimeGeneratedFunctions = "0.5"
-SciMLBase = "2, 3"
+SciMLBase = "3"
 SparseArrays = "1"
 SpecialFunctions = "2"
 StaticArrays = "1"

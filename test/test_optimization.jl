@@ -60,6 +60,22 @@ solved(solver; arguments...) = solver(Dict{String,Any}(String(key) => value for 
     end
 end
 
+# A solver that takes first derivatives only gets no code for the Hessians: their dense
+# form has one n×n matrix per constraint, which for a large problem cannot be built.
+@testset "a solver of the first order gets no Hessians" begin
+    v, w = MX.sym("v", 2), MX.sym("w", 2)
+    solver = C.nlpsol("nearest", "ipopt", Dict("x" => v, "p" => w, "f" => C.sumsqr(v - w), "g" => v[1] + v[2]))
+    first_order = ipopt("hessian_approximation" => "limited-memory")
+    functions = K.optimization_functions(K.optimization_model(solver); hessians = K.needs_hessians(first_order))
+    @test functions.hess === nothing && functions.cons_h === nothing
+    q, c = MX.sym("q", 2), MX.sym("c")
+    r = solved(solver; x0 = MX(C.DM([0.0, 0.0])), p = q, lbg = c, ubg = c)
+    f = CasADiCodegen.Function("f", [q, c], [r["x"], r["lam_g"]])
+    x, lam_g = evaluated(native(f; solvers = Solvers(optimization = first_order)), f, [[0.7, -0.2], [2.0]])
+    @test x ≈ [1.45, 0.55] rtol = 1e-8
+    @test lam_g ≈ [0.7 - 0.2 - 2.0] rtol = 1e-6
+end
+
 # The same objective with an upper bound u on x1 below q1: the bound is active
 # with the multiplier 2 (q1 - u), and the constraint x1 + x2 <= 100 is not.
 @testset "active bound and constraint that is not active" begin
@@ -94,7 +110,8 @@ end
     v, w = MX.sym("v", 2), MX.sym("w", 2)
     solver = C.nlpsol("nearest", "ipopt", Dict("x" => v, "p" => w, "f" => C.sumsqr(v - w), "g" => v[1] + v[2]))
     problem = SciMLBase.OptimizationProblem(solver, [0.0, 0.0], [0.7, -0.2]; lbg = [2.0], ubg = [2.0])
-    solution = SciMLBase.solve(problem, ipopt())
+    # The function holds its derivatives, so Optimization.jl logs no warning about automatic differentiation.
+    solution = @test_logs SciMLBase.solve(problem, ipopt())
     @test SciMLBase.successful_retcode(solution.retcode)
     @test solution.u ≈ [1.45, 0.55] rtol = 1e-9
     # Ipopt takes the Hessian of the Lagrange function of the sparse form, which has no Hessians of the constraints.
@@ -106,6 +123,52 @@ end
     rosenbrock = CasADiCodegen.Function("rosenbrock", [z], [(1 - z[1])^2 + 100 * (z[2] - z[1]^2)^2])
     free = SciMLBase.OptimizationProblem(SciMLBase.OptimizationFunction(rosenbrock; sparse = true), [-1.2, 1.0])
     @test SciMLBase.solve(free, ipopt()).u ≈ [1.0, 1.0] rtol = 1e-9
+end
+
+# The extension for OptimizationBase.jl gives a solver the lag_h(h, x, σ, μ[, p]) of a SciML function of
+# this package. The objective q1 x1² + q2 x2² - 2 x1 - 2 x2 has a Hessian that depends on q; on the line
+# x1 + x2 = 2 its least value is at x = 2 w / (w1 + w2) with w = 1 ./ q, and without the constraint at w.
+@testset "lag_h of the problem in OptimizationBase.jl" begin
+    ext = Base.get_extension(CasADiCodegen, :CasADiCodegenOptimizationBaseExt)
+    OptimizationBase = OptimizationIpopt.OptimizationBase
+    # The extension rebuilds an instantiated function from these keywords; a release of SciMLBase.jl that
+    # changes the fields of OptimizationFunction must fail here, not in the solve of a user.
+    @test Set(fieldnames(SciMLBase.OptimizationFunction)) == Set((:f, :adtype, ext.KEYWORDS...))
+    ambiguous = Test.detect_ambiguities(ext, OptimizationBase, SciMLBase, OptimizationIpopt)
+    @test isempty(filter(pair -> any(m -> m.module === ext, pair), ambiguous))
+    x, q = SX.sym("x", 2), SX.sym("q", 2)
+    objective = CasADiCodegen.Function("objective", [x, q], [q[1] * x[1]^2 + q[2] * x[2]^2 - 2 * x[1] - 2 * x[2]])
+    line = CasADiCodegen.Function("line", [x, q], [x[1] + x[2]])
+    f = SciMLBase.OptimizationFunction(objective, line; sparse = true)
+    @test f isa ext.WithLagrangeHessian && !(SciMLBase.OptimizationFunction(objective, line) isa ext.WithLagrangeHessian)
+    nearest(q) = 2 ./ q ./ sum(1 ./ q)
+    on_line(p) = SciMLBase.OptimizationProblem(f, [0.0, 0.0], p; lcons = [2.0], ucons = [2.0])
+    problem = on_line([2.0, 4.0])
+    @test SciMLBase.solve(problem, ipopt()).u ≈ nearest([2.0, 4.0]) rtol = 1e-9
+    # A solve with new parameters takes the steps of a new problem with them, which a stale Hessian would change.
+    same(solution, p) = (fresh = SciMLBase.solve(on_line(p), ipopt()); solution.u == fresh.u && solution.stats.iterations == fresh.stats.iterations)
+    problem.p .= [1.0, 3.0]
+    @test same(SciMLBase.solve(problem, ipopt()), [1.0, 3.0])
+    @test same(SciMLBase.solve(SciMLBase.remake(problem; p = [3.0, 0.5]), ipopt()), [3.0, 0.5])
+    cache = SciMLBase.init(problem, ipopt())
+    SciMLBase.solve!(cache)
+    SciMLBase.reinit!(cache; p = [0.5, 2.0])
+    @test same(SciMLBase.solve!(cache), [0.5, 2.0])
+    problem.p .= [4.0, 1.0]
+    @test same(SciMLBase.solve!(SciMLBase.init(problem, ipopt())), [4.0, 1.0])
+    # OptimizationMOI.jl calls grad(G, x) and lag_h(h, x, σ, μ) without p after a reinit!, which replaces the p of the cache.
+    reinit = OptimizationBase.ReInitCache([0.0, 0.0], [2.0, 4.0])
+    instantiated = OptimizationBase.instantiate_function(problem.f, reinit, problem.f.adtype, 1)
+    reinit.p = [3.0, 0.5]
+    without, with, gradient = zeros(2), zeros(2), zeros(2)
+    instantiated.lag_h(without, [0.3, 0.1], 1.0, [0.5])
+    instantiated.lag_h(with, [0.3, 0.1], 1.0, [0.5], [3.0, 0.5])
+    instantiated.grad(gradient, [0.3, 0.1])
+    @test without == with == [6.0, 1.0]
+    @test gradient ≈ [-0.2, -1.9]
+    # With no constraint, the solver calls lag_h with no multiplier μ.
+    free = SciMLBase.OptimizationProblem(SciMLBase.OptimizationFunction(objective; sparse = true), [0.0, 0.0], [2.0, 4.0])
+    @test SciMLBase.solve(free, ipopt()).u ≈ [0.5, 0.25] rtol = 1e-9
 end
 
 # x^4 / 4 - q x has its least value at the cube root of q.

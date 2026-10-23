@@ -231,7 +231,7 @@ function sensitivity_function(dae::C.Function)
     point, direction = symbols(""), symbols("d")
     values = as_list(C.call(dae, point, false, false))
     slope(value) = reduce(+, (C.jtimes(value, point[i], direction[i]) for i in 2:5 if C.nnz(C.sparsity(point[i])) > 0); init = MX(C.DM(zeros(size(value)...))))
-    Front.Function("d" * C.name(dae), [point; direction[2:5]], [slope(column_of(values[k])) for k in 1:3])
+    Front.Function("d" * C.name(dae), MX[point; direction[2:5]], [slope(column_of(values[k])) for k in 1:3])
 end
 
 """
@@ -346,7 +346,7 @@ function event_functions(model, transition)
     u, p, t = MX.sym("u", model.nx + model.nz + model.nq), MX.sym("p", model.np + model.nu), MX.sym("t")
     i, z = MX.sym("index"), MX.sym("z", model.nz)
     known = nz1 == 0 ? MX[] : MX[consistent]
-    core = Front.Function(model.name * "_jump", MX[time; point[2:5]; index; reduce(vcat, seeds; init = MX[]); known], [C.vertcat(results); shifts])
+    core = Front.Function(model.name * "_jump", MX[time; point[2:5]; index; reduce(vcat, seeds; init = MX[]); known], MX[C.vertcat(results); shifts])
     at = model_block(model, u, p, 0)
     called = as_list(C.call(core, MX[t; at; i; reduce(vcat, (model_block(model, u, p, k) for k in 1:directions); init = MX[]);
                                      nz1 == 0 ? MX[] : MX[piece(z, 0, C.sparsity_in(dae, 2))]], false, false))
@@ -564,13 +564,30 @@ function optimizer end
     GeneratedObjective
 
 The supertype of the objective of a `SciMLBase.OptimizationFunction` that the extension for
-SciMLBase.jl makes. The extension for OptimizationBase.jl passes the `lag_h` and the
-`lag_hess_prototype` of such a function on to the solvers.
+SciMLBase.jl makes. The extension for OptimizationBase.jl declares the derivatives of such a
+function, so that Optimization.jl does not ask for automatic differentiation.
 """
 abstract type GeneratedObjective end
 
 """
-    optimization_functions(model) -> NamedTuple
+    GeneratedLagrangeHessian
+
+The supertype of the `lag_h(h, x, σ, μ, p)` of a `SciMLBase.OptimizationFunction` that the
+extension for SciMLBase.jl makes. The extension for OptimizationBase.jl passes such a `lag_h`
+and its `lag_hess_prototype` on to the solvers.
+"""
+abstract type GeneratedLagrangeHessian end
+
+"""
+    needs_hessians(alg) -> Bool
+
+Return whether the SciML algorithm `alg` calls the Hessians of the objective or of the
+constraints, from the traits of SciMLBase.jl. The method is in the extension for SciMLBase.jl.
+"""
+function needs_hessians end
+
+"""
+    optimization_functions(model; hessians = true) -> NamedTuple
 
 Return generated code for the problem of a solver of CasADi (see `optimization_model`), as
 functions on nonzeros of the unknowns `x` and the parameters `p`, which are column vectors:
@@ -579,9 +596,9 @@ functions on nonzeros of the unknowns `x` and the parameters `p`, which are colu
 - `cons`, `cons_j`: the constraints and their Jacobian;
 - `cons_h`: one result per constraint, the Hessian of that constraint.
 
-Each matrix is dense.
+Each matrix is dense. With `hessians = false`, `hess` and `cons_h` are `nothing`.
 """
-function optimization_functions(model)
+function optimization_functions(model; hessians::Bool = true)
     x, p = MX.sym("x", model.nx), MX.sym("p", model.np)
     arguments = MX[piece(x, 0, C.sparsity_in(model.objective, 0)), piece(p, 0, C.sparsity_in(model.objective, 1))]
     value(f) = column_of(as_list(C.call(f, arguments, false, false))[1])
@@ -591,9 +608,10 @@ function optimization_functions(model)
         Emitted(build_function(g; nonzeros = true, expression = Val{false}), g, :nonzeros)
     end
     hessian(value) = Front.hessian(value, x)
-    (; cost = emitted("cost", [cost]), grad = emitted("grad", [C.gradient(cost, x)]), hess = emitted("hess", [hessian(cost)]),
+    (; cost = emitted("cost", [cost]), grad = emitted("grad", [C.gradient(cost, x)]),
+       hess = hessians ? emitted("hess", [hessian(cost)]) : nothing,
        cons = emitted("cons", [cons]), cons_j = emitted("cons_j", [C.jacobian(cons, x)]),
-       cons_h = emitted("cons_h", MX[hessian(cons[j]) for j in 1:model.ng]))
+       cons_h = hessians ? emitted("cons_h", MX[hessian(cons[j]) for j in 1:model.ng]) : nothing)
 end
 
 """
@@ -648,7 +666,8 @@ function solver_conic(callee::C.Function)
     label = "solver \"$(model.name)\""
     @requires !isempty(methods(optimizer)) "$label: a solver of the SciML ecosystem needs SciMLBase.jl; load it"
     nx, np, ng = model.nx, model.np, model.ng
-    solve = optimizer(model.name, solver.alg, optimization_functions(model), (nx, np, ng), solver.options)
+    solve = optimizer(model.name, solver.alg, optimization_functions(model; hessians = needs_hessians(solver.alg)), (nx, np, ng),
+                      solver.options)
     shapes_in, shapes_out = Tuple{Vararg{Int}}[(nx,), (np,), (nx,), (nx,), (ng,), (ng,)], Tuple{Vararg{Int}}[(nx,), (nx,), (ng,)]
     found = julia_function(solve, model.name * "_solve", 6, shapes_in, shapes_out, nothing)
     inputs = input_symbols(callee)
@@ -668,7 +687,8 @@ function solver_optimization(callee::C.Function)
     @requires !isempty(methods(optimizer)) "$label: a solver of the SciML ecosystem needs SciMLBase.jl; load it"
     @requires all(C.is_dense(C.sparsity_in(callee, i)) && C.size2_in(callee, i) <= 1 for i in 0:1) "$label: the unknowns and the parameters must be dense column vectors"
     nx, np, ng = model.nx, model.np, model.ng
-    solve = optimizer(model.name, solver.alg, optimization_functions(model), (nx, np, ng), solver.options)
+    solve = optimizer(model.name, solver.alg, optimization_functions(model; hessians = needs_hessians(solver.alg)), (nx, np, ng),
+                      solver.options)
     shapes_in, shapes_out = Tuple{Vararg{Int}}[(nx,), (np,), (nx,), (nx,), (ng,), (ng,)], Tuple{Vararg{Int}}[(nx,), (nx,), (ng,)]
     found = julia_function(solve, model.name * "_solve", 6, shapes_in, shapes_out, nothing)
     inputs = input_symbols(callee)

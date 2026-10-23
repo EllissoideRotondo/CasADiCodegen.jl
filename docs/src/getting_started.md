@@ -80,9 +80,12 @@ typeof(J)
 ```
 
 `force_SA = true` makes the out-of-place function return static arrays for any
-argument. Static arrays suit small outputs only: when the outputs have more than 4096
-elements in all, such as the Jacobian of a large model, the out-of-place function
-returns ordinary arrays, and `force_SA = true` throws an `ArgumentError`. The in-place
+argument. Static arrays suit small outputs only: when the outputs have more than 1024
+elements in all, such as the Jacobian of a model of more than 32 states, the method with
+static arrays compiles more slowly, and for a dense Jacobian it also runs more slowly
+than the method with ordinary arrays. The out-of-place function then
+returns ordinary arrays, with a warning at the first call with a static array, and
+`force_SA = true` throws an `ArgumentError`. The in-place
 function also accepts `MVector` and `MMatrix`.
 
 ## Fill a sparse Jacobian

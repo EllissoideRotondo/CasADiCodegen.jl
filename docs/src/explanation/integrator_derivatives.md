@@ -14,15 +14,11 @@ Jacobian is a second integrator for the state with its sensitivity matrices, who
 right side CasADi builds symbolically. Each of these integrators takes the initial state and the parameters
 of the first one, and integrates the derivatives by those only, so the number of
 states grows by the same factor at each order: 4 states and 1 parameter give 24
-states for the Jacobian and 144 for the second derivative. The generated code reuses
-the cache of the solver in each Julia task, and the table gives one measurement for
-the planar two-body problem.
-
-| Outputs | Time per call | Memory per call |
-|---|---|---|
-| Final state | 22 µs | 0.7 kB |
-| Final state and its Jacobians by the initial state and by the parameter | 59 µs | 3.6 kB |
-| The above and the second derivative by the initial state | 164 µs | 17 kB |
+states for the Jacobian and 144 for the second derivative. The cost of a call grows
+with the number of states that the solver integrates, so that a second derivative
+costs several times a Jacobian. Each Julia task keeps the state of the solver after its
+first call and uses it again, so that a later call in the same task integrates without
+setting up the solver again.
 
 An arc is one integration between two times. When a generated function needs the
 final state and its Jacobian, the call for the state runs the integration with the
@@ -33,18 +29,6 @@ the integration with the sensitivities agrees with the state of an integration
 without sensitivities to the tolerances of the solver and not to the last digit,
 because the sensitivities take part in the step size control, as the partial
 derivatives of dual numbers do.
-
-The table below compares one day of an Earth orbit perturbed by the Moon and the
-Sun, whose positions come from tables of polynomials that two callbacks evaluate
-(see [Call a Julia function from the model](@ref)), with `Vern9` and tolerances
-of 1e-12, against the same model in plain Julia, where
-ForwardDiff.jl gives the state transition matrix, which is the Jacobian of the final
-state by the initial state.
-
-| Outputs | CasADiCodegen.jl | Plain Julia |
-|---|---|---|
-| Final state | 80 µs | 76 µs |
-| Final state and state transition matrix | 143 µs | 172 µs with ForwardDiff.jl |
 
 ## A vector of output times
 
@@ -61,21 +45,13 @@ state starts again from its value of the forward run. The derivatives of that re
 derivative come from the forward sensitivities, so the second order costs the same with
 and without `adjoint`.
 
-The table compares the least-squares fit of the Lotka-Volterra model to 101 samples
-on the times 0, 0.1, ..., 10, with 4 parameters, `Vern9` and tolerances of 1e-10,
-against ForwardDiff.jl through one SciML `solve` with `saveat`. Each value was
-measured once on a shared machine; the loss and its derivatives agreed with the
-ForwardDiff.jl values to 5e-11 relative.
-
-| Outputs | Forward sensitivities | `adjoint = true` | ForwardDiff.jl |
-|---|---|---|---|
-| Loss | 59 µs | 58 µs | 65 µs |
-| Loss and gradient | 97 µs | 196 µs | 113 µs |
-| Loss and Hessian | 383 µs | 394 µs | 302 µs |
-
-With 4 parameters the forward sensitivities give the cheaper gradient, because the
-adjoint run must stop at each of the 101 output times; the adjoint equations give the
-cheaper gradient when the parameters are many more than the states.
+For a gradient, the choice between the two depends on the numbers of parameters,
+states and output times. The forward sensitivities add one column of states for each
+initial state and each parameter, whereas the backward run integrates one vector of
+multipliers whatever the number of parameters but must stop at each output time to take
+its seed. With few parameters and many output times, as in the fit of a model to a
+series of samples, the forward sensitivities give the cheaper gradient; the adjoint
+equations give the cheaper gradient when the parameters are many more than the states.
 
 ## Free times
 

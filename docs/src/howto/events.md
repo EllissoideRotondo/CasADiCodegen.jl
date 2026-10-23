@@ -93,8 +93,7 @@ column `i` applies after an event of function `i`. The function returns one more
 result, `ie`, which holds for each event the index `i`, from 1, of the function that
 changed its sign; when two functions change their sign in the same root search, the
 first one counts. CasADi differentiates the event time as the root of that function,
-so the derivatives are those of the surface that the body reached. Several event
-functions need SciMLBase.jl 3 or later.
+so the derivatives are those of the surface that the body reached.
 
 We model a ball in a box with drag: it bounces on the floor `x = 0`, where the speed
 `vx` changes its sign, and between two walls `y = ±1.5`, where `vy` does. Each event

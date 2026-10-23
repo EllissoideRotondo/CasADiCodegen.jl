@@ -70,11 +70,11 @@ function directional(d::Differentiable, kind::Symbol)
             y = as_list(f(x...))
             g = if kind === :pushforward
                 changes = [MX.sym("d_" * C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
-                Front.Function(C.name(f) * "_pushforward", [x; changes],
-                               [y; [reduce(+, [Front.jtimes(r, a, da, false) for (a, da) in zip(x, changes)]) for r in y]])
+                Front.Function(C.name(f) * "_pushforward", MX[x; changes],
+                               MX[y; [reduce(+, [Front.jtimes(r, a, da, false) for (a, da) in zip(x, changes)]) for r in y]])
             else
                 seeds = [MX.sym("adj_" * C.name_out(f, o), C.sparsity_out(f, o)) for o in 0:C.n_out(f)-1]
-                Front.Function(C.name(f) * "_pullback", [x; seeds],
+                Front.Function(C.name(f) * "_pullback", MX[x; seeds],
                                [reduce(+, [Front.jtimes(r, a, seed, true) for (r, seed) in zip(y, seeds)]) for a in x])
             end
             build_function(g; expression = Val{false}, d.options...)[1]

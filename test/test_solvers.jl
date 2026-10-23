@@ -172,6 +172,8 @@ end
 const DAE_SOLVER = Solver(Rodas5P(); abstol = 1e-11, reltol = 1e-11, specialize = SciMLBase.AutoSpecialize)
 dae_exact(x0, rate) = (final = x0[1] * exp(-rate); [final, x0[2] + x0[1] * (1 - exp(-rate)) / rate, rate * final])
 
+# The set takes more than 15 s: its first evaluation compiles Rodas5P for a mass matrix, and the adjoint
+# integrator and the event each compile another solver; each part is the one case of its behavior.
 @testset "integrator of this package with algebraic states" begin
     y, p = MX.sym("y", 3), MX.sym("p")
     model = Dict("x" => y, "p" => p, "ode" => C.vertcat([-y[3], y[1], y[3] - p * y[1]]))
@@ -231,10 +233,13 @@ dae_exact(x0, rate) = (final = x0[1] * exp(-rate); [final, x0[2] + x0[1] * (1 - 
         exact(v) = (x = refilled(1.6, v[1], v[3]); [x, v[3] * x, onset(v[1], v[3]), onset(v[1], v[3]) + log(2) / v[3]])
         at = [1.0, 0.3, 1.1]                      # the second number is a guess of the algebraic state
         @test all_agree(evaluated(native(n), n, [at[1:2], at[3:3]]), [exact(at)[1:2], exact(at)[3:4], vec(ForwardDiff.jacobian(exact, at))]; rtol = 1e-7)
-        # Dual numbers through the generated code: the derivative of the first event time.
-        times = build_function(CasADiCodegen.Function("e", [w, p], [out[2]]); nonzeros = true, expression = Val{false})
-        event(v) = (res = [zeros(eltype(v), 2)]; times(res, (v[1:2], v[3:3])); res[1][1])
-        @test ForwardDiff.gradient(event, at) ≈ ForwardDiff.gradient(v -> onset(v[1], v[3]), at) rtol = 1e-7
+        # Exhaustive tier, because the solver compiles again for dual numbers: dual numbers through the
+        # generated code give the derivative of the first event time. The integrator group checks dual numbers through an event.
+        if EXHAUSTIVE
+            times = build_function(CasADiCodegen.Function("e", [w, p], [out[2]]); nonzeros = true, expression = Val{false})
+            event(v) = (res = [zeros(eltype(v), 2)]; times(res, (v[1:2], v[3:3])); res[1][1])
+            @test ForwardDiff.gradient(event, at) ≈ ForwardDiff.gradient(v -> onset(v[1], v[3]), at) rtol = 1e-7
+        end
     end
 end
 

@@ -75,6 +75,12 @@ SciMLBase.NonlinearFunction(::CasADiCodegen.Function)
 SciMLBase.OptimizationFunction(::CasADiCodegen.Function, ::Union{Nothing,CasADiCodegen.Function})
 ```
 
+## Constraints of an Opti object
+
+```@docs
+CasADiCodegen.bounded
+```
+
 ## Linearization and the order of equations
 
 ```@docs

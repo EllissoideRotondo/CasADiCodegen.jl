@@ -24,8 +24,8 @@ A, B, C, D = lin([0.0, 0.0], [0.0], [9.81, 2.0])
 A
 ```
 
-As for any function of [`build_function`](@ref), `lin` returns a matrix of one column,
-such as `B` for one input, as a `Vector`. `lin!(out, (x, u, p))` writes the four
+`lin` returns each of the four matrices as a `Matrix`, also `B`, which has one column for
+one input. `lin!(out, (x, u, p))` writes the four
 matrices into the arrays of the tuple `out`, which are dense by default. For a large model
 with a sparse Jacobian, give `sparse = true`, so that `lin!` writes into `SparseMatrixCSC` arrays with the sparsity patterns of the outputs of
 [`CasADiCodegen.linearization_function`](@ref):

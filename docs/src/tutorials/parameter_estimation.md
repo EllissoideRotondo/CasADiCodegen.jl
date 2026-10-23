@@ -68,14 +68,12 @@ The loss is the mean squared difference between the solution for the parameters
 2 by 101 symbol `d` for the data, so that the data enter the generated code as an
 argument; a fit to other data then reuses the same code, whereas data written into the
 graph as a `DM` would need a new function. Calling `F` on symbols places the
-integration in the graph of the loss; its initial state is then a constant `MX`, and
-`sumsqr`, the sum of the squares, comes from the module `CasADiCodegen.C` of the CasADi
-front end:
+integration in the graph of the loss, and its initial state is then a constant `MX`:
 
 ```@example estimation
 θ = MX.sym("θ", 4)
 d = MX.sym("d", 2, length(times))
-loss = CasADiCodegen.C.sumsqr(F(MX(DM([1.0, 1.0])), θ) - d) / length(data)
+loss = sum(abs2, F(MX(DM([1.0, 1.0])), θ) - d) / length(data)
 objective = CasadiFunction("loss", [θ, d], [loss])
 nothing # hide
 ```
@@ -117,17 +115,15 @@ problem = SciMLBase.OptimizationProblem(f, [1.2, 0.8, 2.5, 0.8], data; lb = fill
 nothing # hide
 ```
 
-We solve it with Ipopt and its limited-memory approximation of the Hessian (L-BFGS),
-silence the output of Ipopt with the options `print_level` and `sb`, and pass
-`verbose = false` to `solve`, since Optimization.jl otherwise warns that the problem
-declares no automatic differentiation:
+We solve it with Ipopt and its limited-memory approximation of the Hessian (L-BFGS), and
+silence the output of Ipopt with the options `print_level` and `sb`:
 
 ```@example estimation
 using OptimizationIpopt: IpoptOptimizer
 
 quiet = Dict{String,Any}("print_level" => 0, "sb" => "yes")
 lbfgs = IpoptOptimizer(; hessian_approximation = "limited-memory", additional_options = quiet)
-solution = SciMLBase.solve(problem, lbfgs; verbose = false)
+solution = SciMLBase.solve(problem, lbfgs)
 solution.u
 ```
 
@@ -148,7 +144,7 @@ options of Ipopt, which use the Hessian:
 ```@example estimation
 f_exact = SciMLBase.OptimizationFunction(objective)
 problem_exact = SciMLBase.OptimizationProblem(f_exact, [1.2, 0.8, 2.5, 0.8], data; lb = fill(0.1, 4), ub = fill(3.0, 4))
-solution_exact = SciMLBase.solve(problem_exact, IpoptOptimizer(; additional_options = quiet); verbose = false)
+solution_exact = SciMLBase.solve(problem_exact, IpoptOptimizer(; additional_options = quiet))
 solution_exact.u, solution_exact.stats.iterations
 ```
 

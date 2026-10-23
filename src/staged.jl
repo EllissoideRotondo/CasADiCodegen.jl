@@ -107,9 +107,9 @@ function staged_algorithm(f::C.Function)
     end
     isempty(calls) && return nothing
     from, placeholders, actual = MX[], MX[], MX[]
-    pure(name, expressions) = C.expand(C.Function(name, [inputs; placeholders],
+    pure(name, expressions) = C.expand(C.Function(name, MX[inputs; placeholders],
         isempty(from) ? expressions : as_list(C.graph_substitute(expressions, from, placeholders))))
-    apply(p) = as_list(p([inputs; actual]...))
+    apply(p) = as_list(p(MX[inputs; actual]...))
     stages = Stage[]
     try
         for k in calls

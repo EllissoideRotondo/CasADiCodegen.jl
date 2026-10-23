@@ -156,6 +156,6 @@ solution = SciMLBase.solve(problem, SimpleNewtonRaphson())
 solution.u
 ```
 
-The generated static arrays have at most 4096 elements, so that this form with the
-Jacobian allows at most 64 unknowns; for a larger system, `inplace = false` throws an
+The generated static arrays have at most 1024 elements, so that this form with the
+Jacobian allows at most 32 unknowns; for a larger system, `inplace = false` throws an
 `ArgumentError`, and the in-place form serves with a dense or a sparse Jacobian.

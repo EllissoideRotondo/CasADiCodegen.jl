@@ -46,7 +46,7 @@ the three problems can share it:
 
 ```@example dynopt
 function collocate!(g, f, x, xc, u, xnext, Δt)
-    z = [x; xc]                                  # the values that the polynomial passes through
+    z = [x, xc...]                               # the values that the polynomial passes through
     for j in 1:3
         push!(g, Δt * f(xc[j], u) - sum(slope[r, j] * z[r] for r in 1:4))
     end

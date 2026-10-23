@@ -2,6 +2,7 @@
 import LinearAlgebra
 import SpecialFunctions
 using SparseArrays: SparseMatrixCSC, nnz
+using StaticArrays: SVector, SMatrix
 
 module ApiUser
 using CasADiCodegen
@@ -28,7 +29,7 @@ end
 
 @testset "Base functions work on symbols" begin
     x, y = SX.sym("x"), SX.sym("y")
-    unary = [asinh, acosh, atanh, log1p, expm1, log10, log2, abs2, inv,
+    unary = [asinh, acosh, atanh, log1p, expm1, log10, log2, exp2, abs2, inv,
              SpecialFunctions.erf, SpecialFunctions.erfinv]
     @testset "$f" for f in unary
         a = f in (acosh,) ? 1.7 : 0.4
@@ -85,6 +86,79 @@ end
         values = C.nonzeros.(n(C.DM(a), C.DM([1.0 2.0; 3.0 4.0])))
         @test values[1][1] ≈ LinearAlgebra.norm(a) && values[2][1] ≈ sqrt(30)
     end
+end
+
+"The value of the expression `e`, a CasADi matrix or a Julia vector of symbols, at the numbers `values` of `symbols`, as a matrix."
+function numeric(e, symbols, values)
+    f = CasADiCodegen.Function("t", collect(symbols), [e isa AbstractVector ? vertcat(e) : e])
+    Matrix(f(map(C.DM, values)...))
+end
+
+# The oracle is the same Julia code on numbers.
+@testset "Julia array code on symbols, $T" for T in (SX, MX)
+    x, M = T.sym("x", 3), T.sym("M", 2, 3)
+    xv, Mv = [0.5, -1.25, 2.0], [1.0 -2.0 0.5; 3.0 0.25 -1.0]
+    value(e) = numeric(e, (x, M), (xv, Mv))
+    v = [x[1], x[2], x[3]]
+    # Reductions of a CasADi matrix: over all its elements, along one dimension, or by iteration over the elements.
+    @test only(value(sum(x))) ≈ sum(xv) && value(sum(M; dims = 1)) ≈ sum(Mv; dims = 1) && value(sum(M; dims = 2)) ≈ sum(Mv; dims = 2)
+    @test only(value(sum(abs2, M))) ≈ sum(abs2, Mv) && only(value(maximum(x))) == maximum(xv) && only(value(minimum(M))) == minimum(Mv)
+    @test only(value(prod(x))) ≈ prod(xv)
+    # Broadcasting mixes CasADi matrices, Julia arrays of symbols and numbers, and gives a CasADi matrix.
+    @test vec(value(x .+ v .* 2 .- [1.0, 2.0, 3.0])) ≈ xv .+ xv .* 2 .- [1.0, 2.0, 3.0]
+    # A column and a row broadcast to a matrix, which CasADi does not do on whole matrices.
+    @test value(M .+ transpose(x)) ≈ Mv .+ transpose(xv) && value(x .* [1.0 2.0]) ≈ xv .* [1.0 2.0]
+    # A function that is not elementwise on a whole matrix applies to each element.
+    @test value(inv.(M)) ≈ inv.(Mv) && value((u -> u * u).(M)) ≈ Mv .* Mv
+    # In-place broadcasting into a Julia array of symbols and into a CasADi matrix.
+    a, an = zeros(T, 5), zeros(5)
+    a[2:4] .+= 2 .* x
+    an[2:4] .+= 2 .* xv
+    @views a[1:3] .-= x ./ 4
+    @views an[1:3] .-= xv ./ 4
+    @test vec(value(a)) ≈ an
+    y = T(2, 3)
+    y .= M .* 2 .+ 1
+    @test value(y) ≈ Mv .* 2 .+ 1
+    # Arithmetic with Julia arrays gives a CasADi matrix.
+    @test vec(value(M * v)) ≈ Mv * xv && value([1.0 2.0; 0.0 1.0] * M) ≈ [1.0 2.0; 0.0 1.0] * Mv
+    @test vec(value(x + 2v)) ≈ 3xv && only(value(LinearAlgebra.dot(v, x))) ≈ xv' * xv
+    # Numbers promote to symbols, and a vector of indices selects elements.
+    @test [x[1], 1.0] isa Vector{T}
+    @test vec(value(x[[3, 1]])) == xv[[3, 1]] && value(M[[2, 1], 2:3]) == Mv[[2, 1], 2:3]
+    @test vec(value(x[[true, false, true]])) == xv[[true, false, true]]
+end
+
+@testset "concatenation, zero, one, norm and init on symbols, $T" for T in (SX, MX)
+    x, M = T.sym("x", 3), T.sym("M", 2, 3)
+    xv, Mv = [0.5, -1.25, 2.0], [1.0 -2.0 0.5; 3.0 0.25 -1.0]
+    value(e) = numeric(e, (x, M), (xv, Mv))
+    v, vv = [x[1], x[2]], xv[1:2]
+    # A Julia vector of symbols, numbers or columns joins a CasADi matrix as a column.
+    @test [x; v] isa T && vec(value([x; v; 2.0])) ≈ [xv; vv; 2.0]
+    @test vec(value([x; [x, 1.0]])) ≈ [xv; xv; 1.0]
+    @test value([x[1:2] v]) ≈ [vv vv] && value([x[1:2] v; v x[1:2]]) ≈ [vv vv; vv vv]
+    # Commas make a list of matrices, as the arguments of a function take them.
+    @test [x, M] isa Vector{T} && length([x, M]) == 2
+    @test_throws ArgumentError [x; [M]]
+    # zero and one of a matrix have its shape; of the type, they are scalars.
+    @test value(zero(M)) == zero(Mv) && value(zero(M) .+ M) == Mv && size(zero(T)) == (1, 1)
+    @test value(one(M[:, 1:2])) == one(Mv[:, 1:2]) && only(value(one(x[1]))) == 1.0
+    # Regression: zero of a scalar stays a scalar that converts to a number.
+    @test Float64(zero(T(3.0))) == 0.0
+    @test_throws DimensionMismatch one(M)
+    @test only(value(LinearAlgebra.norm(v))) ≈ LinearAlgebra.norm(vv)
+    @test vec(value(exp2(x))) ≈ exp2.(xv) && vec(value(exp2.(x))) ≈ exp2.(xv)
+    @test only(value(sum(x; init = 1.5))) ≈ sum(xv; init = 1.5) && value(sum(M; dims = 2, init = 1.0)) ≈ sum(Mv; dims = 2, init = 1.0)
+    @test only(value(sum(abs2, M; init = 2.0))) ≈ sum(abs2, Mv; init = 2.0)
+end
+
+@testset "a DM is a matrix of numbers to Julia code" begin
+    Mv = [1.0 -2.0 0.5; 3.0 0.25 -1.0]
+    d = C.DM(Mv)
+    @test [a for a in d] == Mv && sum(d) == sum(Mv) && sum(abs2, d) == sum(abs2, Mv)
+    @test sum(d; dims = 1) == sum(Mv; dims = 1) && maximum(d) == maximum(Mv)
+    @test [C.DM([1.0, 2.0]); [7.0, 8.0]] isa C.DM && vec(Matrix([C.DM([1.0, 2.0]); [7.0, 8.0]])) == [1.0, 2.0, 7.0, 8.0]
 end
 
 @testset "tools: operations of a function and the first NaN" begin
@@ -181,6 +255,9 @@ end
     A, B, Cm, D = lin(x0, u0, p0)
     @test A ≈ [0 1; -9.81*cos(0.3) 0] && B ≈ [0; 0.5;;]
     @test Cm ≈ [-0.7 0.3; 0 0] && D ≈ [0; 4.0;;]
+    # A matrix of one column, such as B for one input, is a matrix, also of static arrays.
+    @test B isa Matrix{Float64} && D isa Matrix{Float64}
+    @test lin(SVector(0.3, -0.7), SVector(2.0), SVector(9.81, 0.5))[2] isa SMatrix{2,1,Float64}
     # In place, and with `sparse` into the stored values of sparse matrices.
     out = (zeros(2, 2), zeros(2, 1), zeros(2, 2), zeros(2, 1))
     lin!(out, (x0, u0, p0))
@@ -191,4 +268,5 @@ end
     @test nnz(S[1]) == 2 && Matrix(S[1]) ≈ A && Matrix(S[4]) ≈ D
     g = CasadiFunction("g", [x, p], [x])
     @test_throws "must take the arguments (x, u, p)" CasADiCodegen.linearization(g, h)
+    @test_throws "linearization returns compiled functions" CasADiCodegen.linearization(f, h; expression = Val{true})
 end

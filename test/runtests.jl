@@ -6,7 +6,9 @@ using Test
 # the given groups only, and the environment variable CASADI_TEST_JOBS gives the
 # number of processes at the same time (the default is 6, or half of the
 # processor threads when that is less). With CASADI_TEST_VERBOSE set, each group
-# prints the time of each of its test sets.
+# prints the time of each of its test sets. With CASADI_TEST_EXHAUSTIVE set, the
+# groups also run the checks of the exhaustive tier (`EXHAUSTIVE` in helpers.jl):
+# slow cases of behaviors that the default run checks in a faster case.
 # The slowest groups come first, so that they do not start last.
 const GROUPS = ("integrator", "mx", "forms", "cache", "casadi", "emit", "nodes", "solvers", "optimization", "callback", "sciml", "root", "api", "rules", "traced")
 

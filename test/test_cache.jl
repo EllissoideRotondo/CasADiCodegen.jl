@@ -102,7 +102,7 @@ end
 written_nonzeros(owner, name, f, arguments) =
     Base.invokelatest((r, a) -> getfield(getfield(owner, name[1]), name[2])(r, a), [zeros(C.nnz_out(f, i - 1)) for i in 1:C.n_out(f)], arguments)
 
-@testset "integrators and rootfinders in a written module" begin
+@testset "an integrator in a written module" begin
     F = integrator("WF", Vern9(), two_body(), 0.0, 3.0; abstol = 1e-12, reltol = 1e-12, specialize = SciMLBase.AutoSpecialize)
     f = with_derivatives(F, 1)
     text = sprint(io -> generate_julia(f, io; module_name = :Orbit, name = :arc!))
@@ -111,8 +111,10 @@ written_nonzeros(owner, name, f, arguments) =
     emitted = ode_emitted(f, (ODE_X0, ODE_MU))
     @test written_nonzeros(src, (:Orbit, :arc_nonzeros!), f, (ODE_X0, ODE_MU)) == emitted
     @test Base.invokelatest((a, b) -> getfield(getfield(src, :Orbit), :arc)(a, b), ODE_X0, ODE_MU)[1] == emitted[1]
+end
 
-    # An event with adjoint derivatives and a rootfinder, in matrix code; the module above has the scalar code.
+# The set above writes an integrator in scalar code; this one writes an event, adjoint sensitivities and a rootfinder in matrix code.
+@testset "an event, adjoint sensitivities and a rootfinder in a written module" begin
     y, z, a = SX.sym("y", 2), MX.sym("z"), MX.sym("a")
     swing = Dict("x" => y, "ode" => vertcat([y[2], -y[1]]), "zero" => y[1])
     E = integrator("WE", Vern9(), swing; adjoint = true, direction = -1, TIGHT...)
@@ -126,16 +128,20 @@ written_nonzeros(owner, name, f, arguments) =
     text = sprint(io -> generate_julia(g, io; module_name = :Mixed, name = :mixed!, expand = false))
     src = Module()
     Base.include_string(src, text)
-    # A solver that ran before starts with its last step, so the numbers agree to its tolerance.
-    @test closeto(written_nonzeros(src, (:Mixed, :mixed_nonzeros!), g, ([1.0, 0.2],)), ode_emitted(g, ([1.0, 0.2],); expand = false), 1e-10)
+    # CasADi, which calls the integrators and the rootfinder as Julia functions, is the oracle.
+    @test closeto(written_nonzeros(src, (:Mixed, :mixed_nonzeros!), g, ([1.0, 0.2],)), casadi_eval(g, [1.0, 0.2]), 1e-9)
+end
 
-    # What a source file cannot hold: a solver that is a local function, and a call through CasADi.
+@testset "what a written module cannot hold" begin
+    # A solver that is a local function, and a call through CasADi.
+    y, y0 = SX.sym("y", 2), MX.sym("y0", 2)
+    swing = Dict("x" => y, "ode" => vertcat([y[2], -y[1]]))
     local_solver(rhs!, n, m) = (x0, q) -> x0
     x, p = SX.sym("x", 1), SX.sym("p", 1)
     H = CasADiCodegen.Codegen.ode_integrator("WH", Dict("x" => x, "p" => p, "ode" => -p * x), 0.0, 1.0, local_solver)
     x0, q = MX.sym("x0", 1), MX.sym("q", 1)
     @test_throws "named function" generate_julia(CasADiCodegen.Function("f", [x0, q], [H(x0, q)]), IOBuffer())
-    odd = integrator("WO", Vern9(), delete!(copy(swing), "zero"), 0.0, 1.0; TIGHT..., callback = Ref(1))
+    odd = integrator("WO", Vern9(), swing, 0.0, 1.0; TIGHT..., callback = Ref(1))
     @test_throws "a source file cannot hold the value" generate_julia(CasADiCodegen.Function("f", [y0], [odd(y0)]), IOBuffer())
 end
 

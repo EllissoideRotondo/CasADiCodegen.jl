@@ -356,19 +356,27 @@ end
     # Backward in time.
     @test closeto(ode_emitted(k, ([0.0, 1.0], [2.5], [4.0], [1.0])), [[2.5], [1.0], [0.0]], 1e-9)
 
-    # Dual numbers through the generated code, with the full specialization of the solver:
-    # the derivative of the event time by the initial state and the parameter.
-    D = integrator("drop", Vern9(), fall; TIGHT..., specialize = SciMLBase.FullSpecialize)
-    drop = build_function(CasADiCodegen.Function("d", [x0, q], [D(x0, q, MX(0.5), MX(20.0))[3]]); nonzeros = true, expression = Val{false})
-    event(v) = (res = [zeros(eltype(v), 1)]; drop(res, (v[1:2], v[3:3])); res[1][1])
-    @test isapprox(ForwardDiff.gradient(event, at[1:3]), ForwardDiff.gradient(v -> landing([v; 0.5]), at[1:3]); atol = 1e-8)
-
     # Limits: a column of event functions, and free times only.
     @test_throws ArgumentError integrator("e", Vern9(), merge(swing, Dict("zero" => horzcat([w, w]))); TIGHT...)
     @test_throws ArgumentError integrator("e", Vern9(), swing, 0.0, 1.0; TIGHT...)
     @test_throws ArgumentError integrator("e", Vern9(), swing, 0.0, [1.0, 2.0]; TIGHT...)
     @test_throws ArgumentError integrator("e", Vern9(), swing; TIGHT..., direction = 2)
     @test_throws ArgumentError integrator("e", Vern9(), swing; TIGHT..., interp_points = -1)
+end
+
+# Dual numbers through the generated code, with the full specialization of the solver: the derivative of
+# the time at which the falling body of the set above, without its quadrature, reaches the ground, by the
+# initial state and the gravity.
+# The solver compiles again for dual numbers.
+@testset "dual numbers through an event" begin
+    x, g = SX.sym("x", 2), SX.sym("g", 1)
+    fall = Dict("x" => x, "p" => g, "ode" => vertcat([x[2], -g[1]]), "zero" => x[1])
+    landing(v) = (v[2] + sqrt(v[2]^2 + 2 * v[3] * v[1])) / v[3]          # v = (h0, v0, g), from the time 0
+    D = integrator("drop", Vern9(), fall; TIGHT..., specialize = SciMLBase.FullSpecialize)
+    x0, q = MX.sym("x0", 2), MX.sym("q", 1)
+    drop = build_function(CasADiCodegen.Function("d", [x0, q], [D(x0, q, MX(0.0), MX(20.0))[2]]); nonzeros = true, expression = Val{false})
+    event(v) = (res = [zeros(eltype(v), 1)]; drop(res, (v[1:2], v[3:3])); res[1][1])
+    @test isapprox(ForwardDiff.gradient(event, [10.0, 3.0, 9.81]), ForwardDiff.gradient(landing, [10.0, 3.0, 9.81]); atol = 1e-8)
 end
 
 # More than one event: `events` counts them, the entry "transition" gives the state after
@@ -419,8 +427,8 @@ end
 # Several event functions: the first element of "zero" that changes its sign selects the column of
 # "transition", and the result "ie" names it. With `exact = false` fewer events than `events` can
 # come before the final time; "ne" counts them, and a missing event has the final time as its time.
-# The set takes about 20 s: the callback of several event functions compiles the solver once for
-# Float64 and once for dual numbers, which take their own code path for the derivative of the time.
+# The callback of several event functions compiles the solver once for Float64 and once for dual
+# numbers, which take their own code path for the derivative of the time; the exhaustive tier checks the second.
 @testset "several event functions, and up to a number of events" begin
     # A body that moves at a constant speed between two walls, at 0 and at 1. At the wall 1 the
     # speed changes its sign and keeps the part e1, at the wall 0 the part e2. The third event function
@@ -460,9 +468,11 @@ end
     end
 
     # Dual numbers through the generated code: the event function that fired gives the derivative of its time.
-    second = build_function(CasADiCodegen.Function("second", [s0, q], [F(s0, q, MX(0.0), MX(9.0))[2][2]]); nonzeros = true, expression = Val{false})
-    timed(v) = (res = [zeros(eltype(v), 1)]; second(res, (v[1:2], v[3:4])); res[1][1])
-    @test isapprox(ForwardDiff.gradient(timed, [0.5, 1.0, 0.5, 0.8]), ForwardDiff.gradient(v -> flight([v; 9.0]).times[2], [0.5, 1.0, 0.5, 0.8]); atol = 1e-8)
+    if EXHAUSTIVE
+        second = build_function(CasADiCodegen.Function("second", [s0, q], [F(s0, q, MX(0.0), MX(9.0))[2][2]]); nonzeros = true, expression = Val{false})
+        timed(v) = (res = [zeros(eltype(v), 1)]; second(res, (v[1:2], v[3:4])); res[1][1])
+        @test isapprox(ForwardDiff.gradient(timed, [0.5, 1.0, 0.5, 0.8]), ForwardDiff.gradient(v -> flight([v; 9.0]).times[2], [0.5, 1.0, 0.5, 0.8]); atol = 1e-8)
+    end
 
     # One event function: the count follows the times, and the integration ends at the last event or at the final time.
     # An elastic ball from the height 2 under the gravity 1 lands at 2 and at 6.
@@ -487,7 +497,7 @@ end
     function gradients(F, order)
         xf, qf = F(x0, q, t0, tf)
         cost = xf[1] * xf[2] + 3 * qf
-        outputs = [cost; [gradient(cost, v) for v in inputs]]
+        outputs = [cost, (gradient(cost, v) for v in inputs)...]
         order == 2 && push!(outputs, jacobian(gradient(cost, x0), x0), jacobian(gradient(cost, q), x0))
         CasADiCodegen.Function("costs", inputs, outputs)
     end
