@@ -165,6 +165,58 @@ end
     @test_throws ArgumentError g!((zeros(2), zeros(2, 2), zeros(3, 3), zeros(2, 2)), forms_inputs(f, mx_inputs(f)))
 end
 
+# CasADi has no vector type: an output of one column is a vector by default, and a
+# matrix of one column with `vector_columns = false`, in each form.
+@testset "output forms: vector_columns = false keeps the matrix shape" begin
+    a = SX.sym("a", 2)
+    f = CasADiCodegen.Function("c", [a], [C.vertcat([a[1]^2, 3 * a[2]]), a[1] * a[2]])
+    expected = ([4.0; 9.0;;], fill(6.0, 1, 1))
+    g, g! = build_function(f; expression = Val{false}, vector_columns = false)
+    @test g([2.0, 3.0]) isa Tuple{Matrix{Float64},Matrix{Float64}} && g([2.0, 3.0]) == expected
+    @test g(SVector(2.0, 3.0)) === (SMatrix{2,1}(4.0, 9.0), SMatrix{1,1}(6.0))
+    s, _ = build_function(f; expression = Val{false}, vector_columns = false, force_SA = true)
+    @test s([2.0, 3.0]) === (SMatrix{2,1}(4.0, 9.0), SMatrix{1,1}(6.0))
+    @test g!((zeros(2, 1), zeros(1, 1)), ([2.0, 3.0],)) == expected
+    @test build_function(f; expression = Val{false}, nonzeros = true, vector_columns = false)(
+        [zeros(2), zeros(1)], ([2.0, 3.0],)) == [[4.0, 9.0], [6.0]]
+
+    mod = Module()
+    Core.eval(mod, build_function(f; vector_columns = false))
+    src = Module()
+    Base.include_string(src, sprint(io -> generate_julia(f, io; module_name = :Gen, vector_columns = false)))
+    for m in (mod, Base.invokelatest(getglobal, src, :Gen))
+        @test Base.invokelatest(m.c, [2.0, 3.0]) == expected
+        @test Base.invokelatest(m.c, [2.0, 3.0])[1] isa Matrix{Float64}
+    end
+
+    # The cache keeps the two shapes apart.
+    directory = mktempdir()
+    cached, _ = build_function(f; expression = Val{false}, cache = directory, vector_columns = false)
+    @test Base.invokelatest(cached, [2.0, 3.0])[1] isa Matrix{Float64}
+    cached, _ = build_function(f; expression = Val{false}, cache = directory)
+    @test Base.invokelatest(cached, [2.0, 3.0])[1] isa Vector{Float64}
+end
+
+@testset "linearization with one state and one input returns matrices" begin
+    x, u, p = SX.sym("x"), SX.sym("u"), SX.sym("p")
+    f = CasadiFunction("f", [x, u, p], [-p * x + 2 * u])
+    h = CasadiFunction("h", [x, u, p], [3 * x])
+    expected = ([-4.0;;], [2.0;;], [3.0;;], [0.0;;])
+    lin, lin! = CasADiCodegen.linearization(f, h)
+    @test lin([1.0], [0.0], [4.0]) isa NTuple{4,Matrix{Float64}} && lin([1.0], [0.0], [4.0]) == expected
+    @test lin(SVector(1.0), SVector(0.0), SVector(4.0)) === map(SMatrix{1,1}, expected)
+    @test lin!(map(zero, expected), ([1.0], [0.0], [4.0])) == expected
+    @test_throws ArgumentError CasADiCodegen.linearization(f, h; vector_columns = true)
+
+    mod = Module()
+    Core.eval(mod, CasADiCodegen.linearization(f, h; expression = Val{true}))
+    @test Base.invokelatest(mod.linearization, [1.0], [0.0], [4.0]) isa NTuple{4,Matrix{Float64}}
+    src = Module()
+    lin_casadi = CasADiCodegen.linearization_function(f, h)
+    Base.include_string(src, sprint(io -> generate_julia(lin_casadi, io; module_name = :Lin, vector_columns = false)))
+    @test Base.invokelatest(Base.invokelatest(getglobal, src, :Lin).linearization, [1.0], [0.0], [4.0]) == expected
+end
+
 # Outputs with more elements than STATIC_LIMIT (1024) have no method with static arrays.
 # The static method of a 2000 by 2000 diagonal Jacobian was one literal of 4 million
 # values, which Julia refused to parse ("expression too large"). A static argument then

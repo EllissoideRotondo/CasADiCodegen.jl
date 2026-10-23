@@ -368,7 +368,8 @@ expression_flag(other) =
 
 """
     build_function(f; expression = Val{true}, force_SA = false, nonzeros = false,
-                   name = Symbol(name_of_f, "!"), chunk_size = nothing, split_above = nothing,
+                   vector_columns = true, name = Symbol(name_of_f, "!"),
+                   chunk_size = nothing, split_above = nothing,
                    nanmath = true, expand = true, cache = false, solvers = nothing, optlevel = nothing)
 
 Generate Julia code for the CasADi function `f`, in the manner of
@@ -376,15 +377,20 @@ Generate Julia code for the CasADi function `f`, in the manner of
 in-place function `g!(res, arg)`: as one `Expr` with the two definitions by default, or as
 the pair `(g, g!)` of compiled functions with `expression = Val{false}`.
 
-Both functions take arrays in matrix shape; a column is a vector.
+Both functions take arrays in matrix shape. CasADi has no vector type, so every output is
+a matrix; `g` returns one of one column as a vector by default, and as a matrix with
+`vector_columns = false`.
 
 - `g` takes one array per input. It returns one array for one output, and a tuple of
   arrays otherwise. The arrays are `SVector` and `SMatrix` when the first argument is a
-  static array, and `Vector` and `Matrix` otherwise. Outputs with more than 1024
+  static array, and `Vector` and `Matrix` otherwise. A `Vector` or `SVector` holds an
+  output of one column, also a scalar. Outputs with more than 1024
   elements in all give `Vector` and `Matrix` for any argument, with a warning at the
   first call with a static array.
 - `g!` fills the arrays of the tuple `res` from the tuple `arg` and returns `res`. An array
-  of `res` can be a mutable static array.
+  of `res` can be a mutable static array. An array of `res` or `arg` needs the number of
+  elements of its output or input only, so a vector and a matrix of one column both serve
+  for a column.
 - A structural zero of an output is set to zero. A structural zero of an input is not read.
 - With SparseArrays.jl loaded, an array of `res` or `arg` can be a `SparseMatrixCSC` with
   the sparsity pattern of that output or input, which `SparseMatrixCSC(sparsity)` makes.
@@ -405,6 +411,11 @@ Both functions take arrays in matrix shape; a column is a vector.
 - `nonzeros = false`: with `true`, return the single function `(res, arg) -> res` on which
   the others are built. `arg[i]` holds the structural nonzeros of input `i`, and `res[j]`
   receives those of output `j`, as CasADi evaluates a function.
+- `vector_columns = true`: with `false`, `g` returns each output in the shape that CasADi
+  gives it: a column of `n` elements, and a scalar, become a `Matrix` of size `(n, 1)`, or
+  an `SMatrix{n,1}` for a static argument. A function whose outputs then have a fixed
+  number of dimensions, such as the matrices of a linearization, needs this. It does not
+  change `g!` or the function of `nonzeros`.
 - `name`: the name of `g!` in the returned `Expr`, a valid identifier. It must end with
   `!` unless `nonzeros` is set. The name of `g` is `name` without `!`.
 - `chunk_size = nothing`, `split_above = nothing`: a function with more than `split_above`
@@ -456,7 +467,8 @@ julia> out[2]
 ```
 """
 function build_function(f; expression = Val{true},
-                        force_SA::Bool = false, nonzeros::Bool = false, name::Symbol = default_name(f),
+                        force_SA::Bool = false, nonzeros::Bool = false, vector_columns::Bool = true,
+                        name::Symbol = default_name(f),
                         chunk_size::Union{Nothing,Integer} = nothing,
                         split_above::Union{Nothing,Integer} = nothing, nanmath::Bool = true,
                         expand::Bool = true, cache::Union{Bool,AbstractString} = false,
@@ -465,11 +477,12 @@ function build_function(f; expression = Val{true},
     @requires optlevel === nothing || !expression_flag(expression) "optlevel sets the compilation of the returned functions, so it needs expression = Val{false}"
     if cache !== false
         @requires !expression_flag(expression) "the cache holds compiled functions, so it needs expression = Val{false}"
-        return cached_functions(f, cache_directory(cache); nonzeros, force_SA, name, expand, solvers, chunk_size, split_above, nanmath, optlevel)
+        return cached_functions(f, cache_directory(cache); nonzeros, force_SA, name, expand, solvers, chunk_size, split_above, nanmath, optlevel,
+                                vector_columns)
     end
     optlevel === nothing ||
         return Base.ScopedValues.with(CONTEXT => OPTLEVEL_CONTEXTS[optlevel+1]) do
-            build_function(f; expression, force_SA, nonzeros, name, chunk_size, split_above, nanmath, expand, solvers)
+            build_function(f; expression, force_SA, nonzeros, vector_columns, name, chunk_size, split_above, nanmath, expand, solvers)
         end
     chunk_size = Split(chunk_size, split_above)
     alg = one_function(algorithm(f; expand, solvers), chunk_size)
@@ -480,9 +493,10 @@ function build_function(f; expression = Val{true},
     end
     if expression_flag(expression)
         Expr(:block, function_definitions(alg, core_name(name), chunk_size, ref; key = unique_key)...,
-             form_definitions(alg, name, chunk_size, ref, force_SA; key = unique_key, log_id = unique_key(Symbol(name, :_static)))...)
+             form_definitions(alg, name, chunk_size, ref, force_SA; key = unique_key, log_id = unique_key(Symbol(name, :_static)),
+                              vector_columns)...)
     else
-        runtime_forms(alg, chunk_size, ref, force_SA)
+        runtime_forms(alg, chunk_size, ref, force_SA; vector_columns)
     end
 end
 

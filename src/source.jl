@@ -171,7 +171,8 @@ function value_source(writer::SourceWriter, value)
 end
 
 """
-    generate_julia(f, path; module_name, force_SA = false, name = Symbol(name_of_f, "!"),
+    generate_julia(f, path; module_name, force_SA = false, vector_columns = true,
+                   name = Symbol(name_of_f, "!"),
                    chunk_size = nothing, split_above = nothing, nanmath = true,
                    expand = true, solvers = nothing, optlevel = nothing) -> path
     generate_julia(f, io::IO; kwargs...) -> nothing
@@ -225,7 +226,7 @@ F.f([2.0, 3.0])         # the out-of-place function
 """
 function generate_julia(f, io::IO;
                         module_name::Symbol = Symbol(uppercasefirst(function_name(f))),
-                        force_SA::Bool = false, name::Symbol = default_name(f),
+                        force_SA::Bool = false, vector_columns::Bool = true, name::Symbol = default_name(f),
                         chunk_size::Union{Nothing,Integer} = nothing,
                         split_above::Union{Nothing,Integer} = nothing, nanmath::Bool = true,
                         expand::Bool = true, seen::Union{Nothing,Set{Symbol}} = nothing,
@@ -242,7 +243,7 @@ function generate_julia(f, io::IO;
     writer = SourceWriter(roots, Dict{Symbol,Base.PkgId}(), Any[], IdDict{Any,Any}(), chunk_size, ref)
     julia(f) = source(writer, f)
     definitions = function_definitions(alg, core_name(name), chunk_size, ref; julia)
-    append!(definitions, form_definitions(alg, name, chunk_size, ref, force_SA; julia))
+    append!(definitions, form_definitions(alg, name, chunk_size, ref, force_SA; julia, vector_columns))
     frame = named_frame(alg, core_name(name), chunk_size, ref; julia)
     nwork = frame === nothing ? 0 : frame[1][3]
     # `is_stored` and `PatternCheck` are defined with `stored`.

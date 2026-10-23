@@ -93,7 +93,7 @@ function linearization_function(f::C.Function, h::C.Function; sparse::Bool = fal
 end
 
 """
-    linearization(f, h; sparse = false, options...) -> (lin, lin!)
+    linearization(f, h; sparse = false, expression = Val{false}, options...) -> (lin, lin!)
 
 Generate the code of the linearization of the state-space model `x' = f(x, u, p)`,
 `y = h(x, u, p)` about a point. `lin(x, u, p)` returns the matrices `(A, B, C, D)` at the
@@ -102,12 +102,13 @@ point `(x, u, p)`, so that the deviations `δ` from it satisfy `δx' ≈ A δx +
 or an `SMatrix` when `x` is a static array. `lin!(out, (x, u, p))` writes them into the four
 arrays of `out`.
 
-The functions are those of [`build_function`](@ref) for
+The functions are those of [`build_function`](@ref) with `vector_columns = false` for
 [`linearization_function`](@ref linearization_function)`(f, h; sparse)`,
 which also states what `f` and `h` must be. With `sparse = true`, `lin!` writes into
 `SparseMatrixCSC` arrays that have the patterns of the outputs of that function. The
-other `options` go to `build_function`, except `expression`: the functions are compiled.
-`build_function(linearization_function(f, h))` gives their code as an expression.
+functions are compiled by default; `expression = Val{true}` returns their code as one
+`Expr`, in which `lin` and `lin!` are named `linearization` and `linearization!`. The
+other `options` go to `build_function`.
 
 # Examples
 ```jldoctest
@@ -129,22 +130,7 @@ julia> A
  -4.0  0.0
 ```
 """
-function linearization(f::C.Function, h::C.Function; sparse::Bool = false, options...)
-    @requires !haskey(options, :expression) "linearization returns compiled functions; build_function(linearization_function(f, h)) gives the expression"
-    lin, lin! = build_function(linearization_function(f, h; sparse); expression = Val{false}, options...)
-    Linearized(lin), lin!
+function linearization(f::C.Function, h::C.Function; sparse::Bool = false, expression = Val{false}, options...)
+    @requires !haskey(options, :vector_columns) "linearization returns matrices, so it sets vector_columns = false itself"
+    build_function(linearization_function(f, h; sparse); expression, vector_columns = false, options...)
 end
-
-"""
-    Linearized(lin)
-
-The out-of-place function `lin(x, u, p) -> (A, B, C, D)` of `build_function`, with each
-matrix of one column, which `lin` returns as a vector, as a matrix of one column.
-"""
-struct Linearized{F}
-    lin::F
-end
-(l::Linearized)(x, u, p) = map(one_column, l.lin(x, u, p))
-one_column(a::AbstractMatrix) = a
-one_column(a::StaticArraysCore.SVector{N,T}) where {N,T} = StaticArrays.SMatrix{N,1,T}(Tuple(a))
-one_column(a::AbstractVector) = reshape(a, length(a), 1)

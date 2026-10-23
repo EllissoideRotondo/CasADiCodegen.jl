@@ -25,8 +25,11 @@ A
 ```
 
 `lin` returns each of the four matrices as a `Matrix`, also `B`, which has one column for
-one input. `lin!(out, (x, u, p))` writes the four
-matrices into the arrays of the tuple `out`, which are dense by default. For a large model
+one input: `linearization` builds the functions with `vector_columns = false`, so that no
+matrix becomes a vector. `lin!(out, (x, u, p))` writes the four matrices into the arrays
+of the tuple `out`, which are dense by default. With `expression = Val{true}`,
+`linearization` returns the code of both functions as one `Expr`, as
+[`build_function`](@ref) does. For a large model
 with a sparse Jacobian, give `sparse = true`, so that `lin!` writes into `SparseMatrixCSC` arrays with the sparsity patterns of the outputs of
 [`CasADiCodegen.linearization_function`](@ref):
 

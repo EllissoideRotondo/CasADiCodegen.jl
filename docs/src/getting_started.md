@@ -53,8 +53,10 @@ J
 ```
 
 The out-of-place function takes one array per input and returns one array per
-output. A column is a `Vector`, any other shape is a `Matrix`, and a scalar is a
-vector of one element. With one output the function returns the array itself.
+output. CasADi has no vector type, so every output is a matrix, which the function
+returns as a `Vector` when it has one column and as a `Matrix` otherwise; a scalar is a
+vector of one element. With `vector_columns = false` it keeps the matrix shape for every
+output, also for a column. With one output the function returns the array itself.
 [Choose a form](@ref) lists the other forms.
 
 The in-place function takes a tuple of outputs and a tuple of inputs. We give it

@@ -9,6 +9,9 @@ end
 
 dimensions(sp::C.Sparsity) = C.size2(sp) == 1 ? (C.size1(sp),) : (C.size1(sp), C.size2(sp))
 
+"The size of the array of an output: that of `dimensions`, or always two sizes without `vector_columns`."
+output_dimensions(sp::C.Sparsity, vector_columns::Bool) = vector_columns ? dimensions(sp) : (C.size1(sp), C.size2(sp))
+
 is_dense(sp::C.Sparsity) = C.nnz(sp) == C.size1(sp) * C.size2(sp)
 
 """
@@ -105,26 +108,27 @@ static_type(type, dims) = :($type{Tuple{$(dims...)},T,$(length(dims)),$(prod(dim
 const ELEMENT_TYPE = :(T = promote_type(Float64, map(eltype, arg)...))
 
 """
-    outofplace_function(alg, signature, inplace, ref) -> Expr
+    outofplace_function(alg, signature, inplace, ref; warning, vector_columns) -> Expr
 
 Return the definition of the function `signature(arg1, arg2, ...)` that makes a `Vector` or
 a `Matrix` per result, fills them with `inplace`, the function on arrays in matrix shape,
-and returns them. The statements of `warning`, from `static_warning`, come first.
+and returns them. A result of one column is a `Matrix` without `vector_columns`. The
+statements of `warning`, from `static_warning`, come first.
 """
-outofplace_function(alg, signature, inplace, ref; warning = Any[]) =
+outofplace_function(alg, signature, inplace, ref; warning = Any[], vector_columns::Bool = true) =
     Expr(:function, signature, Expr(:block, warning..., :(arg = $(Expr(:tuple, argument_names(alg)...))), ELEMENT_TYPE,
-        :(res = $(Expr(:tuple, (:(Array{T}(undef, $(dimensions(sp)...))) for sp in alg.sparsity_out)...))),
+        :(res = $(Expr(:tuple, (:(Array{T}(undef, $(output_dimensions(sp, vector_columns)...))) for sp in alg.sparsity_out)...))),
         :($inplace(res, arg)),
         :(return $(returned([:(res[$j]) for j in eachindex(alg.sparsity_out)])))))
 
 """
-    static_function(alg, signature, frame, index, ref, key) -> Expr
+    static_function(alg, signature, frame, index, ref, key; vector_columns) -> Expr
 
 Return the definition of the out-of-place function with static arrays. It builds the static
 arrays from local variables, or from the work vector of the `frame`, so it allocates no
-memory.
+memory. A result of one column is an `SMatrix` without `vector_columns`.
 """
-function static_function(alg, signature, frame, index, ref, key)
+function static_function(alg, signature, frame, index, ref, key; vector_columns::Bool = true)
     index_out = nonzero_indices.(alg.sparsity_out)
     values = [Any[0.0 for _ in 1:prod(dimensions(sp))] for sp in alg.sparsity_out]
     body = if frame === nothing
@@ -138,7 +142,7 @@ function static_function(alg, signature, frame, index, ref, key)
         framed_body(alg, frame, ref, key; place_in = matrix_places(alg, index).place_in, results = false)
     end
     SArray = static_array(ref)
-    results = [:($(static_type(SArray, dimensions(sp)))($(Expr(:tuple, values[j]...))))
+    results = [:($(static_type(SArray, output_dimensions(sp, vector_columns)))($(Expr(:tuple, values[j]...))))
                for (j, sp) in enumerate(alg.sparsity_out)]
     Expr(:function, signature, Expr(:block, :(arg = $(Expr(:tuple, argument_names(alg)...))),
         shape_checks(alg, ref; results = false)..., ELEMENT_TYPE, body...,
@@ -199,7 +203,7 @@ function static_warning(alg, static::Bool, ref, id)
 end
 
 """
-    form_definitions(alg, name, chunk_size, ref, force_SA) -> Vector{Expr}
+    form_definitions(alg, name, chunk_size, ref, force_SA; vector_columns = true) -> Vector{Expr}
 
 Return the named definitions that follow those of the function on nonzeros
 `core_name(name)`, whose sub-functions they share: the tables of indices, the in-place
@@ -208,10 +212,11 @@ function `name(res, arg)`, and the out-of-place function, whose name is `name` w
 The out-of-place function has a method for a static array as its first argument, which
 returns static arrays. With `force_SA` that is its only method, for any argument. Above
 `STATIC_LIMIT` the method with ordinary arrays warns once for a static argument, with the
-log id `log_id` (see `static_warning`). `julia` is that of `mx_definitions`.
+log id `log_id` (see `static_warning`). `julia` is that of `mx_definitions`. Without
+`vector_columns`, an output of one column is a matrix of one column.
 """
 function form_definitions(alg, name::Symbol, chunk_size::ChunkSize, ref, force_SA::Bool; key = identity, julia = identity,
-                          log_id::Union{Nothing,Symbol} = nothing)
+                          log_id::Union{Nothing,Symbol} = nothing, vector_columns::Bool = true)
     base, arguments = outofplace_name(name), argument_names(alg)
     table(kind, k) = Symbol(base, :_index_, kind, k)
     check(kind, k) = Symbol(base, :_check_, kind, k)
@@ -224,8 +229,8 @@ function form_definitions(alg, name::Symbol, chunk_size::ChunkSize, ref, force_S
     typed = force_SA || !static ? arguments : Any[:($(arguments[1])::$(ref(:StaticArraysCore, :StaticArray))), arguments[2:end]...]
     push!(definitions, inplace_function(alg, :($name(res, arg)), frame, core_name(name), table, check, ref, key(name)))
     warning = static_warning(alg, static, ref, log_id)
-    ordinary && push!(definitions, outofplace_function(alg, :($base($(arguments...))), name, ref; warning))
-    static && push!(definitions, static_function(alg, :($base($(typed...))), frame, table, ref, key(name)))
+    ordinary && push!(definitions, outofplace_function(alg, :($base($(arguments...))), name, ref; warning, vector_columns))
+    static && push!(definitions, static_function(alg, :($base($(typed...))), frame, table, ref, key(name); vector_columns))
     named_calls(alg, definitions, julia)
 end
 
@@ -251,13 +256,14 @@ function runtime_inplace(alg, chunk_size::ChunkSize, ref)
 end
 
 """
-    runtime_forms(alg, chunk_size, ref, force_SA) -> (out_of_place, in_place)
+    runtime_forms(alg, chunk_size, ref, force_SA; vector_columns = true) -> (out_of_place, in_place)
 
 Return the two functions as runtime generated functions. Each holds the functions that it
 calls and the tables of indices in its body. The out-of-place function returns static
-arrays when its first argument is a static array, or always with `force_SA`.
+arrays when its first argument is a static array, or always with `force_SA`; without
+`vector_columns`, it returns an output of one column as a matrix of one column.
 """
-function runtime_forms(alg, chunk_size::ChunkSize, ref, force_SA::Bool)
+function runtime_forms(alg, chunk_size::ChunkSize, ref, force_SA::Bool; vector_columns::Bool = true)
     generate(ex) = RuntimeGeneratedFunction(@__MODULE__, CONTEXT[], ex)
     hold(g) = RuntimeGeneratedFunctions.drop_expr(g)
     (; inplace, frame, index, key) = runtime_inplace(alg, chunk_size, ref)
@@ -265,8 +271,8 @@ function runtime_forms(alg, chunk_size::ChunkSize, ref, force_SA::Bool)
     signature = Expr(:tuple, arguments...)
     ordinary, static = methods_wanted(alg, force_SA)
     warning = static_warning(alg, static, ref, Symbol(key, :_static))
-    with_arrays = ordinary ? generate(outofplace_function(alg, signature, hold(inplace), ref; warning)) : nothing
-    with_static = static ? generate(static_function(alg, signature, frame, index, ref, key)) : nothing
+    with_arrays = ordinary ? generate(outofplace_function(alg, signature, hold(inplace), ref; warning, vector_columns)) : nothing
+    with_static = static ? generate(static_function(alg, signature, frame, index, ref, key; vector_columns)) : nothing
     outofplace = !ordinary ? with_static : !static ? with_arrays :
         generate(Expr(:function, signature, Expr(:block,
             :(return $(arguments[1]) isa $(ref(:StaticArraysCore, :StaticArray)) ?
