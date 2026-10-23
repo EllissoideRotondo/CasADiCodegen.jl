@@ -60,3 +60,44 @@ end
     g = CasADiCodegen.traced_function("decay", (u, k) -> -k * u, [1.0, 2.0], 0.5; inplace = false, time = false)
     @test build_function(g; expression = Val{false})[1]([1.0, 2.0], 0.5) ≈ [-0.5, -1.0]
 end
+
+@testset "rounding, remainders and roots of traced values" begin
+    x, y = SX.sym("x"), SX.sym("y")
+    a, b = only(traced(x)), only(traced(y))
+    outputs = [floor(a), ceil(a), trunc(a), rem(a, b), mod(a, b), copysign(b, a), cbrt(a), (a < 0) & (b > 0) | false]
+    g, _ = build_function(CasadiFunction("r", [x, y], [untraced(outputs)]); expression = Val{false})
+    for (u, v) in ((-2.5, 0.75), (3.25, -1.5), (0.0, 2.0), (-8.0, 3.0))
+        @test g([u], [v]) ≈ [floor(u), ceil(u), trunc(u), rem(u, v), mod(u, v), copysign(v, u), cbrt(u), (u < 0) & (v > 0)] atol = 1e-14
+    end
+end
+
+@testset "determinant, inverse and solve of a traced matrix" begin
+    # LinearAlgebra factorizes with pivoting, which compares values; CasADi forms them from the graph.
+    z = SX.sym("z", 4)
+    A = reshape(traced(z), 2, 2)
+    outputs = [LinearAlgebra.det(A); vec(LinearAlgebra.inv(A)); A \ [1.0, 2.0]]
+    g, _ = build_function(CasadiFunction("m", [z], [untraced(outputs)]); expression = Val{false})
+    M = [2.0 1.0; -1.0 3.0]
+    @test g(vec(M)) ≈ [LinearAlgebra.det(M); vec(inv(M)); M \ [1.0, 2.0]]
+end
+
+@testset "traced_function takes tuples of parameters and names its symbols" begin
+    function rober!(du, u, p, t)
+        y₁, y₂, y₃ = u
+        k₁, k₂, k₃ = p
+        du[1] = -k₁ * y₁ + k₃ * y₂ * y₃
+        du[2] = k₁ * y₁ - k₂ * y₂^2 - k₃ * y₂ * y₃
+        du[3] = k₂ * y₂^2
+        nothing
+    end
+    u0, p = [1.0, 0.5, 0.25], (0.04, 3e7, 1e4)
+    f = CasADiCodegen.traced_function("rober", rober!, u0, p; states = [:y₁, :y₂, :y₃])
+    du = zeros(3)
+    rober!(du, u0, p, 0.0)
+    @test build_function(f; expression = Val{false})[1](u0, collect(p), 0.0) ≈ du
+    @test [C.name(e) for e in C.symvar(C.sx_in(f, 0))] == ["y₁", "y₂", "y₃"]
+    # A named tuple gives the names of the parameters, as `p.k` gives the value.
+    g = CasADiCodegen.traced_function("decay", (u, p) -> -p.k * u, [1.0], (k = 0.5,); inplace = false, time = false)
+    @test C.name(C.sx_in(g, 1)) == "k" && build_function(g; expression = Val{false})[1]([2.0], [0.5]) ≈ [-1.0]
+    @test_throws ArgumentError CasADiCodegen.traced_function("rober", rober!, u0, p; states = [:a, :b])
+end

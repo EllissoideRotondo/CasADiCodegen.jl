@@ -4,10 +4,12 @@
 A real number that records the operations on it as a CasADi expression of type `S`, which
 is `SX` or `MX`, so that generic Julia code traces into a CasADi graph.
 
-Arithmetic, the elementary functions, `min`, `max`, `clamp`, `ifelse` and `norm` give
-`Traced` values; a plain number promotes to `Traced`. A comparison gives a traced
-condition, not a `Bool`, so an `if`, `&&` or `? :` on traced values throws a `TypeError`
-instead of following one branch. Use `ifelse`, `min`, `max` or `clamp` for a choice that
+Arithmetic, the elementary functions, `min`, `max`, `clamp`, `ifelse`, `floor`, `ceil`,
+`trunc`, `rem`, `mod`, `copysign`, `cbrt` and `norm` give `Traced` values; a plain number
+promotes to `Traced`. `det`, `inv` and `A \\ b` of a square matrix of `Traced` values are
+formed by CasADi, since the factorizations of LinearAlgebra choose pivots by comparing
+values. A comparison gives a traced condition, not a `Bool`, so an `if`, `&&` or `? :` on
+traced values throws a `TypeError` instead of following one branch. Use `ifelse`, `min`, `max` or `clamp` for a choice that
 depends on the input, or [`CasADiCodegen.callback`](@ref) for a Julia function with branches.
 
 See [`CasADiCodegen.traced`](@ref traced) and [`CasADiCodegen.untraced`](@ref untraced).
@@ -45,6 +47,43 @@ for f in (:-, :sqrt, :exp, :log, :log2, :log10, :log1p, :expm1, :abs, :abs2, :in
 end
 Base.sincos(a::Traced) = (sin(a), cos(a))
 Base.clamp(x::Traced, lo::Real, hi::Real) = min(max(x, lo), hi)
+# A condition joins a plain `Bool`, as `(x > 0) & true` in generic code.
+for f in (:&, :|)
+    @eval Base.$f(a::Traced{S}, b::Real) where {S<:Symbolic} = $f(a, convert(Traced{S}, b))
+    @eval Base.$f(a::Real, b::Traced{S}) where {S<:Symbolic} = $f(convert(Traced{S}, a), b)
+end
+
+# `floor`, `ceil` and `trunc` of a real number call `round` with a rounding mode.
+Base.round(x::Traced{S}, ::RoundingMode{:Down}) where {S<:Symbolic} = Traced{S}(C.floor(x.value))
+Base.round(x::Traced{S}, ::RoundingMode{:Up}) where {S<:Symbolic} = Traced{S}(C.ceil(x.value))
+Base.round(x::Traced{S}, ::RoundingMode{:ToZero}) where {S<:Symbolic} =
+    Traced{S}(C.if_else(C.lt(x.value, S(0.0)), C.ceil(x.value), C.floor(x.value)))
+Base.rem(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(C.fmod(a.value, b.value))
+# As in Julia, the result of `mod` has the sign of `b`.
+Base.mod(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = a - b * floor(a / b)
+Base.copysign(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(C.copysign(a.value, b.value))
+Base.cbrt(a::Traced{S}) where {S<:Symbolic} = Traced{S}(C.sign(a.value) * C.power(C.abs(a.value), S(1 / 3)))
+
+# The factorizations of LinearAlgebra choose pivots by comparing values, which a trace
+# cannot do; CasADi forms the determinant, the inverse and the solution from the graph.
+function casadi_matrix(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic}
+    C.reshape(C.vertcat(S[x.value for x in vec(collect(A))]), size(A, 1), size(A, 2))
+end
+casadi_column(::Type{S}, b::AbstractVector) where {S<:Symbolic} = C.vertcat(S[convert(Traced{S}, x).value for x in collect(b)])
+square_traced(A) = (@requires size(A, 1) == size(A, 2) "the matrix must be square; got the size $(size(A))"; A)
+
+LinearAlgebra.det(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic} = Traced{S}(C.det(casadi_matrix(square_traced(A))))
+function traced_inverse(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic}
+    n = size(square_traced(A), 1)
+    reshape(traced(C.reshape(C.inv(casadi_matrix(A)), n * n, 1)), n, n)
+end
+# LinearAlgebra has a method for strided matrices of any element type.
+LinearAlgebra.inv(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic} = traced_inverse(A)
+LinearAlgebra.inv(A::StridedMatrix{Traced{S}}) where {S<:Symbolic} = traced_inverse(A)
+function Base.:\(A::AbstractMatrix{Traced{S}}, b::AbstractVector{<:Real}) where {S<:Symbolic}
+    @requires size(square_traced(A), 1) == length(b) "the matrix has $(size(A, 1)) rows and the vector $(length(b)) elements"
+    traced(C.solve(casadi_matrix(A), casadi_column(S, b)))
+end
 
 """
     ifelse(condition::Traced, a, b)
@@ -97,40 +136,56 @@ function untraced(v::AbstractVector)
 end
 
 """
-    traced_function(name, f, u0, p = nothing; inplace = true, time = true, symbolic = SX) -> CasADiCodegen.Function
+    traced_function(name, f, u0, p = nothing; inplace = true, time = true, symbolic = SX,
+                    states = nothing, parameters = nothing) -> CasADiCodegen.Function
 
 Trace the Julia function `f` of a SciML problem into the CasADi function `name(u, p, t)`,
 or `name(u, p)` with `time = false`, whose result is the derivative or the residual.
 
 `f` is `f(du, u, p, t)` in place, or `f(u, p, t)` out of place with `inplace = false`, and
 without `t` when `time = false`. It must be generic Julia code, as for
-[`traced`](@ref traced). It gets arrays of [`Traced`](@ref Traced)
-values with the shapes of `u0` and `p`; `p` may be a number, an array of numbers, or
-`nothing` for a problem without parameters. In place, `du` starts at zero.
+[`traced`](@ref traced). It gets the state as an array of [`Traced`](@ref Traced) values
+with the shape of `u0`, and the parameters in the container of `p` with traced elements:
+`p` may be a number, an array of numbers, a tuple or a named tuple of numbers, or
+`nothing` for a problem without parameters. In place, `du`
+starts at zero.
 
 The arguments of the result are column vectors: `u` and `du` hold the elements in the
-order of `vec(u0)`, and `p` those of `vec(p)`, empty for `nothing`. `symbolic` is `SX` or
-`MX`. A method for a SciML problem comes with SciMLBase.jl.
+order of `vec(u0)`, and `p` those of `vec(p)`, or of the tuple, empty for `nothing`.
+`states` and `parameters` name the scalar symbols of these elements, as vectors of
+`Symbol` or `String`; the names become those of the variables of a SciML function made
+from the result (see [`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function))).
+By default the parameters of a named tuple have its keys as names, and the other
+elements are `u_0`, `u_1`, ... and `p_0`, `p_1`, ...
+`symbolic` is `SX` or `MX`. A method for a SciML problem comes with SciMLBase.jl.
 
 # Examples
 ```julia
 using CasADiCodegen
 import SciMLBase
 
-decay!(du, u, p, t) = (du .= -p[1] .* u)
-f = CasADiCodegen.traced_function("decay", decay!, [1.0, 2.0], [0.5])
+decay!(du, u, p, t) = (du .= -p.k .* u)
+f = CasADiCodegen.traced_function("decay", decay!, [1.0, 2.0], (k = 0.5,); states = [:x, :y])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(f), [1.0, 2.0], (0.0, 1.0), [0.5])
 ```
 """
 function traced_function(name::AbstractString, f, u0::AbstractArray{<:Real}, p = nothing;
-                         inplace::Bool = true, time::Bool = true, symbolic::Type{<:Symbolic} = SX)
-    @requires p === nothing || p isa Real || p isa AbstractArray{<:Real} "traced_function: the parameters must be a number, an array of numbers or nothing; got $(typeof(p))"
+                         inplace::Bool = true, time::Bool = true, symbolic::Type{<:Symbolic} = SX,
+                         states::Union{Nothing,AbstractVector} = nothing, parameters::Union{Nothing,AbstractVector} = nothing)
+    @requires p === nothing || p isa Real || p isa AbstractArray{<:Real} || p isa Tuple{Vararg{Real}} || p isa NamedTuple{<:Any,<:Tuple{Vararg{Real}}} "traced_function: the parameters must be a number, an array, a tuple or a named tuple of numbers, or nothing; got $(typeof(p))"
     S = symbolic
     T = Traced{S}
-    u, q, t = S.sym("u", length(u0)), S.sym("p", p === nothing ? 0 : length(p)), S.sym("t")
+    parameters = parameters === nothing && p isa NamedTuple ? collect(keys(p)) : parameters
+    u = named_symbol(S, "u", length(u0), states, "states")
+    q = named_symbol(S, "p", p === nothing ? 0 : length(p), parameters, "parameters")
+    t = S.sym("t")
+    given = String[string(x) for x in [something(states, String[]); something(parameters, String[])]]
+    @requires allunique(given) && "t" ∉ given "traced_function: the names of the states and the parameters must be distinct and not \"t\"; got $given"
     state = reshape(traced(u), size(u0))
-    parameters = p === nothing ? nothing : p isa Real ? only(traced(q)) : reshape(traced(q), size(p))
-    rest = time ? (parameters, only(traced(t))) : (parameters,)
+    elements = traced(q)
+    parameter_values = p === nothing ? nothing : p isa Real ? only(elements) : p isa Tuple ? Tuple(elements) :
+                       p isa NamedTuple ? NamedTuple{keys(p)}(Tuple(elements)) : reshape(elements, size(p))
+    rest = time ? (parameter_values, only(traced(t))) : (parameter_values,)
     value = if inplace
         du = fill(zero(T), size(u0))
         f(du, state, rest...)
@@ -142,3 +197,18 @@ function traced_function(name::AbstractString, f, u0::AbstractArray{<:Real}, p =
     result = untraced(T[convert(T, v) for v in vec(collect(value))])
     Front.Function(String(name), time ? [u, q, t] : [u, q], [result], time ? ["u", "p", "t"] : ["u", "p"], ["f"])
 end
+
+"The column vector of `n` symbols: `S.sym(default, n)`, or one scalar symbol per name of `names`."
+function named_symbol(::Type{S}, default::String, n::Int, names, kind::String) where {S<:Symbolic}
+    names === nothing && return S.sym(default, n)
+    @requires length(names) == n "traced_function: $kind needs $n names, one per element; got $(length(names))"
+    n == 0 ? S.sym(default, 0) : C.vertcat(S[S.sym(string(x)) for x in names])
+end
+
+"""
+    traced_problem(name, problem; symbolic = SX, states = nothing, parameters = nothing, options...)
+
+Return a SciML problem of generated code for the function of `problem`, an `ODEProblem` or
+a `NonlinearProblem`, traced into CasADi. The methods are in the extension for SciMLBase.jl.
+"""
+function traced_problem end

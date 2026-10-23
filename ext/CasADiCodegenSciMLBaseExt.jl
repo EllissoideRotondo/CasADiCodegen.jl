@@ -2043,13 +2043,19 @@ function SciMLBase.OptimizationProblem(opti::C.Opti; hess::Bool = true, sparse::
 end
 
 """
-    CasADiCodegen.traced_function(name, problem; symbolic = SX) -> CasADiCodegen.Function
+    CasADiCodegen.traced_function(name, problem; symbolic = SX, states = nothing, parameters = nothing) -> CasADiCodegen.Function
 
 Trace the function of the SciML `problem`, an `ODEProblem` or a `NonlinearProblem`, into a
 CasADi function, with the shapes of its initial state and of its parameters (see
 [`traced_function`](@ref CasADiCodegen.traced_function(::AbstractString, ::Any, ::AbstractArray{<:Real}))).
 The function of an `ODEProblem` takes the time; that of a `NonlinearProblem` does not.
-Parameters of the type `SciMLBase.NullParameters` count as none.
+The in-place or out-of-place form is that of the problem. Parameters of the type
+`SciMLBase.NullParameters` count as none.
+
+The names of the states and of the parameters are `states` and `parameters` when given,
+else those of the symbolic system of the problem, such as a `SciMLBase.SymbolCache` with
+one name per element, else the keys of a named tuple of parameters, else `u_0`, `u_1`, ...
+and `p_0`, `p_1`, ...
 
 # Examples
 ```julia
@@ -2060,11 +2066,96 @@ problem = SciMLBase.ODEProblem(f, vec(u0), (0.0, 11.5), p)
 ```
 """
 function CasADiCodegen.traced_function(name::AbstractString, problem::Union{SciMLBase.ODEProblem,SciMLBase.NonlinearProblem};
-                                       symbolic::Type = CasADiCodegen.SX)
+                                       symbolic::Type = CasADiCodegen.SX, states = nothing, parameters = nothing)
     p = problem.p isa SciMLBase.NullParameters ? nothing : problem.p
+    n = p === nothing ? 0 : length(p)
+    sys = problem.f.sys
+    states = something(states, Some(system_names(sys, SII.variable_symbols, SII.variable_index, length(problem.u0))))
+    parameters = something(parameters, Some(system_names(sys, SII.parameter_symbols, SII.parameter_index, n)))
     CasADiCodegen.traced_function(name, SciMLBase.unwrapped_f(problem.f.f), problem.u0, p;
-                                  inplace = SciMLBase.isinplace(problem), time = problem isa SciMLBase.ODEProblem, symbolic)
+                                  inplace = SciMLBase.isinplace(problem), time = problem isa SciMLBase.ODEProblem,
+                                  symbolic, states, parameters)
 end
+
+"""
+    system_names(sys, kind, index, n) -> Vector{Symbol} or nothing
+
+Return the names `kind(sys)` of the symbolic system `sys` in the order of their places
+`index(sys, name)`, when they are `n` symbols at the places `1:n`; else `nothing`.
+"""
+function system_names(sys, kind, index, n::Int)
+    (sys === nothing || n == 0) && return nothing
+    names = try
+        kind(sys)
+    catch err
+        err isa MethodError || rethrow()
+        return nothing
+    end
+    names isa AbstractVector && length(names) == n && all(x -> x isa Symbol, names) || return nothing
+    # A SymbolCache keeps its names in a Dict, so that their order is not that of the places.
+    places = [index(sys, name) for name in names]
+    places isa Vector{Int} && sort(places) == 1:n || return nothing
+    ordered = Vector{Symbol}(undef, n)
+    ordered[places] = names
+    ordered
+end
+
+"""
+    CasADiCodegen.traced_problem(name, problem; symbolic = SX, states = nothing, parameters = nothing, options...)
+
+Return the SciML problem of the same kind as `problem`, an `ODEProblem` or a
+`NonlinearProblem`, whose function is generated code for the function of `problem`,
+traced into the CasADi function `name` by
+[`traced_function`](@ref CasADiCodegen.traced_function(::AbstractString, ::Union{SciMLBase.ODEProblem,SciMLBase.NonlinearProblem})),
+together with its analytic Jacobian.
+
+The new problem keeps the initial state, with its shape, the time span, the mass matrix
+and the keywords of `problem`, such as `saveat` or `callback`. Its parameters are the
+values of those of `problem` as a vector, in their order (`vec(p)` for an array), or
+none for `SciMLBase.NullParameters`; a kept callback that reads a field of a tuple of
+parameters must read the vector by place or by name instead. The states and the parameters
+have names, as described for `traced_function`, so that `solution[:x]` and
+`remake(problem; p = [:k => 2.0])` work. A static vector state gives functions out of
+place that return static arrays.
+
+The `options` go to [`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function))
+or to [`NonlinearFunction`](@ref SciMLBase.NonlinearFunction(::CasADiCodegen.Function)),
+such as `sparse = true` for a sparse Jacobian (with SparseArrays.jl loaded) or
+`jac = false`. The other fields of the function of `problem`, such as a `jac` or an
+`analytic` solution, are not kept.
+
+# Examples
+```julia
+using CasADiCodegen
+import SciMLBase
+
+decay!(du, u, p, t) = (du .= -p.k .* u)
+original = SciMLBase.ODEProblem(decay!, [1.0, 2.0], (0.0, 1.0), (k = 0.5,); saveat = 0.1)
+problem = CasADiCodegen.traced_problem("decay", original)
+problem.p, problem.f.jac(problem.u0, problem.p, 0.0)
+```
+"""
+function CasADiCodegen.traced_problem(name::AbstractString, problem::SciMLBase.ODEProblem;
+                                      symbolic::Type = CasADiCodegen.SX, states = nothing, parameters = nothing, options...)
+    f = CasADiCodegen.traced_function(name, problem; symbolic, states, parameters)
+    mass = problem.f.mass_matrix
+    kept = mass isa LinearAlgebra.UniformScaling ? (;) : (; mass_matrix = mass)
+    g = SciMLBase.ODEFunction(f; inplace = !(problem.u0 isa StaticArrays.StaticArray), kept..., options...)
+    SciMLBase.ODEProblem(g, problem.u0, problem.tspan, traced_parameters(problem.p); problem.kwargs...)
+end
+
+function CasADiCodegen.traced_problem(name::AbstractString, problem::SciMLBase.NonlinearProblem;
+                                      symbolic::Type = CasADiCodegen.SX, states = nothing, parameters = nothing, options...)
+    f = CasADiCodegen.traced_function(name, problem; symbolic, states, parameters)
+    g = SciMLBase.NonlinearFunction(f; inplace = !(problem.u0 isa StaticArrays.StaticArray), options...)
+    SciMLBase.NonlinearProblem(g, problem.u0, traced_parameters(problem.p); problem.kwargs...)
+end
+
+"The parameters of a traced problem: a vector of the values of `p`, or no parameters."
+traced_parameters(p::SciMLBase.NullParameters) = p
+traced_parameters(p::Real) = [p]
+traced_parameters(p::AbstractArray{<:Real}) = vec(p)
+traced_parameters(p::Union{Tuple,NamedTuple}) = collect(promote(values(p)...))
 
 # A solver of CasADi for optimization problems in the graph of a function,
 # replaced in generated code by a solver of the SciML ecosystem.

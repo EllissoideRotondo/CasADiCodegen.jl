@@ -45,7 +45,7 @@ include("codegen.jl")
 
 using .Codegen: build_function, generate_julia, instruction_histogram, nan_trace, differentiable, Solvers, Solver,
     Traced, traced, untraced, traced_function, block_triangular_form, linearization, linearization_function,
-    initialization_problem
+    initialization_problem, traced_problem
 
 """
     CasadiFunction(name, inputs, outputs[, options])

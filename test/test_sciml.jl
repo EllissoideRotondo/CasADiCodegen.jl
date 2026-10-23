@@ -432,6 +432,48 @@ end
     @test CC.n_in(residual) == 2 && build_function(residual; expression = Val{false})[1]([2.0, 1.0], [4.0, 9.0]) ≈ [0.0, -8.0]
 end
 
+function rober!(du, u, p, t)
+    y₁, y₂, y₃ = u
+    k₁, k₂, k₃ = p
+    du[1] = -k₁ * y₁ + k₃ * y₂ * y₃
+    du[2] = k₁ * y₁ - k₂ * y₂^2 - k₃ * y₂ * y₃
+    du[3] = k₂ * y₂^2
+    nothing
+end
+
+@testset "traced_problem keeps the data and the names of the problem" begin
+    names = SciMLBase.SymbolCache([:y₁, :y₂, :y₃], [:k₁, :k₂, :k₃], :t)
+    original = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rober!; sys = names), [1.0, 0.0, 0.0], (0.0, 100.0), (0.04, 3e7, 1e4); saveat = 25.0)
+    problem = CasADiCodegen.traced_problem("rober", original; AUTO...)
+    @test problem.u0 == original.u0 && problem.tspan == original.tspan && problem.p == [0.04, 3e7, 1e4]
+    u, J = [0.5, 0.25, 0.25], zeros(3, 3)
+    problem.f.jac(J, u, problem.p, 0.0)
+    @test J ≈ ForwardDiff.jacobian(v -> (d = zeros(eltype(v), 3); rober!(d, v, original.p, 0.0); d), u)
+    # Each row of the sparse Jacobian holds the states of its terms: 3 + 3 + 1 nonzeros.
+    @test nnz(CasADiCodegen.traced_problem("rober", original; sparse = true).f.jac_prototype) == 7
+    solution = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-8, reltol = 1e-8)
+    @test solution.t == 0:25:100 && solution[:y₂] == solution[2, :]
+    @test SciMLBase.remake(problem; p = [:k₁ => 0.08]).p[1] == 0.08
+end
+
+@testset "traced_problem of a matrix state, a mass matrix and a nonlinear problem" begin
+    u0, p = reshape(collect(1.0:6.0) ./ 7, 3, 2), [0.5, 2.0]
+    heat = CasADiCodegen.traced_problem("heat", SciMLBase.ODEProblem(heat!, u0, (0.0, 1.0), p); jac = false)
+    du, expected = similar(u0), similar(u0)
+    heat.f(du, u0, p, 0.3)
+    heat!(expected, u0, p, 0.3)
+    @test heat.u0 == u0 && du ≈ expected
+    # x' = -x + z, 0 = z - x^2: the mass matrix stays, so that x' = x^2 - x.
+    algebraic!(du, u, p, t) = (du[1] = -u[1] + u[2]; du[2] = u[2] - u[1]^2)
+    original = SciMLBase.ODEProblem(SciMLBase.ODEFunction(algebraic!; mass_matrix = Diagonal([1.0, 0.0])), [0.5, 0.25], (0.0, 1.0))
+    dae = CasADiCodegen.traced_problem("dae", original; AUTO...)
+    @test dae.f.mass_matrix == Diagonal([1.0, 0.0])
+    x = SciMLBase.solve(dae, Rodas5P(); abstol = 1e-10, reltol = 1e-10).u[end][1]
+    @test x ≈ 1 / (1 + exp(1.0)) rtol = 1e-7
+    nonlinear = CasADiCodegen.traced_problem("square", SciMLBase.NonlinearProblem{false}((z, q) -> z .^ 2 .- q, [1.0, 1.0], [4.0, 9.0]))
+    @test SciMLBase.solve(nonlinear, SimpleNewtonRaphson()).u ≈ [2.0, 3.0]
+end
+
 @testset "names of the CasADi symbols in the solution" begin
     x, v, k, τ = SX.sym("x"), SX.sym("v"), SX.sym("k"), SX.sym("τ")
     rhs = CasADiCodegen.Function("oscillator", [vertcat(x, v), k, τ], [vertcat(v, -k * x), (v^2 + k * x^2) / 2], ["u", "k", "τ"], ["du", "energy"])

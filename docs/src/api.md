@@ -26,6 +26,7 @@ CasADiCodegen.traced
 CasADiCodegen.untraced
 CasADiCodegen.traced_function(::AbstractString, ::Any, ::AbstractArray{<:Real})
 CasADiCodegen.traced_function(::AbstractString, ::Union{SciMLBase.ODEProblem,SciMLBase.NonlinearProblem})
+CasADiCodegen.traced_problem(::AbstractString, ::SciMLBase.ODEProblem)
 Base.ifelse(::CasADiCodegen.Traced, ::Real, ::Real)
 ```
 

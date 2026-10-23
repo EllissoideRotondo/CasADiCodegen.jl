@@ -33,8 +33,9 @@ fixed number of steps is unrolled into it.
 The function `f(du, u, p, t)` of a SciML problem, written in place for any number
 type, becomes a CasADi function in one call. [`CasADiCodegen.traced_function`](@ref)
 calls `f` on traced arrays with the shapes of the initial state and of the parameters,
-so a state stored as a matrix keeps its shape inside `f`, and the CasADi function
-`rhs(u, p, t)` takes the state as the column vector `vec(u0)`:
+so a state stored as a matrix keeps its shape inside `f`. The CasADi function
+`rhs(u, p, t)` takes the state as the column vector `vec(u0)`, and its generated code
+reads and writes a matrix in that order, so the problem may keep the matrix `u0`:
 
 ```@example traced
 import SciMLBase
@@ -49,14 +50,19 @@ end
 u0 = rand(4, 3)
 original = SciMLBase.ODEProblem(diffusion!, u0, (0.0, 1.0), [0.5, 2.0])
 rhs = CasADiCodegen.traced_function("diffusion", original)
-problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), vec(u0), (0.0, 1.0), [0.5, 2.0])
+problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), u0, (0.0, 1.0), [0.5, 2.0])
 nothing # hide
 ```
 
 The problem then has the generated right side and its Jacobian, or with
 `ODEFunction(rhs; sparse = true)` a sparse Jacobian (see
 [Give a CasADi function to a SciML problem](@ref)). A `NonlinearProblem` gives a
-function without the time, and a function out of place works as well. In `diffusion!`,
+function without the time, and a function out of place works as well. The parameters may
+also be a tuple or a named tuple of numbers, and the keywords `states` and `parameters`
+name the elements. [`CasADiCodegen.traced_problem`](@ref CasADiCodegen.traced_problem(::AbstractString, ::SciMLBase.ODEProblem))
+makes the new problem in one call, with the initial state, the time span, the mass matrix
+and the keywords of the original one; [From a Julia problem to generated code](@ref)
+walks through it. In `diffusion!`,
 `max` and `min` act on integer indices, not on traced values, so they need no
 `ifelse` (see the next section).
 
