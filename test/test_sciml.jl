@@ -2,10 +2,10 @@
 include("ode_helpers.jl")
 import SciMLBase
 using OrdinaryDiffEqVerner: Vern9
-using SimpleNonlinearSolve: SimpleNewtonRaphson
+using SimpleNonlinearSolve: SimpleNewtonRaphson, SimpleGaussNewton
 using SpecialFunctions: erf
 using SparseArrays: SparseMatrixCSC, nnz, findnz
-using LinearAlgebra: triu
+using LinearAlgebra: triu, Diagonal
 using StaticArrays: SVector, SMatrix
 
 @testset "ODEFunction from a CasADi function" begin
@@ -53,7 +53,7 @@ end
     @test J == [3.0 1.0; 0.0 2.0] && f.jac([1.0, 2.0], [0.5, 1.0]) == J
     solution = SciMLBase.solve(SciMLBase.NonlinearProblem(f, [1.0, 1.0], [9.0, 2.0]), SimpleNewtonRaphson(); abstol = 1e-12)
     @test solution.u ≈ [2.0, 1.0]
-    @test_throws ArgumentError SciMLBase.NonlinearFunction(CasADiCodegen.Function("w", [z], [z[1]]))
+    @test_throws ArgumentError SciMLBase.NonlinearFunction(CasADiCodegen.Function("w", [z], [CasADiCodegen.C.transpose(z)]))
 end
 
 @testset "sparse = true gives the Jacobian a sparse prototype" begin
@@ -453,4 +453,135 @@ end
     observed_twice = CasADiCodegen.Function("observed_twice", [vertcat(x, v), SX.sym("x")], [vertcat(v, -x), x^2])
     @test_throws "need distinct names" SciMLBase.ODEFunction(observed_twice)
     @test SciMLBase.ODEFunction(rhs; sys = SciMLBase.SymbolCache([:a, :b], [:c], :s)).sys isa SciMLBase.SymbolCache
+end
+
+@testset "NonlinearFunction of more equations than unknowns" begin
+    # Three lines through (2, 1): a least-squares problem with a residual of zero.
+    z = SX.sym("z", 2)
+    lines = CasADiCodegen.Function("lines", [z], [vertcat(z[1] - 2z[2], z[1] + z[2] - 3, z[1]^2 - z[2] - 3)])
+    f = SciMLBase.NonlinearFunction(lines)
+    @test length(f.resid_prototype) == 3
+    @test f.jac([2.0, 1.0], nothing) == [1.0 -2.0; 1.0 1.0; 4.0 -1.0]
+    solution = SciMLBase.solve(SciMLBase.NonlinearLeastSquaresProblem(f, [1.0, 0.0]), SimpleGaussNewton(); abstol = 1e-12)
+    @test solution.u ≈ [2.0, 1.0]
+end
+
+@testset "initialization of an ODEFunction" begin
+    # D(x) = -x, 0 = total - x - y: x is differential, y algebraic.
+    x, y, total, y0, t = SX.sym("x"), SX.sym("y"), SX.sym("total"), SX.sym("y0"), SX.sym("t")
+    u, p = vertcat(x, y), vertcat(total, y0)
+    rhs = CasADiCodegen.Function("rhs", [u, p, t], [vertcat(-x, total - x - y)])
+    mass = Diagonal([1.0, 0.0])
+    newton = SciMLBase.OverrideInit(; nlsolve = SimpleNewtonRaphson())
+    # The condition y = y0 fixes the algebraic state, and initialization solves for the differential one.
+    fixed_y = CasADiCodegen.Function("fixed_y", [u, p, t], [y - y0])
+    f = SciMLBase.ODEFunction(rhs; mass_matrix = mass, initialization = fixed_y)
+    problem = SciMLBase.ODEProblem(f, [0.0, 0.0], (0.0, 1.0), [4.0, 1.0])
+    initial = CasADiCodegen.initialization_problem(problem)
+    @test initial isa SciMLBase.NonlinearProblem && initial.u0 == [0.0, 0.0]
+    @test SciMLBase.solve(initial, SimpleNewtonRaphson()).u ≈ [3.0, 1.0]
+    solution = SciMLBase.solve(problem, Rodas5P(); initializealg = newton, abstol = 1e-10, reltol = 1e-10)
+    @test solution.u[end] ≈ [3exp(-1), 4 - 3exp(-1)] rtol = 1e-8
+    # A target of the condition is a parameter, which a change of the problem moves.
+    problem.ps[:y0] = 2.0
+    @test SciMLBase.solve(problem, Rodas5P(); initializealg = newton).u[1] ≈ [2.0, 2.0]
+    # Regression: `remake` rebuilds the initialization data of SciMLBase, which then ignored the new state and parameters.
+    @test SciMLBase.solve(SciMLBase.remake(problem; p = [5.0, 1.5]), Rodas5P(); initializealg = newton).u[1] ≈ [3.5, 1.5]
+    # A solved parameter is an unknown of the initialization, and the solution has its value.
+    fixed_xy = CasADiCodegen.Function("fixed_xy", [u, p, t], [vertcat(x - 1, y - y0)])
+    g = SciMLBase.ODEFunction(rhs; mass_matrix = mass, initialization = fixed_xy, solved_parameters = [:total])
+    solution = SciMLBase.solve(SciMLBase.ODEProblem(g, [0.0, 0.0], (0.0, 1.0), [0.0, 2.0]), Rodas5P(); initializealg = newton)
+    @test SciMLBase.successful_retcode(solution) && solution.ps[:total] ≈ 3.0 && solution.u[1] ≈ [1.0, 2.0]
+    # More conditions than unknowns give a least-squares problem, which fails when they disagree.
+    over = CasADiCodegen.Function("over", [u, p, t], [vertcat(x - 1, y - y0)])
+    h = SciMLBase.ODEFunction(rhs; mass_matrix = mass, initialization = over)
+    gauss = SciMLBase.OverrideInit(; nlsolve = SimpleGaussNewton())
+    consistent = SciMLBase.ODEProblem(h, [0.0, 0.0], (0.0, 1.0), [4.0, 3.0])
+    @test CasADiCodegen.initialization_problem(consistent) isa SciMLBase.NonlinearLeastSquaresProblem
+    @test SciMLBase.successful_retcode(SciMLBase.solve(consistent, Rodas5P(); initializealg = gauss))
+    inconsistent = SciMLBase.remake(consistent; p = [4.0, 2.0])
+    @test SciMLBase.solve(inconsistent, Rodas5P(); initializealg = gauss).retcode == SciMLBase.ReturnCode.InitialFailure
+    # With AutoSpecialize, other conditions give a function of the same type, for which the solver is compiled already.
+    auto(conditions) = SciMLBase.ODEFunction(rhs; mass_matrix = mass, initialization = conditions, specialize = SciMLBase.AutoSpecialize)
+    @test typeof(auto(fixed_y)) == typeof(auto(CasADiCodegen.Function("fixed_x", [u, p, t], [x - y0])))
+    @test_throws "the arguments of" SciMLBase.ODEFunction(rhs; initialization = CasADiCodegen.Function("w", [u], [x]))
+    @test_throws "not a parameter" SciMLBase.ODEFunction(rhs; initialization = fixed_y, solved_parameters = [:x])
+    # Without a mass matrix: a steady state of the Lotka-Volterra system, where a condition on the derivatives calls the right side.
+    a, b = SX.sym("a"), SX.sym("b")
+    lotka = CasADiCodegen.Function("lotka", [vertcat(a, b)], [vertcat(1.5a - a * b, -3b + a * b)])
+    steady = CasADiCodegen.Function("steady", [vertcat(a, b)], [lotka(vertcat(a, b))])
+    for inplace in (true, false)
+        k = SciMLBase.ODEFunction(lotka; inplace, initialization = steady)
+        start = inplace ? [2.0, 1.0] : SVector(2.0, 1.0)
+        solution = SciMLBase.solve(SciMLBase.ODEProblem(k, start, (0.0, 1.0)), Vern9(); initializealg = newton)
+        @test solution.u[1] ≈ [3.0, 1.5] && solution.u[1] isa typeof(start)
+    end
+end
+
+@testset "SDEFunction and SDEProblem from CasADi functions" begin
+    # Drift and noise of two states, with the parameters a and b and the time.
+    x, y, a, b, t = SX.sym("x"), SX.sym("y"), SX.sym("a"), SX.sym("b"), SX.sym("t")
+    u, p = vertcat(x, y), vertcat(a, b)
+    drift = CasADiCodegen.Function("drift", [u, p, t], [vertcat(a * (y - x), x * y - t)])
+    diagonal = CasADiCodegen.Function("diagonal", [u, p, t], [vertcat(b * x, b * y)])
+    u0, p0, s = [1.0, 2.0], [3.0, 0.5], 0.25
+    # A column of noise is diagonal noise: one Wiener process per state.
+    f = SciMLBase.SDEFunction(drift, diagonal)
+    du, dg, J = zeros(2), zeros(2), zeros(2, 2)
+    f(du, u0, p0, s); f.g(dg, u0, p0, s); f.jac(J, u0, p0, s)
+    @test (du, dg, J) == ([3.0, 1.75], [0.5, 1.0], [-3.0 3.0; 2.0 1.0])
+    problem = SciMLBase.SDEProblem(drift, diagonal, u0, (0.0, 1.0), p0)
+    @test problem.noise_rate_prototype === nothing && problem.ps[:b] == 0.5
+    # A matrix of noise has one column per Wiener process; the problem gets its prototype, dense or sparse.
+    o = C.SX(1, 1)                              # a structural zero
+    matrix = CasADiCodegen.Function("matrix", [u, p, t], [[b * x o 0.1; o b * y t]])
+    G = [0.5 0.0 0.1; 0.0 1.0 0.25]
+    dense = SciMLBase.SDEProblem(drift, matrix, u0, (0.0, 1.0), p0)
+    @test dense.noise_rate_prototype == zeros(2, 3)
+    D = fill(NaN, 2, 3)
+    dense.f.g(D, u0, p0, s)
+    @test D == G && dense.f.g(u0, p0, s) == G
+    sparse = SciMLBase.SDEProblem(drift, matrix, u0, (0.0, 1.0), p0; sparse = true)
+    prototype = sparse.noise_rate_prototype
+    @test prototype isa SparseMatrixCSC && nnz(prototype) == 4 && sparse.f.jac_prototype isa SparseMatrixCSC
+    # A sparse matrix of another pattern, as `zero` of the prototype in the caches of a solver, takes that of the noise.
+    for S in (copy(prototype), zero(prototype))
+        sparse.f.g(S, u0, p0, s)
+        @test S == G && nnz(S) == 4
+    end
+    # Out of place, the noise is a static vector or matrix.
+    static = SciMLBase.SDEProblem(drift, matrix, SVector(1.0, 2.0), (0.0, 1.0), p0; inplace = false)
+    @test static.noise_rate_prototype isa SMatrix{2,3} && static.f.g(static.u0, p0, s) == G
+    @test SciMLBase.SDEFunction(drift, diagonal; inplace = false).g(SVector(1.0, 2.0), p0, s) === SVector(0.5, 1.0)
+    @test_throws "the arguments of" SciMLBase.SDEFunction(drift, CasADiCodegen.Function("w", [u], [x]))
+    @test_throws "rows" SciMLBase.SDEFunction(drift, CasADiCodegen.Function("w", [u, p, t], [vertcat(x, y, t)]))
+end
+
+@testset "DiscreteFunction and ImplicitDiscreteFunction from CasADi functions" begin
+    # The map u⁺ = f(u, p, t) of two states, with the parameter a and the time, and the observed total.
+    x, y, a, t = SX.sym("x"), SX.sym("y"), SX.sym("a"), SX.sym("t")
+    step = CasADiCodegen.Function("step", [vertcat(x, y), a, t], [vertcat(a * x * y, x + t), x + y], ["u", "a", "t"], ["next", "total"])
+    u0, p0, s = [2.0, 3.0], [0.5], 1.0
+    problem = SciMLBase.DiscreteProblem(step, u0, (0.0, 4.0), p0)
+    next = zeros(2)
+    problem.f(next, u0, p0, s)
+    @test SciMLBase.isinplace(problem) && next == [3.0, 3.0]
+    @test problem.ps[:a] == 0.5 && SciMLBase.getu(problem, :total)(problem) == 5.0
+    # Out of place, the map returns a static vector.
+    static = SciMLBase.DiscreteProblem(step, SVector(2.0, 3.0), (0.0, 4.0), p0; inplace = false)
+    @test !SciMLBase.isinplace(static) && static.f(static.u0, p0, s) === SVector(3.0, 3.0)
+    @test_throws "column vectors of one size" SciMLBase.DiscreteFunction(CasADiCodegen.Function("w", [vertcat(x, y)], [x]))
+    # The residual 0 = F(u⁺, u, p, t) of an implicit map: a backward Euler step of u' = -a u³ with the step t, and the algebraic z = u².
+    v, w, zn, z = SX.sym("v"), SX.sym("w"), SX.sym("zn"), SX.sym("z")
+    residual = CasADiCodegen.Function("euler", [vertcat(v, zn), vertcat(w, z), a, t], [vertcat(v - w + t * a * v^3, zn - v^2)])
+    implicit = SciMLBase.ImplicitDiscreteProblem(residual, [1.0, 1.0], (0.0, 2.0), p0)
+    r = fill(NaN, 2)
+    implicit.f(r, [2.0, 1.0], [1.0, 9.0], p0, 0.5)
+    @test SciMLBase.isinplace(implicit) && r == [3.0, -3.0] && implicit.ps[:a] == 0.5
+    @test SciMLBase.ImplicitDiscreteFunction(residual; inplace = false)(SVector(2.0, 1.0), SVector(1.0, 9.0), p0, 0.5) === SVector(3.0, -3.0)
+    # The residual takes the dual numbers of a nonlinear solver that differentiates it.
+    @test ForwardDiff.jacobian(q -> (out = similar(q); implicit.f(out, q, [1.0, 9.0], p0, 0.5); out), [2.0, 1.0]) == [4.0 0.0; -4.0 1.0]
+    # More equations than states give a least-squares problem, which needs its prototype.
+    @test length(SciMLBase.ImplicitDiscreteFunction(CasADiCodegen.Function("r", [v, w], [vertcat(v - w, v^2)])).resid_prototype) == 2
+    @test_throws "the same size" SciMLBase.ImplicitDiscreteFunction(CasADiCodegen.Function("r", [v, vertcat(w, z)], [v]))
 end

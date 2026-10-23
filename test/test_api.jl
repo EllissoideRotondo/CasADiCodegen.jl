@@ -161,6 +161,15 @@ end
     @test [C.DM([1.0, 2.0]); [7.0, 8.0]] isa C.DM && vec(Matrix([C.DM([1.0, 2.0]); [7.0, 8.0]])) == [1.0, 2.0, 7.0, 8.0]
 end
 
+@testset "a function takes Julia arrays of numbers" begin
+    # Regression: a call on a Vector threw a MethodError, although a call by name took one.
+    x, M = SX.sym("x", 2), SX.sym("M", 2, 2)
+    f = CasadiFunction("f", [x, M, SX.sym("s")], [M * x, x[1]], ["x", "M", "s"], ["y", "first"])
+    y, first = f([1.0, 2.0], [1.0 2.0; 3.0 4.0], 0.5)
+    @test y isa C.DM && vec(Matrix(y)) == [5.0, 11.0] && only(first) == 1.0
+    @test vec(Matrix(f([1, 2], C.DM([1.0 2.0; 3.0 4.0]), 1)[1])) == [5.0, 11.0]
+end
+
 @testset "tools: operations of a function and the first NaN" begin
     x, p = SX.sym("x", 2), SX.sym("p")
     f = CasADiCodegen.Function("f", [x, p], [vertcat(sqrt(x[1] - p) * x[2], log(x[2]) + sin(x[1]))])
@@ -277,5 +286,5 @@ end
     @test nnz(S[1]) == 2 && Matrix(S[1]) ≈ A && Matrix(S[4]) ≈ D
     g = CasadiFunction("g", [x, p], [x])
     @test_throws "must take the arguments (x, u, p)" CasADiCodegen.linearization(g, h)
-    @test_throws "linearization returns compiled functions" CasADiCodegen.linearization(f, h; expression = Val{true})
+    @test CasADiCodegen.linearization(f, h; expression = Val{true}) isa Expr
 end

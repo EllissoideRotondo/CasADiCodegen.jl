@@ -71,6 +71,9 @@ problem.lcons, problem.ucons
 | Constructor | Generated functions |
 |---|---|
 | `ODEFunction(f; jac = true, paramjac = true, sparse = false, inplace = true, specialize = FullSpecialize)` | Right side, `jac`, and `paramjac` when `f` has parameters |
+| `SDEFunction(f, g; jac = true, paramjac = true, sparse = false, inplace = true, specialize = FullSpecialize)` | Drift, noise `g`, `jac` and `paramjac` of the drift |
+| `DiscreteFunction(f; inplace = true, specialize = FullSpecialize)` | Map to the next state |
+| `ImplicitDiscreteFunction(f; inplace = true, specialize = FullSpecialize)` | Residual of the implicit map |
 | `NonlinearFunction(f; jac = true, sparse = false, inplace = true, specialize = FullSpecialize)` | Residual and `jac` |
 | `OptimizationFunction(objective, constraints; hess = true, sparse = false, lag_h = sparse && hess)` | Objective, `grad`, `hess`, `cons`, `cons_j`, and either `cons_h`, the Hessian of each constraint, or `lag_h`, the Hessian of the Lagrange function |
 
@@ -84,6 +87,21 @@ problem.lcons, problem.ucons
   function and then solves its problem must call `solve` through `Base.invokelatest`.
 - The other keywords go to the SciML constructor.
 - A function that has no parameters ignores the parameters of the problem.
+- `ODEFunction(f; initialization = c)` adds conditions `c(u, p, t) = 0` on the initial
+  values, which the solver solves together with the algebraic equations before its first
+  step, and `solved_parameters` makes parameters unknowns of that problem; see
+  [Initialize differential-algebraic equations](@ref).
+- The noise `g` of `SDEFunction` has the arguments of the drift `f` and returns a column,
+  for diagonal or scalar noise, or a matrix with a column per Wiener process.
+  `SDEProblem(f, g, u0, tspan, p)` makes the function and gives a matrix noise its
+  `noise_rate_prototype`, sparse with `sparse = true`; see
+  [Add noise to a differential equation](@ref).
+- The map `f(u, p, t)` of `DiscreteFunction` returns the next state, and the residual
+  `f(u⁺, u, p, t)` of `ImplicitDiscreteFunction` takes the next and the current state;
+  `DiscreteProblem(f, u0, tspan, p)` and `ImplicitDiscreteProblem(f, u0, tspan, p)` make
+  the function and the problem. See [Discrete-time systems](@ref).
+- A residual of `NonlinearFunction` of another size than its unknowns gives the function
+  a `resid_prototype`, for a `NonlinearLeastSquaresProblem`.
 
 For a large system whose Jacobian has few nonzeros, `sparse = true` gives the function
 a `jac_prototype`, a `SparseMatrixCSC` with the sparsity pattern of the Jacobian, into
@@ -120,8 +138,9 @@ f.lag_hess_prototype
 
 ## Names and observed variables
 
-`ODEFunction` and `NonlinearFunction` give the SciML function the names of the symbols
-of the CasADi function, so that a solution and a problem can be indexed by name, as in
+`ODEFunction`, `SDEFunction`, `DiscreteFunction`, `ImplicitDiscreteFunction` and
+`NonlinearFunction` give the SciML function the names of the symbols of the CasADi
+function, so that a solution and a problem can be indexed by name, as in
 `solution[:x]` or `remake(problem; p = [:k => 9.0])`. A state built from scalar symbols has their names; the
 elements of one symbol of several elements, such as `SX.sym("u", 2)`, are `u_0` and
 `u_1`, the names that CasADi gives them. Each result of the CasADi function after the
@@ -137,18 +156,20 @@ solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12)
 solution[:x][end], solution[:energy][end], SciMLBase.remake(problem; p = [:k => 9.0]).p
 ```
 
-A function whose arguments are not made of named symbols, or whose names occur twice,
-gets no names, and a second result is then an error. A `sys` given to the constructor
+A function whose arguments are not made of named symbols, or in which a name of a symbol
+or of a result occurs twice, gets no names, and a second result is then an error. The residual of
+`ImplicitDiscreteFunction` has one result and no observed variables. A `sys` given to the constructor
 replaces the names and the observed variables.
 
 ## Static arrays
 
 For a small system, a state of static arrays keeps the solver off the heap. With
-`inplace = false`, `ODEFunction` and `NonlinearFunction` hold out-of-place functions that
-return an `SVector` for the right side and an `SMatrix` for each Jacobian, which
-keeps the shape of a matrix also for one state or one parameter, as the implicit solvers
-need. Each of these arrays holds at most 1024 elements, so that a Jacobian limits the
-system to 32 states, and a larger system throws an `ArgumentError`:
+`inplace = false`, `ODEFunction`, `SDEFunction`, `NonlinearFunction` and `DiscreteFunction`
+hold out-of-place functions that return an `SVector` for the right side or the map and an
+`SMatrix` for each Jacobian, which keeps the shape of a matrix also for one state or one
+parameter, as the implicit solvers need. Each of these arrays holds at most 1024
+elements, so that a Jacobian limits the system to 32 states, a map without Jacobian to
+1024, and a larger system throws an `ArgumentError`:
 
 ```@example sciml
 using StaticArrays: SVector

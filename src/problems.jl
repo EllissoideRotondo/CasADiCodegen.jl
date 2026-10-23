@@ -561,6 +561,13 @@ optimization problem with the SciML algorithm `alg` (see `optimization_functions
 function optimizer end
 
 """
+    initialization_problem(problem)
+
+The initialization problem of a SciML problem; the method is in the extension for SciMLBase.jl.
+"""
+function initialization_problem end
+
+"""
     GeneratedObjective
 
 The supertype of the objective of a `SciMLBase.OptimizationFunction` that the extension for

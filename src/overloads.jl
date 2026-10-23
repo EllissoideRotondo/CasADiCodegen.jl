@@ -35,6 +35,17 @@ function Base.inv(A::MX, lsolver::AbstractString)
     size(A, 1) == size(A, 2) || throw(DimensionMismatch("the matrix is not square: its size is $(size(A))"))
     C.inv(A, lsolver)
 end
+"""
+    (f::CasADiCodegen.Function)(arguments...)
+
+Evaluate `f` on its arguments, each a number, a Julia vector or matrix of numbers, a `DM`,
+an `SX` or an `MX`, as the front end does on numbers and CasADi matrices. A Julia array
+becomes a `DM`; the results are those of the call on `DM` arguments.
+"""
+function (f::C.Function)(arguments::Vararg{Union{Real,AbstractVecOrMat{<:Real},C.DM,SX,MX}})
+    f(map(a -> a isa AbstractVector ? C.DM(collect(Float64, a)) : a isa AbstractMatrix ? C.DM(Matrix{Float64}(a)) : a, arguments)...)
+end
+
 SpecialFunctions.erf(x::Symbolic) = C.erf(x)
 SpecialFunctions.erfinv(x::Symbolic) = C.erfinv(x)
 

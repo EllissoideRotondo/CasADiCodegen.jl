@@ -790,6 +790,12 @@ struct Opaque
 end
 (o::Opaque)(out, u, p, t) = (o.f(out, u, p, t); nothing)
 (o::Opaque)(u, p, t) = o.f(u, p, t)
+"The in-place function `f(out, u, p)`, with its out-of-place method `f(u, p)`, behind a field of abstract type, as `Opaque` is for (u, p, t)."
+struct OpaqueNonlinear
+    f::Any
+end
+(o::OpaqueNonlinear)(out, u, p) = (o.f(out, u, p); nothing)
+(o::OpaqueNonlinear)(u, p) = o.f(u, p)
 
 # The numbers of arguments of the methods of each wrapper. SciMLBase finds them by reflection
 # otherwise, at each construction of a SciML function and so at each `remake` of a problem.
@@ -801,6 +807,7 @@ SciMLBase.numargs(::Scalar) = [2]
 SciMLBase.numargs(::Hessians) = [3]
 SciMLBase.numargs(::LagrangeHessian) = [5]
 SciMLBase.numargs(::Opaque) = [4, 3]
+SciMLBase.numargs(::OpaqueNonlinear) = [3, 2]
 SciMLBase.numargs(::Allocating{3}) = [4, 3]
 SciMLBase.numargs(::Allocating{2}) = [3, 2]
 
@@ -858,15 +865,17 @@ function check_sparse(kind, sparse::Bool, jac::Bool, inplace::Bool, options)
 end
 
 """
-    vector_field(kind, f, most) -> (arguments, value, observed)
+    vector_field(kind, f, most; square = true) -> (arguments, value, observed)
 
 Return the arguments of `f` as symbols, its first result on them, which is a column vector
-of the size of the first argument, and its other results on them, which are column vectors.
+of the size of the first argument (of any size without `square`), and its other results on
+them, which are column vectors.
 """
-function vector_field(kind, f::CasADiCodegen.Function, most::Int)
+function vector_field(kind, f::CasADiCodegen.Function, most::Int; square::Bool = true)
     @requires 1 <= C.n_in(f) <= most && C.n_out(f) >= 1 "$kind: the function \"$(C.name(f))\" must have 1 to $most arguments and at least one result"
     n = C.size1(C.sparsity_in(f, 0))
-    @requires shape(C.sparsity_in(f, 0)) == (n, 1) && shape(C.sparsity_out(f, 0)) == (n, 1) "$kind: the first argument and the first result of \"$(C.name(f))\" must be column vectors of one size"
+    m = square ? n : C.size1(C.sparsity_out(f, 0))
+    @requires shape(C.sparsity_in(f, 0)) == (n, 1) && shape(C.sparsity_out(f, 0)) == (m, 1) "$kind: the first argument and the first result of \"$(C.name(f))\" must be column vectors$(square ? " of one size" : "")"
     @requires all(C.size2(C.sparsity_out(f, o)) == 1 for o in 1:C.n_out(f)-1) "$kind: the other results of \"$(C.name(f))\" must be column vectors"
     arguments = symbols(f)
     values = C.n_out(f) == 1 ? [f(arguments...)] : collect(f(arguments...))
@@ -977,18 +986,19 @@ function observed_functions(f::CasADiCodegen.Function, arguments, values, codege
 end
 
 """
-    named_system(f, arguments, values, time, codegen) -> NamedTuple
+    named_system(f, arguments, values, time, codegen; places = (0, 1, 2)) -> NamedTuple
 
 Return the option `sys` of the SciML function of `f`, with the names of the elements of
 its arguments (see `element_names`) and the observed variables of its other results
 `values`, or no option when an argument has no names or a name occurs twice. Throw an
 `ArgumentError` in that case when `f` has further results, since an observed variable
-needs the names.
+needs the names. `places` are the arguments of `f`, from 0, that hold the state, the
+parameters and the time; the arguments after the state are optional.
 """
-function named_system(f::CasADiCodegen.Function, arguments, values, time::Bool, codegen)
-    states = element_names(f, 0)
-    parameters = C.n_in(f) >= 2 ? element_names(f, 1) : Symbol[]
-    clock = !time ? Symbol[] : C.n_in(f) >= 3 ? element_names(f, 2) : [:t]
+function named_system(f::CasADiCodegen.Function, arguments, values, time::Bool, codegen; places::NTuple{3,Int} = (0, 1, 2))
+    states = element_names(f, places[1])
+    parameters = C.n_in(f) > places[2] ? element_names(f, places[2]) : Symbol[]
+    clock = !time ? Symbol[] : C.n_in(f) > places[3] ? element_names(f, places[3]) : [:t]
     outputs = [Symbol(C.name_out(f, o)) for o in 1:length(values)]
     elements = [Symbol(C.name_out(f, o), "_", k - 1) for (o, v) in enumerate(values) if C.size1(C.sparsity(v)) > 1 for k in 1:C.size1(C.sparsity(v))]
     named = !any(isnothing, (states, parameters, clock)) && (!time || length(clock) == 1) &&
@@ -1002,7 +1012,8 @@ end
 """
     SciMLBase.ODEFunction(f::CasADiCodegen.Function; jac = true, paramjac = true, sparse = false,
                           inplace = true, specialize = SciMLBase.FullSpecialize, chunk_size = nothing,
-                          split_above = nothing, optlevel = nothing, cache = false, options...)
+                          split_above = nothing, optlevel = nothing, cache = false, initialization = nothing,
+                          solved_parameters = Symbol[], options...)
 
 Make the SciML function of the ordinary differential equation whose right side is the
 CasADi function `f(u)`, `f(u, p)` or `f(u, p, t)`. It holds generated code for the right
@@ -1039,8 +1050,29 @@ elements, so `jac = true` allows at most 32 states; a larger function throws an
 function: `SciMLBase.AutoSpecialize` lets OrdinaryDiffEq.jl wrap the in-place functions of
 a `Vector{Float64}` state, so that the solver code compiled for one model serves the next
 one; an explicit solver wraps them only with `jac = false`. `chunk_size`, `split_above`,
-`optlevel` and `cache` go to [`build_function`](@ref CasADiCodegen.build_function). The
-other `options` go to `SciMLBase.ODEFunction`. See
+`optlevel` and `cache` go to [`build_function`](@ref CasADiCodegen.build_function).
+
+`initialization` is a CasADi function with the arguments of `f` whose first result, a
+column vector, holds conditions `c(u, p, t) = 0` on the initial values. With it the
+function has an `initialization_data`, from which the default `initializealg` of
+OrdinaryDiffEq.jl solves the algebraic equations of `f` and the conditions together before
+the first step. The algebraic equations are the rows of zeros of the option `mass_matrix`.
+The unknowns are the state, whose values in the problem are a guess, and the parameters in
+`solved_parameters`, given by name or by place. The initialization problem is a
+`NonlinearProblem` when it has as many equations as unknowns, and a
+`NonlinearLeastSquaresProblem` otherwise; see
+[`initialization_problem`](@ref CasADiCodegen.initialization_problem). A condition on a
+derivative calls `f` on the arguments of `initialization`. With
+`specialize = SciMLBase.AutoSpecialize`, functions of one `f` with other conditions have one
+type, so that the solvers compiled for the first serve the others.
+
+The default nonlinear solver of OrdinaryDiffEq.jl needs OrdinaryDiffEqNonlinearSolve.jl
+loaded, and starts with Broyden's method, which does not use the generated Jacobian and
+can leave the guess for another solution. A method that uses it is given as
+`initializealg = SciMLBase.OverrideInit(; nlsolve = TrustRegion())`, to `solve` or to the
+problem.
+
+The other `options` go to `SciMLBase.ODEFunction`. See
 [Give a CasADi function to a SciML problem](@ref).
 
 # Examples
@@ -1057,25 +1089,483 @@ problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [1.0, 0.0], (0.0, pi)
 """
 function SciMLBase.ODEFunction(f::CasADiCodegen.Function; jac::Bool = true, paramjac::Bool = true, sparse::Bool = false,
                                inplace::Bool = true, specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
-                               chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+                               chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false,
+                               initialization::Union{Nothing,CasADiCodegen.Function} = nothing,
+                               solved_parameters::AbstractVector = Symbol[], options...)
     check_sparse("ODEFunction", sparse, jac, inplace, options)
+    @requires initialization !== nothing || isempty(solved_parameters) "ODEFunction: solved_parameters needs initialization"
+    @requires initialization === nothing || !haskey(options, :initialization_data) "ODEFunction: give initialization or initialization_data, not both"
     codegen = codegen_options(; chunk_size, split_above, optlevel, cache)
-    arguments, value, observed = vector_field("ODEFunction", f, 3)
+    _, rhs, keywords = drift("ODEFunction", f, codegen; jac, paramjac, sparse, inplace, specialize, user_sys = haskey(options, :sys))
+    start = initialization === nothing ? (;) :
+            (; initialization_data = initialization_data(f, initialization, solved_parameters, get(options, :mass_matrix, LinearAlgebra.I), inplace, specialize, codegen))
+    SciMLBase.ODEFunction{inplace,specialize}(rhs; start..., keywords..., options...)
+end
+concrete(c::Call{N}) where {N} = Call{N,typeof(c.g!)}(c.g!)
+
+"""
+    drift(kind, f, codegen; jac, paramjac, sparse, inplace, specialize, user_sys) -> (arguments, rhs, keywords)
+
+Return what the SciML function of a differential equation with the right side `f` takes
+from it: the symbols of the arguments of `f`, the generated right side, and the keywords
+`jac`, `paramjac`, `jac_prototype` (with `sparse`) and, unless `user_sys`, `sys`.
+"""
+function drift(kind, f::CasADiCodegen.Function, codegen; jac::Bool, paramjac::Bool, sparse::Bool, inplace::Bool, specialize, user_sys::Bool)
+    arguments, value, observed = vector_field(kind, f, 3)
     wrap(name, expression; matrix = true) = sciml_function(name, arguments, expression, inplace; matrix, codegen...)
     # In place, a Jacobian also has an out-of-place method, which returns a new matrix of the shape of `result`.
     matrix_function(name, M, result) = inplace ? Allocating{3}(wrap(name, M), result) : wrap(name, M)
     J = jac ? CasADiCodegen.jacobian(value, arguments[1]) : nothing
-    prototype = sparse ? (; jac_prototype = sparse_prototype("ODEFunction", J)) : (;)
-    names = haskey(options, :sys) ? (;) : named_system(f, arguments, observed, true, codegen)
+    prototype = sparse ? (; jac_prototype = sparse_prototype(kind, J)) : (;)
+    names = user_sys ? (;) : named_system(f, arguments, observed, true, codegen)
     # OrdinaryDiffEq.jl wraps the right side and the Jacobian of a function that is not
     # FullSpecialize, but not the Jacobian by the parameters, whose type would stay in that of the solver.
     pJ = paramjac && length(arguments) >= 2 ? (P = CasADiCodegen.jacobian(value, arguments[2]); matrix_function("paramjac", P, Val(shape(C.sparsity(P))))) : nothing
-    SciMLBase.ODEFunction{inplace,specialize}(wrap("rhs", value; matrix = false);
-        jac = jac ? matrix_function("jac", J, sparse ? prototype.jac_prototype : Val(shape(C.sparsity(J)))) : nothing,
-        paramjac = pJ !== nothing && inplace && specialize !== SciMLBase.FullSpecialize ? Opaque(pJ) : pJ,
-        prototype..., names..., options...)
+    keywords = (; jac = jac ? matrix_function("jac", J, sparse ? prototype.jac_prototype : Val(shape(C.sparsity(J)))) : nothing,
+                paramjac = pJ !== nothing && inplace && specialize !== SciMLBase.FullSpecialize ? Opaque(pJ) : pJ,
+                prototype..., names...)
+    arguments, wrap("rhs", value; matrix = false), keywords
 end
-concrete(c::Call{N}) where {N} = Call{N,typeof(c.g!)}(c.g!)
+
+"""
+    SciMLBase.SDEFunction(f::CasADiCodegen.Function, g::CasADiCodegen.Function; jac = true, paramjac = true,
+                          sparse = false, inplace = true, specialize = SciMLBase.FullSpecialize,
+                          chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+
+Make the SciML function of the stochastic differential equation `du = f(u, p, t) dt + g(u, p, t) dW`
+from the CasADi functions `f` of the drift and `g` of the noise. It holds generated code for
+the drift, the noise and the Jacobians of the drift.
+
+`f` is as for [`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function)), and the
+keywords have the meaning that they have there; its further results are observed variables.
+`g` has the arguments of `f` and one result with a row per state:
+
+- a column vector gives diagonal noise, with one Wiener process per state, or scalar noise,
+  with one Wiener process for all, when the problem has a scalar Wiener process as its
+  option `noise`, such as `WienerProcess(0.0, 0.0, 0.0)` of DiffEqNoiseProcess.jl, whose
+  third value starts the auxiliary process that methods of high order such as `SRIW1` need;
+- a matrix gives non-diagonal noise, with one Wiener process per column. The problem needs
+  the option `noise_rate_prototype`, a matrix of the size of `g`, which
+  [`SDEProblem`](@ref SciMLBase.SDEProblem(::CasADiCodegen.Function, ::CasADiCodegen.Function, ::Any, ::Any))
+  makes.
+
+The noise `g(out, u, p, t)` writes a dense matrix or a `SparseMatrixCSC` of any pattern, which
+then takes the sparsity pattern of `g`. Its out-of-place method `g(u, p, t)` returns a new vector or matrix. With
+`inplace = false` the noise returns an `SVector` or an `SMatrix`.
+
+# Examples
+```julia
+using CasADiCodegen
+import SciMLBase
+
+x, mu, sigma, t = SX.sym("x"), SX.sym("mu"), SX.sym("sigma"), SX.sym("t")
+drift = CasadiFunction("drift", [x, vertcat(mu, sigma), t], [mu * x])
+noise = CasadiFunction("noise", [x, vertcat(mu, sigma), t], [sigma * x])
+f = SciMLBase.SDEFunction(drift, noise)          # geometric Brownian motion
+```
+"""
+function SciMLBase.SDEFunction(f::CasADiCodegen.Function, g::CasADiCodegen.Function; jac::Bool = true, paramjac::Bool = true,
+                               sparse::Bool = false, inplace::Bool = true,
+                               specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
+                               chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    check_sparse("SDEFunction", sparse, jac, inplace, options)
+    codegen = codegen_options(; chunk_size, split_above, optlevel, cache)
+    arguments, rhs, keywords = drift("SDEFunction", f, codegen; jac, paramjac, sparse, inplace, specialize, user_sys = haskey(options, :sys))
+    SciMLBase.SDEFunction{inplace,specialize}(rhs, noise_function(f, g, arguments, inplace, codegen); keywords..., options...)
+end
+
+"""
+    SciMLBase.SDEProblem(f::CasADiCodegen.Function, g::CasADiCodegen.Function, u0, tspan, p = SciMLBase.NullParameters();
+                         jac = true, paramjac = true, sparse = false, inplace = true,
+                         specialize = SciMLBase.FullSpecialize, chunk_size = nothing, split_above = nothing,
+                         optlevel = nothing, cache = false, options...)
+
+Make the SciML problem of the stochastic differential equation with the drift `f` and the
+noise `g` from the initial state `u0` over `tspan`. The function of the problem is
+[`SDEFunction(f, g)`](@ref SciMLBase.SDEFunction(::CasADiCodegen.Function, ::CasADiCodegen.Function))
+with the keywords before `options`, which go to `SciMLBase.SDEProblem`.
+
+For a noise matrix, the problem has a `noise_rate_prototype` of zeros of the size of `g`:
+a `Matrix`, with `sparse = true` a `SparseMatrixCSC` of the sparsity pattern of `g`, and with
+`inplace = false` an `SMatrix`. An option `noise_rate_prototype` replaces it.
+
+# Examples
+```julia
+using CasADiCodegen
+import SciMLBase
+using StochasticDiffEqLowOrder: LambaEM
+
+x = SX.sym("x", 2)
+drift = CasadiFunction("drift", [x], [-x])
+noise = CasadiFunction("noise", [x], [[0.1 * x[1] 0.0 0.2; 0.0 0.3 * x[2] 0.2]])   # three Wiener processes
+problem = SciMLBase.SDEProblem(drift, noise, [1.0, 1.0], (0.0, 1.0))
+solution = SciMLBase.solve(problem, LambaEM(); seed = 1)
+```
+"""
+function SciMLBase.SDEProblem(f::CasADiCodegen.Function, g::CasADiCodegen.Function, u0, tspan, p = SciMLBase.NullParameters();
+                              jac::Bool = true, paramjac::Bool = true, sparse::Bool = false, inplace::Bool = true,
+                              specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
+                              chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    sde = SciMLBase.SDEFunction(f, g; jac, paramjac, sparse, inplace, specialize, chunk_size, split_above, optlevel, cache)
+    SciMLBase.SDEProblem(sde, float.(u0), tspan, p; noise_rate_prototype = noise_prototype(g, inplace, sparse), options...)
+end
+
+"""
+    noise_shape(f, g) -> (rows, columns)
+
+Return the size of the result of the noise `g` of the drift `f`, after a check that `g`
+has the arguments of `f`, one result, and a row per state.
+"""
+function noise_shape(f::CasADiCodegen.Function, g::CasADiCodegen.Function)
+    @requires C.n_in(g) == C.n_in(f) && all(shape(C.sparsity_in(g, i)) == shape(C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1) &&
+              C.n_out(g) == 1 "SDEFunction: the noise \"$(C.name(g))\" must have the arguments of \"$(C.name(f))\" and one result"
+    n = C.size1(C.sparsity_in(f, 0))
+    @requires C.size1(C.sparsity_out(g, 0)) == n "SDEFunction: the noise \"$(C.name(g))\" must have $n rows, one per state; got $(C.size1(C.sparsity_out(g, 0)))"
+    shape(C.sparsity_out(g, 0))
+end
+
+"""
+    noise_prototype(g, inplace, sparse) -> AbstractMatrix or nothing
+
+Return the `noise_rate_prototype` of a problem with the noise `g`: `nothing` for a column,
+and for a matrix, zeros of its size: a `Matrix`, a `SparseMatrixCSC` of its pattern with
+`sparse`, or an `SMatrix` out of place.
+"""
+function noise_prototype(g::CasADiCodegen.Function, inplace::Bool, sparse::Bool)
+    n, m = shape(C.sparsity_out(g, 0))
+    m == 1 && return nothing
+    !inplace ? zero(StaticArrays.SMatrix{n,m,Float64}) : sparse ? sparse_prototype("SDEProblem", g(symbols(g)...)) : zeros(n, m)
+end
+
+"The generated noise of `g` on the symbols `arguments` of the drift `f`, as the `g` of a SciML function."
+function noise_function(f::CasADiCodegen.Function, g::CasADiCodegen.Function, arguments, inplace::Bool, codegen)
+    n, m = noise_shape(f, g)
+    value = g(arguments...)
+    m == 1 && (value = CasADiCodegen.densify(value))
+    call = sciml_function("noise", arguments, value, inplace; matrix = m > 1, codegen...)
+    inplace || return call
+    m == 1 && return Allocating{3}(call, Val((n,)))
+    _, _, colptr, rowval = G.sparsity_tuple(C.sparsity_out(g, 0))
+    Allocating{3}(Patterned(call, colptr, rowval), Val((n, m)))
+end
+
+"""
+    Patterned(call, colptr, rowval)
+
+The in-place noise `call(out, u, p, t)` of a matrix whose sparsity pattern has the column
+pointers `colptr` and the rows `rowval`, from 1. It first gives a sparse `out` that pattern:
+a solver makes the matrices of its caches with `zero` of the prototype, which has no stored
+entries.
+"""
+struct Patterned{F}
+    call::F
+    colptr::Vector{Int}
+    rowval::Vector{Int}
+end
+function (n::Patterned)(out, u, p, t)
+    # `is_stored` is true for a sparse matrix only, whose methods the extension for SparseArrays.jl defines.
+    G.Helpers.is_stored(out) && Base.get_extension(CasADiCodegen, :CasADiCodegenSparseArraysExt).take_pattern!(out, n.colptr, n.rowval)
+    n.call(out, u, p, t)
+end
+
+"""
+    SciMLBase.DiscreteFunction(f::CasADiCodegen.Function; inplace = true, specialize = SciMLBase.FullSpecialize,
+                               chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+
+Make the SciML function of the map `u⁺ = f(u, p, t)` of a discrete-time system from the
+CasADi function `f(u)`, `f(u, p)` or `f(u, p, t)`. It holds generated code for the map.
+
+The first result of `f` is the next state, a column vector of the size of its first
+argument. The solver `FunctionMap` of OrdinaryDiffEqFunctionMap.jl calls the map with the
+time of the next state, `t + dt`. Each further result, a column vector, is an observed
+variable, which a solution computes from each saved state at the time of that state. The states, the parameters, the time and the observed
+variables have names as for [`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function)),
+and the keywords have the meaning that they have there. With `inplace = false` the map
+returns an `SVector`. The other `options` go to `SciMLBase.DiscreteFunction`.
+
+# Examples
+```julia
+using CasADiCodegen
+import SciMLBase
+
+using OrdinaryDiffEqFunctionMap: FunctionMap
+
+x, r = SX.sym("x"), SX.sym("r")
+logistic = CasadiFunction("logistic", [x, r], [r * x * (1 - x)])
+problem = SciMLBase.DiscreteProblem(SciMLBase.DiscreteFunction(logistic), [0.2], (0.0, 50.0), [3.2])
+solution = SciMLBase.solve(problem, FunctionMap())
+solution[:x]
+```
+"""
+function SciMLBase.DiscreteFunction(f::CasADiCodegen.Function; inplace::Bool = true,
+                                    specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
+                                    chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    codegen = codegen_options(; chunk_size, split_above, optlevel, cache)
+    arguments, value, observed = vector_field("DiscreteFunction", f, 3)
+    names = haskey(options, :sys) ? (;) : named_system(f, arguments, observed, true, codegen)
+    SciMLBase.DiscreteFunction{inplace,specialize}(sciml_function("map", arguments, value, inplace; codegen...); names..., options...)
+end
+
+"""
+    SciMLBase.DiscreteProblem(f::CasADiCodegen.Function, u0, tspan, p = SciMLBase.NullParameters();
+                              inplace = true, specialize = SciMLBase.FullSpecialize, chunk_size = nothing,
+                              split_above = nothing, optlevel = nothing, cache = false, options...)
+
+Make the SciML problem of the map `u⁺ = f(u, p, t)` from the initial state `u0` over `tspan`.
+The function of the problem is
+[`DiscreteFunction(f)`](@ref SciMLBase.DiscreteFunction(::CasADiCodegen.Function)) with the
+keywords before `options`, which go to `SciMLBase.DiscreteProblem`. `FunctionMap` steps with
+`dt = 1` unless `solve` receives another `dt`.
+"""
+function SciMLBase.DiscreteProblem(f::CasADiCodegen.Function, u0, tspan, p = SciMLBase.NullParameters();
+                                   inplace::Bool = true, specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
+                                   chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    map = SciMLBase.DiscreteFunction(f; inplace, specialize, chunk_size, split_above, optlevel, cache)
+    SciMLBase.DiscreteProblem(map, float.(u0), tspan, p; options...)
+end
+
+"A generated in-place function `g!` of `N` of the arguments (u⁺, u, p, t), as the residual `(out, u⁺, u, p, t)` of an implicit map."
+struct ImplicitCall{N,G}
+    g!::G
+end
+(c::ImplicitCall{2})(out, v, u, p, t) = (@inline c.g!((out,), (v, u)); nothing)
+(c::ImplicitCall{3})(out, v, u, p, t) = (@inline c.g!((out,), (v, u, p)); nothing)
+(c::ImplicitCall{4})(out, v, u, p, t) = (@inline c.g!((out,), (v, u, p, t)); nothing)
+"A generated out-of-place function `g` of `N` of the arguments (u⁺, u, p, t), which returns a static vector."
+struct ImplicitStatic{N,G}
+    g::G
+end
+(s::ImplicitStatic{2})(v, u, p, t) = s.g(v, u)
+(s::ImplicitStatic{3})(v, u, p, t) = s.g(v, u, p)
+(s::ImplicitStatic{4})(v, u, p, t) = s.g(v, u, p, t)
+SciMLBase.numargs(::ImplicitCall) = [5]
+SciMLBase.numargs(::ImplicitStatic) = [4]
+
+"""
+    SciMLBase.ImplicitDiscreteFunction(f::CasADiCodegen.Function; inplace = true,
+                                       specialize = SciMLBase.FullSpecialize, chunk_size = nothing,
+                                       split_above = nothing, optlevel = nothing, cache = false, options...)
+
+Make the SciML function of the implicit map `0 = f(u⁺, u, p, t)` of a discrete-time system
+from the CasADi function `f(u⁺, u)`, `f(u⁺, u, p)` or `f(u⁺, u, p, t)`. It holds generated
+code for the residual.
+
+The first two arguments are the next and the current state, column vectors of one size.
+The one result, a column vector, is the residual. The solver `IDSolve` of
+ImplicitDiscreteSolve.jl solves `f(u⁺, u, p, t + dt) = 0` for `u⁺` at each step; its
+nonlinear solver differentiates the residual with dual numbers, since a
+`SciMLBase.ImplicitDiscreteFunction` holds no Jacobian. A residual of more elements than
+the state gives the function a `resid_prototype` of zeros of its size, and the step is
+then a least-squares problem.
+
+By default `IDSolve` takes the initial state `u0` of the problem as the state before the
+first time: it solves `f(u, u0, p, t0) = 0` and starts from `u`. With
+`initializealg = SciMLBase.NoInit()` it starts from `u0`, whose algebraic elements must
+then satisfy their equations. `IDSolve` adapts its steps to the convergence of the
+nonlinear solver unless it receives `adaptive = false` and a `dt`.
+
+The states have the names of the elements of `u⁺`, and the parameters and the time those
+of `p` and `t`, as for [`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function)),
+whose keywords have the same meaning here. With `inplace = false` the residual returns an
+`SVector`; `IDSolve` does not take that form, since it writes the state in place. The
+other `options` go to `SciMLBase.ImplicitDiscreteFunction`.
+"""
+function SciMLBase.ImplicitDiscreteFunction(f::CasADiCodegen.Function; inplace::Bool = true,
+                                            specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
+                                            chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    @requires 2 <= C.n_in(f) <= 4 && C.n_out(f) == 1 "ImplicitDiscreteFunction: the function \"$(C.name(f))\" must have 2 to 4 arguments and one result"
+    n = C.size1(C.sparsity_in(f, 0))
+    @requires shape(C.sparsity_in(f, 0)) == (n, 1) && shape(C.sparsity_in(f, 1)) == (n, 1) && C.size2(C.sparsity_out(f, 0)) == 1 "ImplicitDiscreteFunction: the next and the current state of \"$(C.name(f))\" must be column vectors of the same size, and its result a column vector"
+    codegen = codegen_options(; chunk_size, split_above, optlevel, cache)
+    arguments = symbols(f)
+    value = CasADiCodegen.densify(f(arguments...))
+    m = C.size1(C.sparsity(value))
+    names = haskey(options, :sys) ? (;) : named_system(f, arguments, [], true, codegen; places = (0, 2, 3))
+    prototype = m == n || haskey(options, :resid_prototype) ? (;) :
+                (; resid_prototype = inplace ? zeros(m) : zero(StaticArrays.SVector{m,Float64}))
+    residual = if inplace
+        g! = CasADiCodegenSciMLBaseExt.inplace("residual", arguments, value; codegen...)
+        ImplicitCall{length(arguments),typeof(g!)}(g!)
+    else
+        g = outofplace("residual", arguments, value; matrix = false, codegen...).g
+        ImplicitStatic{length(arguments),typeof(g)}(g)
+    end
+    SciMLBase.ImplicitDiscreteFunction{inplace,specialize}(residual; prototype..., names..., options...)
+end
+
+"""
+    SciMLBase.ImplicitDiscreteProblem(f::CasADiCodegen.Function, u0, tspan, p = SciMLBase.NullParameters();
+                                      inplace = true, specialize = SciMLBase.FullSpecialize, chunk_size = nothing,
+                                      split_above = nothing, optlevel = nothing, cache = false, options...)
+
+Make the SciML problem of the implicit map `0 = f(u⁺, u, p, t)` from the initial state `u0`
+over `tspan`. The function of the problem is
+[`ImplicitDiscreteFunction(f)`](@ref SciMLBase.ImplicitDiscreteFunction(::CasADiCodegen.Function))
+with the keywords before `options`, which go to `SciMLBase.ImplicitDiscreteProblem`.
+"""
+function SciMLBase.ImplicitDiscreteProblem(f::CasADiCodegen.Function, u0, tspan::Tuple, p = SciMLBase.NullParameters();
+                                           inplace::Bool = true, specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
+                                           chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    residual = SciMLBase.ImplicitDiscreteFunction(f; inplace, specialize, chunk_size, split_above, optlevel, cache)
+    SciMLBase.ImplicitDiscreteProblem(residual, float.(u0), tspan, p; options...)
+end
+
+"""
+    algebraic_rows(mass) -> Vector{Int}
+
+Return the rows of zeros of the mass matrix `mass`, which are the algebraic equations.
+"""
+algebraic_rows(mass::LinearAlgebra.UniformScaling) = Int[]
+algebraic_rows(mass::AbstractMatrix) = [i for i in axes(mass, 1) if all(iszero, view(mass, i, :))]
+
+"""
+    parameter_places(f, solved) -> Vector{Int}
+
+Return the places, from 1, of the parameters `solved` of `f`, each given by its place or by
+its name (see `element_names`).
+"""
+function parameter_places(f::CasADiCodegen.Function, solved::AbstractVector)
+    np = C.n_in(f) >= 2 ? C.nnz_in(f, 1) : 0
+    names = np > 0 ? element_names(f, 1) : Symbol[]
+    place(i::Integer) = (@requires 1 <= i <= np "ODEFunction: $i is not a parameter of \"$(C.name(f))\", which has $np"; Int(i))
+    function place(name::Symbol)
+        found = names === nothing ? nothing : findfirst(==(name), names)
+        @requires found !== nothing "ODEFunction: $name is not a parameter of \"$(C.name(f))\""
+        found
+    end
+    places = map(place, solved)
+    @requires allunique(places) "ODEFunction: a parameter occurs twice in solved_parameters"
+    collect(Int, places)
+end
+
+"""
+    Initialization(n, solved, fixed, time, static)
+
+The maps between a SciML problem and its initialization problem. The problem has a state
+of `n` elements, a static array when `static`. The initialization problem has the unknowns
+`[u; p[solved]]` and the parameters `[p[fixed]; t]`, or `p[fixed]` without `time`, in
+vectors of `Float64`. Called as `update_initializeprob!`, it writes into them the current
+state, parameters and time of a problem or an integrator. It writes in place because
+`remake` of a SciML problem rebuilds the initialization data with an in-place update;
+`StateMap` and `ParameterMap` take the solution back.
+"""
+struct Initialization
+    n::Int
+    solved::Vector{Int}
+    fixed::Vector{Int}
+    time::Bool
+    static::Bool
+end
+parameter_vector(p::AbstractArray) = vec(p)
+parameter_vector(p) = Float64[]
+function (s::Initialization)(problem, provider)
+    u, p = SII.state_values(provider), parameter_vector(SII.parameter_values(provider))
+    w, q = problem.u0, problem.p
+    T = promote_type(eltype(u), eltype(p))
+    @requires T <: Float64 || Float64 <: T "initialization: the state and the parameters have the number type $T, and the initialization problem holds Float64"
+    @requires length(u) == s.n && length(w) == s.n + length(s.solved) "initialization: the state has $(length(u)) elements, and the initialization problem was made for $(s.n)"
+    copyto!(w, 1, vec(u), 1, s.n)
+    copyto!(w, s.n + 1, p[s.solved], 1, length(s.solved))
+    copyto!(q, 1, p[s.fixed], 1, length(s.fixed))
+    s.time && (q[end] = SII.current_time(provider))
+    nothing
+end
+"The state of the solution of the initialization problem of `Initialization`."
+struct StateMap
+    s::Initialization
+end
+(m::StateMap)(solution) = m.s.static ? StaticArrays.SVector{m.s.n}(solution.u[1:m.s.n]) : solution.u[1:m.s.n]
+"The parameters of a problem with the solved parameters of the solution of its initialization problem."
+struct ParameterMap
+    s::Initialization
+end
+function (m::ParameterMap)(provider, solution)
+    p = SII.parameter_values(provider)
+    q = Vector{promote_type(eltype(p), eltype(solution.u))}(vec(p))
+    q[m.s.solved] .= solution.u[m.s.n+1:end]
+    p isa StaticArrays.StaticArray ? StaticArrays.SVector{length(q)}(q) : q
+end
+
+"""
+    CasADiCodegen.initialization_problem(problem::SciMLBase.ODEProblem) -> SciMLBase.NonlinearProblem or SciMLBase.NonlinearLeastSquaresProblem
+
+Return the initialization problem of `problem`, whose function comes from
+[`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function)) with `initialization`,
+at the initial state, parameters and time of `problem`.
+
+Its unknowns are the state and then the solved parameters, which start from their values in
+`problem`; its parameters are the other parameters and then the initial time. Its residual
+holds the algebraic equations and then the conditions. The solver of the ODE solves this
+problem before its first step; solve it alone to see whether the conditions can be met, and
+read its residual at the solution.
+
+# Examples
+```julia
+initial = CasADiCodegen.initialization_problem(problem)
+solution = SciMLBase.solve(initial, SimpleNewtonRaphson())
+solution.resid
+```
+"""
+function CasADiCodegen.initialization_problem(problem::SciMLBase.ODEProblem)
+    data = problem.f.initialization_data
+    @requires data isa SciMLBase.OverrideInitData && data.update_initializeprob! isa Initialization "initialization_problem: the function of the problem has no initialization of CasADiCodegen; give initialization to ODEFunction"
+    stored = data.initializeprob
+    data.update_initializeprob!(stored, problem)
+    # A copy, since the solver of the ODE writes into the stored problem.
+    stored isa SciMLBase.NonlinearLeastSquaresProblem ? SciMLBase.NonlinearLeastSquaresProblem(stored.f, copy(stored.u0), copy(stored.p)) :
+                                                         SciMLBase.NonlinearProblem(stored.f, copy(stored.u0), copy(stored.p))
+end
+
+"""
+    initialization_data(f, conditions, solved, mass, inplace, specialize, codegen) -> SciMLBase.OverrideInitData
+
+Return the initialization of the SciML function of `f` with the mass matrix `mass`: the
+problem of the algebraic equations of `f` and the conditions `conditions(u, p, t) = 0`,
+with the unknowns `u` and the parameters `solved`. It is a `NonlinearProblem` when it has
+as many equations as unknowns, and a `NonlinearLeastSquaresProblem` otherwise.
+"""
+function initialization_data(f::CasADiCodegen.Function, conditions::CasADiCodegen.Function, solved::AbstractVector, mass, inplace::Bool, specialize, codegen)
+    k = C.n_in(f)
+    @requires C.n_in(conditions) == k && all(shape(C.sparsity_in(conditions, i)) == shape(C.sparsity_in(f, i)) for i in 0:k-1) &&
+              C.n_out(conditions) >= 1 && C.size2(C.sparsity_out(conditions, 0)) == 1 "ODEFunction: the conditions \"$(C.name(conditions))\" must have the arguments of \"$(C.name(f))\" and a column vector as their first result"
+    places = parameter_places(f, solved)
+    n, np = C.nnz_in(f, 0), k >= 2 ? C.nnz_in(f, 1) : 0
+    fixed = setdiff(1:np, places)
+    T = C.is_a(f, "SXFunction") && C.is_a(conditions, "SXFunction") ? CasADiCodegen.SX : CasADiCodegen.MX
+    # Scalar symbols with the names of the state and of the parameters, so that the initialization problem has them.
+    states, parameters = element_names(f, 0), np > 0 ? element_names(f, 1) : Symbol[]
+    named = states !== nothing && parameters !== nothing
+    scalar(name, i) = T.sym(named ? string(name) : "w_$i")
+    u = [scalar(named ? states[i] : nothing, i) for i in 1:n]
+    p = Vector{T}(undef, np)
+    for (j, i) in enumerate(places)
+        p[i] = scalar(named ? parameters[i] : nothing, n + j)
+    end
+    for i in fixed
+        p[i] = T.sym(named ? string(parameters[i]) : "q_$i")
+    end
+    t = T.sym("t")
+    arguments = [CasADiCodegen.vertcat(u...), CasADiCodegen.vertcat(p...), t][1:k]
+    call(g) = (r = g(arguments...); CasADiCodegen.densify(C.n_out(g) == 1 ? r : r[1]))
+    column(parts) = isempty(parts) ? T(0, 1) : CasADiCodegen.vertcat(parts...)
+    value, extra = call(f), call(conditions)
+    equations = column([[value[i] for i in algebraic_rows(mass)]; [extra[i] for i in 1:C.size1(C.sparsity(extra))]])
+    unknowns = column([u; p[places]])
+    known = column(k >= 3 ? [p[fixed]; t] : p[fixed])
+    residual = CasADiCodegen.Function("initialization", [unknowns, known], [equations])
+    # The problem is in place also for an out-of-place ODE, since its update writes into its vectors.
+    g = SciMLBase.NonlinearFunction(residual; specialize, codegen...)
+    # Without full specialization, the type of the function, and so of the ODEFunction, does
+    # not depend on the conditions, so that the solvers compiled for one set of conditions serve the next.
+    if specialize !== SciMLBase.FullSpecialize
+        g = SciMLBase.NonlinearFunction{true,specialize}(OpaqueNonlinear(g.f); jac = OpaqueNonlinear(g.jac), g.resid_prototype, g.sys)
+    end
+    m, w = C.size1(C.sparsity(equations)), zeros(n + length(places))
+    problem = m == length(w) ? SciMLBase.NonlinearProblem(g, w, zeros(C.numel(known))) :
+              SciMLBase.NonlinearLeastSquaresProblem(g, w, zeros(C.numel(known)))
+    s = Initialization(n, places, fixed, k >= 3, !inplace)
+    SciMLBase.OverrideInitData(problem, s, StateMap(s), isempty(places) ? nothing : ParameterMap(s))
+end
 
 """
     SciMLBase.NonlinearFunction(f::CasADiCodegen.Function; jac = true, sparse = false, inplace = true,
@@ -1085,9 +1575,10 @@ concrete(c::Call{N}) where {N} = Call{N,typeof(c.g!)}(c.g!)
 Make the SciML function of the equations `f(u) = 0` or `f(u, p) = 0`, where `f` is
 a CasADi function. It holds generated code for the residual and for its Jacobian (`jac`).
 
-The first result of `f` is the residual, a column vector of the size of its first
-argument; each further result is an observed variable. Set `jac = false` to leave the
-Jacobian out. The names, the keywords `sparse`, `inplace`, `specialize` and those of the
+The first result of `f` is the residual, a column vector; each further result is an
+observed variable. A residual of another size than the first argument of `f` gives the
+function a `resid_prototype` of zeros of that size, for a
+`SciMLBase.NonlinearLeastSquaresProblem`. Set `jac = false` to leave the Jacobian out. The names, the keywords `sparse`, `inplace`, `specialize` and those of the
 code have the meaning that they have for `ODEFunction`, without the time; in place, the
 Jacobian also has the out-of-place method `jac(u, p)`. The other `options` go to
 `SciMLBase.NonlinearFunction`.
@@ -1103,10 +1594,13 @@ function SciMLBase.NonlinearFunction(f::CasADiCodegen.Function; jac::Bool = true
                                      chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
     check_sparse("NonlinearFunction", sparse, jac, inplace, options)
     codegen = codegen_options(; chunk_size, split_above, optlevel, cache)
-    arguments, value, observed = vector_field("NonlinearFunction", f, 2)
+    arguments, value, observed = vector_field("NonlinearFunction", f, 2; square = false)
     wrap(name, expression; matrix = true) = sciml_function(name, arguments, expression, inplace; matrix, codegen...)
     J = jac ? CasADiCodegen.jacobian(value, arguments[1]) : nothing
-    prototype = sparse ? (; jac_prototype = sparse_prototype("NonlinearFunction", J)) : (;)
+    m = C.size1(C.sparsity(value))
+    residual = m == C.size1(arguments[1]) || haskey(options, :resid_prototype) ? (;) :
+               (; resid_prototype = inplace ? zeros(m) : zeros(StaticArrays.SVector{m,Float64}))
+    prototype = sparse ? (; jac_prototype = sparse_prototype("NonlinearFunction", J), residual...) : residual
     names = haskey(options, :sys) ? (;) : named_system(f, arguments, observed, false, codegen)
     # In place, the Jacobian also has an out-of-place method, which returns a new matrix.
     jacobian = !jac ? nothing : inplace ? Allocating{2}(wrap("jac", J), sparse ? prototype.jac_prototype : Val(shape(C.sparsity(J)))) : wrap("jac", J)
