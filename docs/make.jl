@@ -56,7 +56,7 @@ makedocs(;
             "explanation/performance.md",
             "explanation/scope.md",
         ],
-        "API reference" => "api.md",
+        "API reference" => ["api.md", "api_sciml.md"],
     ],
 )
 
