@@ -18,7 +18,18 @@ module CasADiCodegen
 import CasADi_jll
 import CasADiSWIG_jll
 import Libdl
+import LinearAlgebra
+import OpenBLAS32_jll
 using PrecompileTools: @compile_workload
+
+# The plugins of CasADi (Ipopt, Bonmin) call the LP64 BLAS through libblastrampoline,
+# which Julia loads with an ILP64 BLAS only; with no LP64 one they compute garbage.
+function __init__()
+    if !Base.any(lib -> lib.interface == :lp64, LinearAlgebra.BLAS.lbt_get_config().loaded_libs)
+        LinearAlgebra.BLAS.lbt_forward(OpenBLAS32_jll.libopenblas_path)
+    end
+    @assert Base.any(lib -> lib.interface == :lp64, LinearAlgebra.BLAS.lbt_get_config().loaded_libs)
+end
 
 # The official front end: the generated module `casadi`, its alias `C`, the
 # convenience layer and its exports (`SX`, `MX`, `jacobian`, ...), with the changes

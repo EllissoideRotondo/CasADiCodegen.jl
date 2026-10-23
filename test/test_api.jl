@@ -231,6 +231,15 @@ end
     @test Float64(f(C.DM(2.0), C.DM(3.0))) == -6.0
 end
 
+# Regression: with no LP64 BLAS behind libblastrampoline, as when Ipopt.jl is not loaded,
+# the Ipopt of CasADi printed "no BLAS/LAPACK library loaded for dcopy_()" and returned garbage.
+@testset "the Ipopt of CasADi solves with no other package loaded" begin
+    x = SX.sym("x", 2)
+    solver = C.nlpsol("nearest", "ipopt", Dict("x" => x, "f" => (x[1] - 1)^2 + (x[2] - 2)^2, "g" => x[1] + x[2]),
+                      Dict("ipopt.print_level" => 0, "print_time" => false))
+    @test C.nonzeros(solver(; x0 = [0.0, 0.0], lbg = 0.0, ubg = 1.0)["x"]) ≈ [0.0, 1.0] atol = 1e-7
+end
+
 @testset "block-triangular form of a sparsity pattern" begin
     # Rows are equations, columns unknowns: unknowns 3 and 1 form a loop, 4 needs 3, and 2 needs 4.
     rows, cols = [3, 3, 1, 1, 0, 0, 2, 2], [2, 0, 2, 0, 2, 3, 3, 1]
