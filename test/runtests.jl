@@ -10,7 +10,7 @@ using Test
 # groups also run the checks of the exhaustive tier (`EXHAUSTIVE` in helpers.jl):
 # slow cases of behaviors that the default run checks in a faster case.
 # The slowest groups come first, so that they do not start last.
-const GROUPS = ("integrator", "mx", "forms", "cache", "casadi", "emit", "nodes", "solvers", "optimization", "callback", "sciml", "bifurcation", "root", "api", "rules", "traced", "symbolics")
+const GROUPS = ("integrator", "mx", "forms", "cache", "casadi", "emit", "nodes", "solvers", "switches", "optimization", "callback", "sciml", "bifurcation", "root", "api", "rules", "traced", "symbolics")
 
 """
     run_group(group) -> (passed, seconds, output)

@@ -4,7 +4,9 @@
 # differential state (see `derivative_definition!`), and `jacobian`
 # of a graph with an integrator of CasADi with an event function gives the Jacobian of
 # forward directions, because CasADi 3.8.1 gives such an integrator the sparsity
-# pattern of the model without events (see `Codegen.event_jacobian`).
+# pattern of the model without events (see `Codegen.event_jacobian`). The methods of
+# `integrator` with a plugin name first check the model for switches on the state and
+# read the option "nonsmooth" (see `Codegen.check_native_integrator`).
 
 # The code generation, which holds the methods that the changed `jacobian` calls. The
 # module is defined after the front end, so the call finds it when it runs.
@@ -32,6 +34,32 @@ function event_definitions!(ex, count::Ref{Int})
         return ex
     end
     foreach(a -> event_definitions!(a, count), ex.args)
+    ex
+end
+
+"""
+    native_integrator_definitions!(ex, count::Ref{Int}) -> ex
+
+Rewrite the methods `integrator(name::AbstractString, solver::AbstractString, dae, ...)` in
+`ex`, so that they first call `Codegen.check_native_integrator`, which warns about a switch
+on the state in the model and removes the option `"nonsmooth"`; `count` is increased by
+the number of rewritten methods.
+"""
+function native_integrator_definitions!(ex, count::Ref{Int})
+    ex isa Expr || return ex
+    if Meta.isexpr(ex, (:(=), :function)) && (signature = call_signature(ex.args[1])) !== nothing
+        arguments = signature.args[2:end]
+        if signature.args[1] === :integrator && length(arguments) >= 3 && arguments[1:2] == [:(name::AbstractString), :(solver::AbstractString)]
+            check = Expr(:., CODEGEN, QuoteNode(:check_native_integrator))
+            names = map(argument_name, arguments)
+            names[3] === :dae || throw(AssertionError("the method integrator(name, solver, ...) of the front end has changed"))
+            first_call = :opts in names ? :(opts = $check(name, dae, opts)) : :($check(name, dae, nothing))
+            ex.args[2] = Expr(:block, first_call, ex.args[2])
+            count[] += 1
+        end
+        return ex
+    end
+    foreach(a -> native_integrator_definitions!(a, count), ex.args)
     ex
 end
 
@@ -114,6 +142,9 @@ function typed_module(ex)
     jacobians = Ref(0)
     event_definitions!(ex, jacobians)
     jacobians[] == 3 || throw(AssertionError("$(jacobians[]) methods of jacobian of the front end were found, not 3; the front end has changed"))
+    integrators = Ref(0)
+    native_integrator_definitions!(ex, integrators)
+    integrators[] == 12 || throw(AssertionError("$(integrators[]) methods of integrator with a plugin name were found in the front end, not 12; the front end has changed"))
     derivatives = Ref(0)
     derivative_definition!(ex, derivatives)
     derivatives[] == 1 || throw(AssertionError("$(derivatives[]) methods der(::DaeBuilder, ::MX) of the front end were found, not 1; the front end has changed"))

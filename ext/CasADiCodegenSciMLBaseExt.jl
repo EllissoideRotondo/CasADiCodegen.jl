@@ -64,11 +64,28 @@ function integrate!(state, s::Solver, x0, q)
     run!(state, s)
 end
 
+"""
+    restart!(integrator, u0, options; t0, tf)
+
+Reinitialize `integrator` at the state `u0` and the time `t0` toward `tf`, with the first
+step of a new solve: the step `dt` of `options`, or else the automatic one. An event changes
+the proposed step, which `SciMLBase.reinit!` keeps, so without the restart a run would
+depend on the runs before it.
+"""
+function restart!(integrator, u0, options; t0, tf)
+    dt = get(options, :dt, zero(integrator.dt))
+    SciMLBase.set_proposed_dt!(integrator, dt)
+    # With no step in the options, the proposed step is zero, and `reinit!` finds the automatic one.
+    SciMLBase.reinit!(integrator, u0; t0, tf)
+    iszero(dt) || (integrator.dt = integrator.tdir * abs(dt))
+    integrator
+end
+
 function run!(state, s::Solver)
     x0 = state.sol.prob.u0
     t0, tf = span(s, state.p, typeof(state.t))
     t0 == tf && return copyto!(state.u, x0)
-    SciMLBase.reinit!(state, x0; t0, tf)
+    restart!(state, x0, s.options; t0, tf)
     SciMLBase.solve!(state)
     code = state.sol.retcode
     SciMLBase.successful_retcode(code) || error("integrator \"$(s.name)\": the solver stopped with the return code $code")
@@ -118,12 +135,11 @@ function make_grid_state(s::GridSolver, ::Type{S}, u0::Vector{T}, q0::Vector, ju
     (; integrator, path = Vector{T}(undef, length(u0) * length(s.times)))
 end
 
-function restart!(integrator, x0, q)
+function restart!(integrator, s::GridSolver, x0, q)
     u0 = integrator.sol.prob.u0
     copyto!(u0, x0)
     copyto!(integrator.p, q)
-    SciMLBase.reinit!(integrator, u0)
-    integrator
+    restart!(integrator, u0, s.options; t0 = integrator.sol.prob.tspan[1], tf = integrator.sol.prob.tspan[2])
 end
 
 function (s::GridSolver)(x0, q)
@@ -132,7 +148,7 @@ function (s::GridSolver)(x0, q)
 end
 
 function sample!(integrator, path, s::GridSolver, x0, q)
-    SciMLBase.solve!(restart!(integrator, x0, q))
+    SciMLBase.solve!(restart!(integrator, s, x0, q))
     code = integrator.sol.retcode
     SciMLBase.successful_retcode(code) || error("integrator \"$(s.name)\": the solver stopped with the return code $code")
     saved, n, N = integrator.sol.u, length(x0), length(s.times)
@@ -149,7 +165,7 @@ function (s::GridSolver)(x0, q, jump!)
 end
 
 function jumped!(integrator, s::GridSolver, x0, q, jump!)
-    restart!(integrator, x0, q)
+    restart!(integrator, s, x0, q)
     direction = sign(s.times[end] - s.t0)
     for (k, stop) in enumerate(s.times)
         # Loop invariant: the state of `integrator` follows the calls of `jump!` at the times before `k`.
@@ -166,10 +182,13 @@ function jumped!(integrator, s::GridSolver, x0, q, jump!)
 end
 
 """
-    integrator(name, alg, dae, t0, tf; specialize, adjoint = false, mass, options...) -> CasADiCodegen.Function
-    integrator(name, alg, dae, t0, times::AbstractVector; specialize, adjoint = false, options...) -> CasADiCodegen.Function
+    integrator(name, alg, dae, t0, tf; specialize, adjoint = false, mass, nonsmooth = :warn,
+               modes = nothing, switches = nothing, switch_times = false, options...) -> CasADiCodegen.Function
+    integrator(name, alg, dae, t0, times::AbstractVector; specialize, adjoint = false, nonsmooth = :warn,
+               modes = nothing, switches = nothing, options...) -> CasADiCodegen.Function
     integrator(name, alg, dae; specialize, adjoint = false, mass, direction = 0, interp_points = 10,
-               events = 1, terminal = true, exact = true, options...) -> CasADiCodegen.Function
+               events = 1, terminal = true, exact = true, nonsmooth = :warn,
+               modes = nothing, switches = nothing, switch_times = false, options...) -> CasADiCodegen.Function
 
 Make a CasADi function that integrates an ordinary differential equation with the SciML
 algorithm `alg`, for example `Vern9()` of OrdinaryDiffEqVerner.jl. CasADi differentiates
@@ -219,6 +238,30 @@ quadratures returns them as a second result.
   transition there too and goes on to `tf`.
 - `exact = true`: a call throws when fewer than `events` events come before `tf`. With
   `false` it passes at most `events` events and returns their count.
+- `nonsmooth = :warn`: what a switch in `"ode"` or `"quad"` gives when its operand depends
+  on the state, or on the time and a parameter together: a warning when the integrator is
+  built, an `ArgumentError` with `:error`, or nothing with `:ignore`. A switch is an
+  operation such as a comparison, `sign` or `abs`;
+  [Discontinuous models](@ref discontinuities) lists them all. The values are right, but
+  CasADi differentiates such an operation branch by branch, so the derivatives miss the
+  jump of the state transition matrix (STM) at the switching time.
+- `modes = nothing`: the pair `m => S` of a model that switches between modes. `m` is a
+  column of symbols of the type of the state, which `"ode"` and `"quad"` use in place of the
+  sign of the switching functions `S`, a column of the same size: a mode is +1 where its
+  switching function is positive and -1 where it is negative. Each change of sign of `S`
+  is an event that flips its mode, so the derivatives have the jump of the STM at the
+  switching time. The initial mode is the sign of `S` at `t0`, or on the surface the mode
+  whose flow leaves it. The inputs and the results are those of the model without modes,
+  except for the results that `switch_times` adds. A call throws when the flow slides on
+  a surface, or when a mode and its switching function disagree at an output time.
+- `switches = nothing`: an upper bound on the number of switches between `t0` and `tf`, or
+  between two output times of `times`; a call throws when more come. `modes` requires it,
+  and it requires `modes`: otherwise `integrator` throws `ArgumentError`. `events` counts
+  the events of `"zero"` only, and needs the exact number.
+- `switch_times = false`: with `true`, the results end with the switch times `ts`
+  (`switches` of them; a missing switch has the time `tf`), the index `is` of the
+  switching function of each with more than one mode, and their number `ns`. A vector of
+  times does not support it.
 - `options...`: options of the solver, for example `abstol`, `reltol` and `maxiters`.
 
 With an event function, the function returns the state at the event, the quadratures if
@@ -246,36 +289,64 @@ f = CasadiFunction("f", [x0, p], [F(x0, p), jacobian(F(x0, p), x0)])
 """
 function CasADiCodegen.integrator(name::AbstractString, alg::SciMLBase.AbstractODEAlgorithm, dae, t0::Real, tf::Real;
                            specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
-                           adjoint::Bool = false, mass::AbstractVector{<:Real} = Float64[], options...)
+                           adjoint::Bool = false, mass::AbstractVector{<:Real} = Float64[], nonsmooth::Symbol = :warn,
+                           modes::Union{Nothing,Pair} = nothing, switches::Union{Nothing,Integer} = nothing, switch_times::Bool = false, options...)
+    check_modes(name, modes, switches, switch_times)
+    modes === nothing || return CasADiCodegen.Codegen.mode_integrator(name, dae, modes, free_solver(name, alg, specialize, options),
+        event_solver(name, alg, 0, 10, specialize, options, true); span = (t0, tf), switches, switch_times, adjoint, mass = Vector{Float64}(mass), nonsmooth)
     # The adjoint equations run backward, on the solver with free times.
     make_solver(rhs, n, m) = adjoint ? Solver(String(name), rhs, alg, NaN, NaN, true, specialize, values(options)) :
                                        Solver(String(name), rhs, alg, Float64(t0), Float64(tf), false, specialize, values(options))
-    CasADiCodegen.Codegen.ode_integrator(name, dae, t0, tf, make_solver; adjoint, mass = Vector{Float64}(mass))
+    CasADiCodegen.Codegen.ode_integrator(name, dae, t0, tf, make_solver; adjoint, mass = Vector{Float64}(mass), nonsmooth)
 end
 
 function CasADiCodegen.integrator(name::AbstractString, alg::SciMLBase.AbstractODEAlgorithm, dae, t0::Real, times::AbstractVector{<:Real};
                            specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
-                           adjoint::Bool = false, mass::AbstractVector{<:Real} = Float64[], options...)
+                           adjoint::Bool = false, mass::AbstractVector{<:Real} = Float64[], nonsmooth::Symbol = :warn,
+                           modes::Union{Nothing,Pair} = nothing, switches::Union{Nothing,Integer} = nothing, switch_times::Bool = false, options...)
     @requires isempty(mass) "integrator \"$name\": mass is not supported with a vector of times"
     @requires !any(in(keys(options)), (:saveat, :tstops, :save_start, :save_end, :save_everystep, :save_idxs)) "integrator \"$name\": the times give saveat and tstops; do not pass saving options"
+    check_modes(name, modes, switches, switch_times)
+    modes === nothing || return CasADiCodegen.Codegen.mode_integrator(name, dae, modes, free_solver(name, alg, specialize, options),
+        event_solver(name, alg, 0, 10, specialize, options, true); span = (t0, times), switches, switch_times, adjoint, nonsmooth)
     make_solver(rhs, n, m, start, stops) = GridSolver(String(name), rhs, alg, start, stops, specialize, values(options))
-    CasADiCodegen.Codegen.ode_grid(name, dae, t0, times, make_solver; adjoint)
+    CasADiCodegen.Codegen.ode_grid(name, dae, t0, times, make_solver; adjoint, nonsmooth)
 end
 
 function CasADiCodegen.integrator(name::AbstractString, alg::SciMLBase.AbstractODEAlgorithm, dae;
                            specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
                            direction::Integer = 0, interp_points::Integer = 10, adjoint::Bool = false,
-                           events::Integer = 1, terminal::Bool = true, exact::Bool = true, mass::AbstractVector{<:Real} = Float64[], options...)
+                           events::Integer = 1, terminal::Bool = true, exact::Bool = true, mass::AbstractVector{<:Real} = Float64[],
+                           nonsmooth::Symbol = :warn, modes::Union{Nothing,Pair} = nothing, switches::Union{Nothing,Integer} = nothing,
+                           switch_times::Bool = false, options...)
     @requires direction in (-1, 0, 1) "integrator \"$name\": the direction of the event must be -1, 0 or 1; got $direction"
     @requires interp_points >= 0 "integrator \"$name\": interp_points must not be negative; got $interp_points"
-    make_solver(rhs, n, m) = Solver(String(name), rhs, alg, NaN, NaN, true, specialize, values(options))
+    check_modes(name, modes, switches, switch_times)
+    make_solver = free_solver(name, alg, specialize, options)
     @requires haskey(dae, "zero") || (events == 1 && terminal && exact) "integrator \"$name\": events, terminal and exact need an event function, \"zero\""
-    haskey(dae, "zero") || return CasADiCodegen.Codegen.ode_integrator(name, dae, make_solver; adjoint, mass = Vector{Float64}(mass))
+    make_event = event_solver(name, alg, direction, interp_points, specialize, options, exact)
+    modes === nothing || return CasADiCodegen.Codegen.mode_integrator(name, dae, modes, make_solver, make_event; switches, switch_times,
+                                                                      events, terminal, exact, adjoint, mass = Vector{Float64}(mass), nonsmooth)
+    haskey(dae, "zero") || return CasADiCodegen.Codegen.ode_integrator(name, dae, make_solver; adjoint, mass = Vector{Float64}(mass), nonsmooth)
+    CasADiCodegen.Codegen.ode_event(name, dae, make_solver, make_event; adjoint, events, terminal, exact, mass = Vector{Float64}(mass), nonsmooth)
+end
+
+check_modes(name, modes, switches, switch_times) =
+    @requires modes !== nothing || (switches === nothing && !switch_times) "integrator \"$name\": switches and switch_times need modes"
+
+"The `make_solver` of an integrator with free times (see `CasADiCodegen.Codegen.ode_integrator`)."
+free_solver(name, alg, specialize, options) = (rhs, n, m) -> Solver(String(name), rhs, alg, NaN, NaN, true, specialize, values(options))
+
+"""
+The `make_event` of an integrator with an event function (see `CasADiCodegen.Codegen.ode_event`), whose
+sixth argument is the number of switches of a model with modes, which need a search that may find no event.
+"""
+function event_solver(name, alg, direction, interp_points, specialize, options, exact)
     # Without full specialization the solver does not know the type of the event function,
     # so that it compiles once for all integrators with an event.
     crossing(zero) = specialize === SciMLBase.FullSpecialize ? Crossing(zero) : Crossing{Any}(zero)
-    make_event(rhs, zero, n, m, k) = EventSolver(String(name), rhs, crossing(zero), alg, Int(direction), Int(interp_points), specialize, values(options), k, exact)
-    CasADiCodegen.Codegen.ode_event(name, dae, make_solver, make_event; adjoint, events, terminal, exact, mass = Vector{Float64}(mass))
+    (rhs, zero, n, m, k, switching = 0) -> EventSolver(String(name), rhs, crossing(zero), alg, Int(direction), Int(interp_points), specialize,
+                                                       values(options), k, exact && switching == 0, Int(switching))
 end
 
 """
@@ -296,14 +367,19 @@ end
 The Julia function `(z0, x0, p, t0, tf) -> (te, i)`, or `(z0, x0, t0, tf) -> (te, i)`, that
 integrates `rhs` from `t0` toward `tf` with the SciML algorithm `alg` and returns the time of
 the first event, where an element of the event function `zero` changes its sign, and the
-place `i` of that element, from 1. The guess `z0` has no use. With `exact`, a call throws
-when no event comes before `tf`; otherwise it returns `(tf, 0)`.
+place `i` of that element, from 1. The second element of the guess `z0` is the place of the
+event at `t0`, or 0 when the search does not start at an event (see `near_surface!`). With
+`exact`, a call throws
+when no event comes before `tf`; otherwise it returns `(tf, 0)`. A call throws when the
+solver stops before `tf` for another reason, such as `maxiters`.
 
 `direction` selects the change of sign: any with 0, from negative to positive with 1, and
-from positive to negative with -1. The solver looks for the change at `interp_points`
-points of each step and at its end. `width` is the number of elements of `zero`. When two
-elements change their sign in one root search, the first one counts. Each task keeps one
-solver state per number type and per direction of time, as `Solver` does.
+from positive to negative with -1. The last `switching` elements, the switches of a model
+with modes, change their sign from positive to negative only. The solver looks for the
+change at `interp_points` points of each step and at its end. `width` is the number of
+elements of `zero`. When two elements change their sign in one root search, the first one
+counts. Each task keeps one solver state per number type and per direction of time, as
+`Solver` does.
 """
 struct EventSolver{F,Z,A,O}
     name::String
@@ -316,6 +392,7 @@ struct EventSolver{F,Z,A,O}
     options::O
     width::Int
     exact::Bool
+    switching::Int
 end
 
 function (s::EventSolver)(guess, x0, rest...)
@@ -331,7 +408,9 @@ function (s::EventSolver)(guess, x0, rest...)
         copyto!(integrator.sol.prob.u0, x0)
         copyto!(integrator.p, q)
         CasADiCodegen.Codegen.consistent!(integrator.sol.prob.u0, s.rhs, integrator.p, t0)
-        run!(state, s, t0, tf) && return StaticArrays.SVector{2,T}(event_time(state, s, T), T(state.place[]))
+        # The second element of the guess is the place of the event at `t0`, or 0 when there is none.
+        previous = something(findfirst(j -> abs(guess[2] - j) < 0.5, 1:s.width), 0)
+        run!(state, s, t0, tf, previous) && return StaticArrays.SVector{2,T}(event_time(state, s, T), T(state.place[]))
     end
     s.exact && error("integrator \"$(s.name)\": no event between the initial time $t0 and the final time $tf")
     StaticArrays.SVector{2,T}(tf, zero(T))
@@ -370,45 +449,124 @@ end
 element(s::EventSolver, state, u, t) = s.width == 1 ? s.zero(u, t, state.integrator) :
     (values = similar(u, promote_type(eltype(u), typeof(t)), s.width); s.zero(values, u, t, state.integrator); values[state.place[]])
 
-"Integrate from `t0` toward `tf`; true when an event ended the run."
-function run!(state, s::EventSolver, t0, tf)
+"""
+    run!(state, s::EventSolver, t0, tf, previous = 0) -> Bool
+
+Integrate from `t0` toward `tf`: true when an event ended the run, false when the run
+reached `tf`. `previous` is the place of the event at `t0`, or 0 (see `near_surface!`). Throws an error for any other end of the run, such as `maxiters`.
+"""
+function run!(state, s::EventSolver, t0, tf, previous::Int = 0)
     integrator = state.integrator
-    SciMLBase.reinit!(integrator, integrator.sol.prob.u0; t0, tf)
+    state.start[] = t0
+    restart!(integrator, integrator.sol.prob.u0, s.options; t0, tf)
+    near_surface!(state.near, s, integrator, previous)
     SciMLBase.solve!(integrator)
-    integrator.sol.retcode == SciMLBase.ReturnCode.Terminated
+    code = integrator.sol.retcode
+    code == SciMLBase.ReturnCode.Terminated && return true
+    code == SciMLBase.ReturnCode.Success && return false
+    error("integrator \"$(s.name)\": the search for an event stopped at the time $(integrator.t) with the return code $code")
 end
 
 """
-    Stop(place, direction)
+    Stop(place, start, direction, switches, near)
 
 The affect of the callback of an `EventSolver`: it ends the run at the first element whose
 change of sign has the `direction` (0 for any), and keeps the place of that element in
-`place[]`. With one element it is the affect of a `ContinuousCallback`, which calls it for
-the right direction only.
+`place[]`. The elements from the place `switches` on change their sign from positive to
+negative only. With one element, `Crossed` calls it with the direction of the change.
+
+A change of sign within `START_STEPS` floating-point steps of the time `start[]` of the run
+is not an event: the run starts on the surface of an event or a switch found before it. The
+first change of sign of element `j` in the direction `near[j]`, set by `near_surface!`, is
+not an event either: it is the event at the start of the run, found again.
 """
-struct Stop
+struct Stop{T}
     place::Base.RefValue{Int}
+    start::Base.RefValue{T}
     direction::Int
+    switches::Int
+    near::Vector{Int}
 end
-(a::Stop)(integrator) = (a.place[] = 1; SciMLBase.terminate!(integrator))
+
+"The number of floating-point steps of the time after the start of a run in which a change of sign is not an event (see `Stop`)."
+const START_STEPS = 8
+
+"True when the time of `integrator` is within `START_STEPS` floating-point steps of the start of the run."
+at_start(a::Stop, integrator) = abs(integrator.t - a.start[]) <= START_STEPS * eps(max(abs(integrator.t), abs(a.start[])))
+
 function (a::Stop)(integrator, crossings)
     # `crossings[i]` is -1 when element `i` changes its sign from positive to negative, +1 for the opposite change, and 0 otherwise.
-    i = findfirst(c -> c != 0 && (a.direction == 0 || c == a.direction), crossings)
-    # A change in the other direction leaves the state and its derivative as they are.
-    i === nothing && return SciMLBase.derivative_discontinuity!(integrator, false)
+    i = findfirst(j -> (c = crossings[j]; c != 0 && c != a.near[j] && (j >= a.switches ? c == -1 : a.direction == 0 || c == a.direction)), eachindex(crossings))
+    # The first change of sign of an element that starts on its surface is that zero at the start.
+    foreach(j -> crossings[j] != 0 && (a.near[j] = 0), eachindex(crossings))
+    # A change in the other direction, or at the start, leaves the state and its derivative as they are.
+    (i === nothing || at_start(a, integrator)) && return SciMLBase.derivative_discontinuity!(integrator, false)
     a.place[] = i
     SciMLBase.terminate!(integrator)
 end
 
 function make_state(s::EventSolver, ::Type{S}, u0::Vector, q0::Vector, t0, tf) where {S}
-    stop = Stop(Ref(0), s.direction)
+    stop = Stop(Ref(0), Ref(t0), s.direction, s.width - s.switching + 1, zeros(Int, s.width))
+    direction = s.switching > 0 ? -1 : s.direction             # one element: the switch of a model with modes, or an event function
+    # The state of an event is just past the root, so that a switch, whose flip moves its element
+    # away from zero, is not found again; for an event function, `near_surface!` covers the case
+    # in which the next run starts on the near side of the surface.
+    rootfind = SciMLBase.RightRootFind
     callback = s.width == 1 ?
-        SciMLBase.ContinuousCallback(s.zero, s.direction >= 0 ? stop : nothing, s.direction <= 0 ? stop : nothing;
-                                     save_positions = (false, false), s.interp_points) :
-        SciMLBase.VectorContinuousCallback(s.zero, stop, s.width; save_positions = (false, false), s.interp_points)
+        SciMLBase.ContinuousCallback(s.zero, direction >= 0 ? Crossed(stop, 1) : nothing, direction <= 0 ? Crossed(stop, -1) : nothing;
+                                     save_positions = (false, false), s.interp_points, rootfind) :
+        SciMLBase.VectorContinuousCallback(s.zero, stop, s.width; save_positions = (false, false), s.interp_points, rootfind)
     problem = SciMLBase.ODEProblem{true,S}(problem_function(s.rhs, S), u0, (t0, tf), q0)
     integrator = SciMLBase.init(problem, s.alg; callback, save_everystep = false, save_start = false, save_end = false, s.options...)
-    (; integrator, place = stop.place)
+    (; integrator, place = stop.place, start = stop.start, near = stop.near)
+end
+
+"The affect of a `ContinuousCallback` for the change of sign `crossing` of its one element: +1 from negative to positive, -1 for the opposite."
+struct Crossed{T}
+    stop::Stop{T}
+    crossing::Int
+end
+(a::Crossed)(integrator) = a.stop(integrator, (a.crossing,))
+
+"The number of times the tolerances of the solver within which an event function at the start of a run is on its surface (see `near_surface!`)."
+const NEAR_TOLERANCES = 100
+
+"""
+    near_surface!(near, s::EventSolver, integrator, previous) -> near
+
+At the start of a run of `integrator` from the event of the element `previous` of the event
+function, set `near[previous]` to the direction, +1 or -1, of the change of sign of that
+element that is the same event, and the other elements of `near` to 0. That element is on
+its surface when it is within `NEAR_TOLERANCES` times the change that the tolerances of the
+solver allow in the state, and the flow moves it to zero or across it. The arc integrator
+that gives the state at the event and the search that found it differ by about the
+tolerances, so the next search can start on the near side of the surface. A switch, and a
+`previous` of 0, the start of the first search, set no direction.
+"""
+function near_surface!(near::Vector{Int}, s::EventSolver, integrator, previous::Int)
+    @requires length(near) == s.width && 0 <= previous <= s.width "near_surface!: one direction per element of the event function"
+    fill!(near, 0)
+    j = previous
+    (j == 0 || j > s.width - s.switching) && return near
+    u, q, t = integrator.u, integrator.p, integrator.t
+    T = promote_type(eltype(u), typeof(t))
+    value(v, τ) = s.width == 1 ? s.zero(v, τ, integrator) : (out = similar(v, T, s.width); s.zero(out, v, τ, integrator); out[j])
+    g = value(u, t)
+    flow = similar(u)
+    s.rhs(flow, u, q, t)
+    h = T(sqrt(eps(Float64))) * max(1, abs(t))
+    rate = (value(CasADiCodegen.Codegen.consistent!(u .+ h .* flow, s.rhs, q, t + h), t + h) - g) / h
+    opts = integrator.opts
+    tolerance(x, i) = x isa Number ? x : x[i]
+    band = zero(g)
+    for i in eachindex(u)
+        # Loop invariant: `band` sums the changes of the element for the tolerances of the states before `i`.
+        shifted = copy(u)
+        shifted[i] += tolerance(opts.abstol, i) + tolerance(opts.reltol, i) * abs(u[i])
+        band += abs(value(shifted, t) - g)
+    end
+    !iszero(rate) && g * rate <= 0 && abs(g) <= NEAR_TOLERANCES * band && (near[j] = rate > 0 ? 1 : -1)
+    near
 end
 
 """
@@ -423,7 +581,7 @@ function CasADiCodegen.Codegen.warm(s::Union{Solver,EventSolver})
     precompile(make_state, types)
     made = Base.return_types(make_state, types)
     length(made) == 1 && isconcretetype(made[1]) &&
-        precompile(run!, s isa Solver ? (made[1], typeof(s)) : (made[1], typeof(s), Float64, Float64))
+        precompile(run!, s isa Solver ? (made[1], typeof(s)) : (made[1], typeof(s), Float64, Float64, Int))
     nothing
 end
 
@@ -539,7 +697,7 @@ function integrate!(state, s::EventIntegration, x0, p, u)
     copyto!(q, np + 1, u, 1, nu)
     CasADiCodegen.Codegen.consistent!(copyto!(u0, x0), s.rhs, q, s.t0)
     state.count[] = 0
-    SciMLBase.reinit!(integrator, u0; t0 = s.t0, tf = max(s.times[end], s.t0 + 1))
+    restart!(integrator, u0, s.options; t0 = s.t0, tf = max(s.times[end], s.t0 + 1))
     for stop in unique(s.times)
         s.t0 < stop < s.times[end] && SciMLBase.add_tstop!(integrator, stop)
     end
@@ -643,7 +801,7 @@ G.object_source(writer::G.SourceWriter, s::Solver) = :($(extension(writer)).Solv
 G.object_source(writer::G.SourceWriter, s::GridSolver) = :($(extension(writer)).GridSolver(
     $(parts(writer, s.name, s.rhs, s.alg, s.t0, s.times, s.specialize, s.options)...)))
 G.object_source(writer::G.SourceWriter, s::EventSolver) = :($(extension(writer)).EventSolver(
-    $(parts(writer, s.name, s.rhs, s.zero, s.alg, s.direction, s.interp_points, s.specialize, s.options, s.width, s.exact)...)))
+    $(parts(writer, s.name, s.rhs, s.zero, s.alg, s.direction, s.interp_points, s.specialize, s.options, s.width, s.exact, s.switching)...)))
 G.object_source(writer::G.SourceWriter, s::EventIntegration) = :($(extension(writer)).EventIntegration(
     $(parts(writer, s.name, s.rhs, s.zero, s.jump, s.alg, s.t0, s.times, s.sizes, s.specialize, s.options)...)))
 G.object_source(writer::G.SourceWriter, c::Crossing{Z}) where {Z} =
@@ -1577,6 +1735,117 @@ function CasADiCodegen.initialization_problem(problem::SciMLBase.ODEProblem)
     # A copy, since the solver of the ODE writes into the stored problem.
     stored isa SciMLBase.NonlinearLeastSquaresProblem ? SciMLBase.NonlinearLeastSquaresProblem(stored.f, copy(stored.u0), copy(stored.p)) :
                                                          SciMLBase.NonlinearProblem(stored.f, copy(stored.u0), copy(stored.p))
+end
+
+"""
+    CasADiCodegen.natural_continuation(problem::SciMLBase.AbstractNonlinearProblem, alg, values; parameter, halvings = 3, options...) -> Vector{Pair{Float64,<:SciMLBase.NonlinearSolution}}
+
+Solve `problem` with `alg` for each value of one parameter in `values`, in order, each
+solve starting from the solution of the one before. This is natural continuation, as for
+the width of a smoothed switch falling toward zero. The method exists once SciMLBase.jl is
+loaded.
+
+`parameter` is an `Integer`, the place of the parameter in `problem.p`, a vector, or a
+`Symbol` or a `String`, the name of a parameter of the problem. A problem whose function is the
+[`NonlinearFunction`](@ref SciMLBase.NonlinearFunction(::CasADiCodegen.Function)) of a
+CasADi function `f(u, p)` names each parameter after its scalar symbol in `p`. The first
+solve starts from `problem.u0`. `options` go to `solve`.
+
+When a solve fails, values between the last solved one and the failed one are tried
+first: the geometric mean when both are positive, else the arithmetic mean, at most
+`halvings` times for each value of `values`. Before the first value, the value of the
+parameter in `problem`, with `problem.u0`, stands for the last one solved. A solve fails
+when its return code is not successful, or when the solve throws `AssertionError` (a
+failed check of generated code), `DomainError` or `LinearAlgebra.SingularException`; other
+errors propagate.
+
+Return one pair `value => solution` for each value solved, intermediate ones included. The
+sequence stops at the first value that fails after its `halvings` tries. Its pair is the
+last one, with the return code of the solve, or `ReturnCode.Failure` for an error; so
+`SciMLBase.successful_retcode(last(path).second)` tells whether it reached the last value.
+For a path with turning points, use the extension for BifurcationKit.jl.
+
+Throws `ArgumentError` for empty or nonfinite `values`, a negative `halvings`, a place
+outside `problem.p` or with parameters that are not a vector, an unknown name, and a
+`parameter` of another type.
+
+# Examples
+```julia
+using CasADiCodegen
+using SimpleNonlinearSolve: SimpleNewtonRaphson
+import SciMLBase
+
+z, width = MX.sym("z"), MX.sym("width")
+residual = CasadiFunction("residual", [z, width], [z - 3 + CasADiCodegen.smooth_sign(z - 1, width)])
+problem = SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(residual), [0.0], [1.0])
+path = CasADiCodegen.natural_continuation(problem, SimpleNewtonRaphson(), [0.1, 0.01, 1e-3]; parameter = :width)
+root = last(path).second.u                                  # near [2.0]
+```
+"""
+function CasADiCodegen.natural_continuation(problem::SciMLBase.AbstractNonlinearProblem, alg, values; parameter,
+                                            halvings::Integer = 3, options...)
+    @requires !isempty(values) && all(v -> v isa Real && isfinite(v), values) "natural_continuation: the values must be finite numbers, at least one"
+    @requires halvings >= 0 "natural_continuation: halvings must be 0 or more; got $halvings"
+    value_of, remade = continuation_parameter(problem, parameter)
+    path = Pair{Float64,Any}[]
+    function record!(value, solution)
+        @ensures value_of(solution.prob) == value "natural_continuation: the solution at $value has the parameter $(value_of(solution.prob))"
+        push!(path, value => solution)
+    end
+    solved, u = Float64(value_of(problem)), problem.u0
+    for target in Float64.(values)
+        attempt, tries = target, 0
+        while true
+            # Loop invariant: `u` solves the problem at the value `solved`, or is the start.
+            solution = continuation_step(remade(problem, u, attempt), alg; options...)
+            if SciMLBase.successful_retcode(solution)
+                record!(attempt, solution)
+                solved, u = attempt, solution.u
+                attempt == target && break
+                attempt = target
+            elseif tries < halvings
+                tries += 1
+                attempt = solved > 0 && attempt > 0 ? sqrt(solved * attempt) : (solved + attempt) / 2
+            else
+                record!(attempt, solution)
+                return [value => s for (value, s) in path]
+            end
+        end
+    end
+    [value => s for (value, s) in path]
+end
+
+"""
+    continuation_parameter(problem, parameter) -> (value_of, remade)
+
+The functions that read the parameter `parameter` of a problem, a place in a vector of
+parameters or a name, and that remake the problem with a start and a value of it.
+"""
+function continuation_parameter(problem, parameter)
+    parameter isa AbstractString && (parameter = Symbol(parameter))
+    if parameter isa Symbol
+        @requires SII.is_parameter(problem, parameter) "natural_continuation: the problem has no parameter named $(repr(parameter))"
+        read = SII.getp(problem, parameter)
+        return (p -> read(p)), ((p, u, value) -> SciMLBase.remake(p; u0 = copy(u), p = [parameter => value]))
+    end
+    @requires parameter isa Integer "natural_continuation: the parameter must be a place or a name; got $(repr(parameter))"
+    @requires problem.p isa AbstractVector "natural_continuation: the parameters of the problem are not a vector; give the parameter by name"
+    @requires parameter in eachindex(problem.p) "natural_continuation: the problem has $(length(problem.p)) parameters; the place $parameter is not one of them"
+    function remade(p, u, value)
+        q = p.p isa StaticArrays.StaticArray ? StaticArrays.setindex(float(p.p), value, parameter) : (r = float(collect(p.p)); r[parameter] = value; r)
+        SciMLBase.remake(p; u0 = copy(u), p = q)
+    end
+    (p -> p.p[parameter]), remade
+end
+
+"Solve `problem`; an error of the generated code or of a singular step gives a failed solution."
+function continuation_step(problem, alg; options...)
+    try
+        SciMLBase.solve(problem, alg; options...)
+    catch err
+        err isa Union{AssertionError,DomainError,LinearAlgebra.SingularException} || rethrow()
+        SciMLBase.build_solution(problem, alg, problem.u0, nothing; retcode = SciMLBase.ReturnCode.Failure)
+    end
 end
 
 """

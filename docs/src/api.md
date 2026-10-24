@@ -65,6 +65,18 @@ CasADiCodegen.block_triangular_form
 CasADiCodegen.reduce_index
 ```
 
+## Discontinuous models
+
+```@docs
+CasADiCodegen.nonsmooth_operations
+CasADiCodegen.smooth_step
+CasADiCodegen.smooth_sign
+CasADiCodegen.smooth_abs
+CasADiCodegen.smooth_max
+CasADiCodegen.smooth_min
+CasADiCodegen.smoothed
+```
+
 ## Automatic differentiation rules and sparse matrices
 
 ```@docs
