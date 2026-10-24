@@ -61,7 +61,25 @@ f = CasadiFunction("f", [x], [sin(x[1]) * x[2]])
 """
 CasadiFunction
 
-export build_function, generate_julia, CasadiFunction
+"""
+    casadi_function(name, inputs, outputs; input_names, output_names) -> CasADiCodegen.Function
+
+Make a function of CasADi from Symbolics.jl expressions: `inputs` is a vector of symbols and
+arrays of symbols, `outputs` a vector of expressions and arrays of expressions, and each
+becomes one argument or one result of the function, with the shape of the array. Every symbol
+of an output must be in `inputs`. `input_names` and `output_names` are vectors of strings;
+without them CasADi names the arguments and results. The method is defined when Symbolics.jl
+is loaded.
+
+```julia
+using Symbolics
+@variables x y
+f = casadi_function("f", [x, y], [sin(x) * y, Symbolics.gradient(sin(x) * y, [x, y])])
+```
+"""
+function casadi_function end
+
+export build_function, generate_julia, CasadiFunction, casadi_function
 
 include("precompile.jl")
 

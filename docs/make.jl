@@ -40,6 +40,7 @@ makedocs(;
         ],
         "Models" => [
             "howto/load_model.md",
+            "howto/symbolics.md",
             "howto/traced_models.md",
             "howto/callbacks.md",
             "howto/integrators.md",

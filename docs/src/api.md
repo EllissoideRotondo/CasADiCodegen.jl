@@ -2,7 +2,7 @@
 
 This page and [SciML problems and functions](@ref) list the functions and types of
 CasADiCodegen.jl, grouped by task. The package exports `build_function`,
-`generate_julia` and `CasadiFunction`, and `using CasADiCodegen` also gives the names that the front end of CasADi exports, such as `SX`, `MX`, `DM`,
+`generate_julia`, `CasadiFunction` and `casadi_function`, and `using CasADiCodegen` also gives the names that the front end of CasADi exports, such as `SX`, `MX`, `DM`,
 `Opti`, `jacobian`, `gradient` and `vertcat`. The whole front end, with the functions of
 the Python API of CasADi, is the module `CasADiCodegen.C`, and a CasADi function is a
 `CasADiCodegen.Function`, which `CasadiFunction` makes. The other names of these pages need
@@ -14,6 +14,7 @@ write the prefix for all of them.
 
 ```@docs
 CasadiFunction
+CasADiCodegen.casadi_function
 build_function
 generate_julia
 ```

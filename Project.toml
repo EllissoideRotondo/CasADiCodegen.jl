@@ -6,6 +6,7 @@ authors = ["Alex Pascarella <alex.pascarella@ellissoide.com>"]
 [deps]
 CasADiSWIG_jll = "0478ce59-e586-55af-83e7-894d8531a7d3"
 CasADi_jll = "4e54d0b0-c9f2-5505-b569-bd333cacc8c1"
+Coverage = "a2441757-f6aa-5fb2-8edb-039e3f45d037"
 Libdl = "8f399da3-3557-5675-b5ff-fb832c97cbdb"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 NaNMath = "77ba4419-2d1f-58cd-9bb1-8ffee604a2e3"
@@ -24,6 +25,7 @@ DifferentiationInterface = "a0c0ee7d-e4b9-4e03-894e-1c5f64a51d63"
 OptimizationBase = "bca83a33-5cc9-4baa-983d-23429ab6bcbb"
 SciMLBase = "0bca4576-84f4-4d90-8ffe-ffa030f20462"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 
 [extensions]
 CasADiCodegenBifurcationKitExt = ["BifurcationKit", "SciMLBase"]
@@ -32,6 +34,7 @@ CasADiCodegenDifferentiationInterfaceExt = ["ADTypes", "DifferentiationInterface
 CasADiCodegenOptimizationBaseExt = ["DifferentiationInterface", "OptimizationBase", "SciMLBase"]
 CasADiCodegenSciMLBaseExt = "SciMLBase"
 CasADiCodegenSparseArraysExt = "SparseArrays"
+CasADiCodegenSymbolicsExt = "Symbolics"
 
 [compat]
 ADTypes = "1"
@@ -39,6 +42,7 @@ BifurcationKit = "0.8"
 CasADiSWIG_jll = "=3.8.1"
 CasADi_jll = "=3.8.1"
 ChainRulesCore = "1"
+Coverage = "1.8.2"
 DifferentiationInterface = "0.6, 0.7"
 Libdl = "1"
 LinearAlgebra = "1"
@@ -52,6 +56,7 @@ SparseArrays = "1"
 SpecialFunctions = "2"
 StaticArrays = "1"
 StaticArraysCore = "1.4"
+Symbolics = "7"
 julia = "~1.12, ~1.13"
 
 [extras]
@@ -68,7 +73,8 @@ SimpleNonlinearSolve = "727e6d20-b764-4bd8-a329-72de5adea6c7"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 SpecialFunctions = "276daf66-3868-5448-9aa4-cd146d93841b"
 Supposition = "5a0628fe-1738-4658-9b6d-0b7605a9755b"
+Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test", "Supposition", "SpecialFunctions", "ForwardDiff", "ADTypes", "DifferentiationInterface", "SciMLBase", "OrdinaryDiffEqVerner", "OrdinaryDiffEqRosenbrock", "OptimizationIpopt", "SimpleNonlinearSolve", "SparseArrays", "ChainRulesCore", "BifurcationKit"]
+test = ["Test", "Supposition", "SpecialFunctions", "ForwardDiff", "ADTypes", "DifferentiationInterface", "SciMLBase", "OrdinaryDiffEqVerner", "OrdinaryDiffEqRosenbrock", "OptimizationIpopt", "SimpleNonlinearSolve", "SparseArrays", "ChainRulesCore", "BifurcationKit", "Symbolics"]
