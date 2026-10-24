@@ -26,7 +26,7 @@ Base.:(==)(a::Solver, b::Solver) = a.target === b.target && a.alg == b.alg && a.
 
 """
     Solvers(; ode = nothing, dae = nothing, nonlinear = nothing, optimization = nothing,
-              overrides = ())
+              overrides = (), nonsmooth = :warn)
 
 Select the SciML solvers that generated code calls in place of the solver objects of
 CasADi in the graph of a function. Pass the result as the keyword `solvers` of
@@ -51,6 +51,13 @@ The tolerances of an integrator of CasADi are the options `abstol` and `reltol` 
 solver, unless the solver has them. A solver of the first four fields must have no
 `target`, and each override must have one. See [Replace the solvers of CasADi](@ref).
 
+`nonsmooth` is what a replaced integrator gives when a switch of its model depends on the
+state, or on the time and a parameter together: a warning, an `ArgumentError` with
+`:error`, or nothing with `:ignore`, as the keyword `nonsmooth` of `integrator`. This scan
+runs when generated code replaces the integrator. The option `"nonsmooth"` of the
+integrator of CasADi acts only when CasADi builds it; neither setting overrides the other.
+See [Discontinuous models](@ref discontinuities).
+
 # Examples
 ```julia
 using CasADiCodegen
@@ -66,8 +73,9 @@ struct Solvers
     nonlinear::Union{Nothing,Solver}
     optimization::Union{Nothing,Solver}
     overrides::Vector{Solver}
+    nonsmooth::Symbol
 end
-function Solvers(; ode = nothing, dae = nothing, nonlinear = nothing, optimization = nothing, overrides = ())
+function Solvers(; ode = nothing, dae = nothing, nonlinear = nothing, optimization = nothing, overrides = (), nonsmooth::Symbol = :warn)
     function general(kind, solver)
         solver isa Solver || return solver === nothing ? nothing : Solver(solver)
         @requires solver.target === nothing "the solver for \"$kind\" has a function of CasADi; give it in overrides"
@@ -75,7 +83,8 @@ function Solvers(; ode = nothing, dae = nothing, nonlinear = nothing, optimizati
     end
     list = collect(Solver, overrides)
     @requires all(s -> s.target !== nothing, list) "an override needs the function of CasADi that it replaces: Solver(function, algorithm)"
-    Solvers(general("ode", ode), general("dae", dae), general("nonlinear", nonlinear), general("optimization", optimization), list)
+    check_setting("Solvers", nonsmooth)
+    Solvers(general("ode", ode), general("dae", dae), general("nonlinear", nonlinear), general("optimization", optimization), list, nonsmooth)
 end
 
 "The solvers of the function that is read now (see `algorithm`); `nothing` when the user gave none."
@@ -444,6 +453,8 @@ function solver_integrator(callee::C.Function)
     kind = C.class_name(callee) in VARIABLE_STEP_CLASSES ? (model.nz > 0 ? :dae : :ode) : :none
     solver = selected_solver(callee, kind)
     solver === nothing && return nothing
+    # The solvers of this package see the model, so the check of the model runs here, once for both forms.
+    check_casadi_model("integrator \"$(base_name(model.name))\"", model.dae; nonsmooth = SOLVERS[].nonsmooth, remedy = REPLACED_REMEDY)
     model.events > 0 && return solver_events(callee, model, solver)
     # With adjoint sensitivities the chain is that of the model with no direction, and CasADi differentiates it
     # (`outer` forward directions). Without them the directions are in the equations (see `right_side`).
@@ -457,7 +468,7 @@ function solver_integrator(callee::C.Function)
     m > 0 && (equations["p"] = parameters)
     mass = model.nz == 0 ? Float64[] : [ones(model.nx); zeros(model.nz); ones(model.nq)]
     options = (; model.tolerances..., solver.options...)
-    arc = Front.integrator(C.name(callee) * "_arc", solver.alg, equations; adjoint = nadj > 0, mass, options...)
+    arc = Front.integrator(C.name(callee) * "_arc", solver.alg, equations; adjoint = nadj > 0, mass, nonsmooth = :ignore, options...)
     inputs = MX[MX.sym(C.name_in(callee, i), C.size1_in(callee, i), C.size2_in(callee, i) ÷ (1 + outer)) for i in 0:C.n_in(callee)-1]
     outer == 0 && nadj == 0 && (inputs = input_symbols(callee))
     dense(i) = C.vec(C.densify(inputs[i]))
@@ -566,6 +577,14 @@ function optimizer end
 The initialization problem of a SciML problem; the method is in the extension for SciMLBase.jl.
 """
 function initialization_problem end
+
+"""
+    natural_continuation(problem, alg, values; parameter)
+
+Solve a nonlinear problem along a sequence of values of one parameter; the method is in
+the extension for SciMLBase.jl.
+"""
+function natural_continuation end
 
 """
     GeneratedObjective

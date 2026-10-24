@@ -4,12 +4,13 @@
 The official CasADi front end for Julia, plus Julia code generation.
 
 The module includes the SWIG-generated front end that ships with CasADi;
-`CasADiCodegen.C` is the generated module. It has three changes: a number in a Dict of
+`CasADiCodegen.C` is the generated module. It has four changes: a number in a Dict of
 options reaches CasADi with its type, where the generated code makes it a `bool`;
 `der(dae, x)` of a `DaeBuilder` declares the differential state `x`, where the generated
-code only reads an existing derivative; and `jacobian` of a graph with an integrator with
+code only reads an existing derivative; `jacobian` of a graph with an integrator with
 an event function gives the Jacobian of forward directions, where CasADi gives a wrong
-one. The package adds
+one; and `integrator` with a plugin name warns about a model that switches on the state,
+with the option `"nonsmooth"`. The package adds
 `build_function` and `generate_julia`, which turn a CasADi `Function` into
 plain Julia code.
 """
@@ -45,7 +46,8 @@ include("codegen.jl")
 
 using .Codegen: build_function, generate_julia, instruction_histogram, nan_trace, differentiable, Solvers, Solver,
     Traced, traced, untraced, traced_function, block_triangular_form, linearization, linearization_function, reduce_index,
-    initialization_problem, traced_problem
+    initialization_problem, traced_problem, nonsmooth_operations, smooth_step, smooth_sign, smooth_abs, smooth_max, smooth_min,
+    smoothed, natural_continuation
 
 """
     CasadiFunction(name, inputs, outputs[, options])

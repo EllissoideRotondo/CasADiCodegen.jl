@@ -415,6 +415,16 @@ end
     third = H(y0, MX(0.0), MX(50.0))
     h = CasADiCodegen.Function("third", [y0], [third[1], third[2], jacobian(third[2], y0)])
     @test closeto(ode_emitted(h, ([1.0, 0.0],)), [[0.0, -1.0], [π / 2, 3π / 2, 5π / 2], [0.0, 0.0, 0.0, 1.0, 1.0, 1.0]], 1e-9)
+    # Regression: at loose tolerances the arc to an event and the search that found it differ, so
+    # the next search could start on the near side of the surface and find the same event again;
+    # with no transition, and with direction 0 where the transition turns the ball up.
+    loose = (; TIGHT..., abstol = 1e-6, reltol = 1e-6)
+    swings = integrator("swing_loose", Vern9(), swing; events = 3, loose...)
+    @test closeto(casadi_eval(CasADiCodegen.Function("l", [y0], [swings(y0, MX(0.0), MX(50.0))[2]]), [1.0, 0.0]), [[π / 2, 3π / 2, 5π / 2]], 1e-5)
+    bounces = integrator("ball_loose", Vern9(), ball; events = 2, loose...)
+    b = bounces(vertcat([h0, MX(0.0)]), q, MX(0.0), tf)[3]
+    @test closeto(casadi_eval(CasADiCodegen.Function("b", [h0, q, tf], [b, jacobian(b, every)]), 5.0, [9.81, 0.8], T),
+                  [times(at), vec(ForwardDiff.jacobian(times, at))], 1e-4)
     # Fewer events than asked before the final time.
     err = try ode_emitted(g, ([5.0], [9.81, 0.8], [1.5])); nothing catch e; e end
     @test err isa ErrorException && occursin("no event", err.msg)
@@ -480,6 +490,12 @@ end
     G = integrator("fall_upto", Vern9(), fall; events = 2, exact = false, direction = -1, TIGHT...)
     @test [C.name_out(G, j) for j in 0:2] == ["xf", "te", "ne"]
     @test closeto(casadi_eval(G, [2.0, 0.0], [1.0, 0.0], 0.0, 5.0), [[1.5, -1.0], [2.0, 5.0], [1.0]], 1e-9)
+    # Regression: a search that the solver stopped short of the final time counted as no event. Here 30
+    # event functions t - c cross in the direction that `direction = -1` ignores, and each one ends a
+    # step of the search, so that the search needs more steps than `maxiters` and the arc fewer.
+    clocks = merge(fall, Dict("t" => τ, "zero" => vertcat([x[1]; [τ - 0.05i for i in 1:30]])))
+    short = integrator("fall_short", Vern9(), clocks; exact = false, direction = -1, TIGHT..., maxiters = 25)
+    @test_throws "MaxIters" casadi_eval(short, [2.0, 0.0], [1.0, 0.0], 0.0, 5.0)
 
     @test_throws "one column per event function" integrator("wide", Vern9(), merge(walls, Dict("transition" => horzcat([x, x]))); TIGHT...)
     @test_throws "exact" integrator("plain", Vern9(), delete!(copy(fall), "zero"); exact = false, TIGHT...)

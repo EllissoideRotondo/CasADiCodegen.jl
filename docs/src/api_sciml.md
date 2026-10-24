@@ -30,6 +30,7 @@ SciMLBase.ImplicitDiscreteFunction(::CasADiCodegen.Function)
 SciMLBase.NonlinearFunction(::CasADiCodegen.Function)
 SciMLBase.OptimizationFunction(::CasADiCodegen.Function, ::Union{Nothing,CasADiCodegen.Function})
 CasADiCodegen.initialization_problem(::SciMLBase.ODEProblem)
+CasADiCodegen.natural_continuation(::SciMLBase.AbstractNonlinearProblem, ::Any, ::Any)
 ```
 
 ## Bifurcation problems

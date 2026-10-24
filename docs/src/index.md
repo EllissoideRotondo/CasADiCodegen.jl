@@ -75,6 +75,9 @@ problems written in plain Julia that are traced into generated code, the linear
 analysis of a feedback loop, the change of the independent variable of a model,
 perturbation expansions in a small parameter, and the attractors of a chaotic system with
 their basins of attraction, each with the SciML solver or the Julia package that fits it.
+One more tutorial solves a bang-off-bang optimal control by indirect shooting, whose right
+side switches on the state, once with the switches as modes of the integrator and once
+with a smoothed control followed down to a small width.
 
 ```@contents
 Pages = [
@@ -85,6 +88,7 @@ Pages = [
     "tutorials/dae_models.md",
     "tutorials/initialization.md",
     "tutorials/events.md",
+    "tutorials/bang_bang.md",
     "tutorials/stochastic.md",
     "tutorials/discrete.md",
     "tutorials/callable_parameters.md",
@@ -105,7 +109,8 @@ Depth = 1
 
 These guides show how a model gets into the package and what it can contain:
 a file of another language, generic Julia code traced into CasADi, a call to Julia
-code, an integrator, an event or an implicit equation, and how a model is linearized.
+code, an integrator, an event, a right side that switches on the state, or an implicit
+equation, and how a model is linearized.
 
 ```@contents
 Pages = [
@@ -114,6 +119,7 @@ Pages = [
     "howto/callbacks.md",
     "howto/integrators.md",
     "howto/events.md",
+    "howto/discontinuities.md",
     "howto/rootfinders.md",
     "howto/linearize.md",
 ]

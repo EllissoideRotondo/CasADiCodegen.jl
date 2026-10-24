@@ -362,8 +362,8 @@ column(v) = size(v, 2) == 1 && C.is_dense(v)
 flat(M) = reshape(M, length(M), 1)
 
 """
-    ode_integrator(name, dae, t0, tf, make_solver; adjoint = false, mass = Float64[]) -> CasADiCodegen.Function
-    ode_integrator(name, dae, make_solver; adjoint = false, mass = Float64[]) -> CasADiCodegen.Function
+    ode_integrator(name, dae, t0, tf, make_solver; adjoint = false, mass = Float64[], nonsmooth = :warn) -> CasADiCodegen.Function
+    ode_integrator(name, dae, make_solver; adjoint = false, mass = Float64[], nonsmooth = :warn) -> CasADiCodegen.Function
 
 Return the CasADi function `(x0, p) -> xf` that integrates the ordinary
 differential equation `dae` from `t0` to `tf`. Without `t0` and `tf` the times
@@ -390,6 +390,8 @@ parameters has no `p`.
   integrated again backward, so the result is as accurate as that integration.
   `make_solver` must then be that of free times, also when `t0` and `tf` are
   given.
+- `nonsmooth`: what a switch on the state in `"ode"` or `"quad"` gives: `:warn`,
+  `:error` or `:ignore` (see `check_nonsmooth`). `ode_grid` and `ode_event` take it too.
 
 With free times, the two times follow the model parameters in `q`, so `m`
 counts them. The solver integrates from 0 to `q[m] - q[m-1]`, because the
@@ -399,12 +401,14 @@ CasADi gets the Jacobian from a second integrator, for the state with its
 derivatives by the initial state and by the parameters. That integrator is
 made when CasADi first asks for the Jacobian (see `integration`).
 """
-function ode_integrator(name::AbstractString, dae, t0::Real, tf::Real, make_solver; adjoint::Bool = false, mass::Vector{Float64} = Float64[])
+function ode_integrator(name::AbstractString, dae, t0::Real, tf::Real, make_solver; adjoint::Bool = false, mass::Vector{Float64} = Float64[],
+                        nonsmooth::Symbol = :warn)
     check_dae(name, dae)
+    check_model(name, dae, nonsmooth)
     @requires isfinite(t0) && isfinite(tf) && t0 != tf "integrator \"$name\": the times must be finite and different"
     if adjoint
         # The adjoint equations run from the final time to the initial one, which the arc with free times can do.
-        arc = ode_integrator(name, dae, make_solver; adjoint, mass)
+        arc = ode_integrator(name, dae, make_solver; adjoint, mass, nonsmooth = :ignore)
         x0 = Front.MX.sym("x0", size(dae["x"], 1))
         p = haskey(dae, "p") ? [Front.MX.sym("p", size(dae["p"], 1))] : Front.MX[]
         return Front.Function(String(name), [x0, p...], as_list(arc(x0, p..., Front.MX(Float64(t0)), Front.MX(Float64(tf)))),
@@ -419,8 +423,9 @@ function ode_integrator(name::AbstractString, dae, t0::Real, tf::Real, make_solv
     split_function(name, [x0, p...], core(x0, p...), size(x0, 1), haskey(dae, "p") ? ["x0", "p"] : ["x0"])
 end
 
-function ode_integrator(name::AbstractString, dae, make_solver; adjoint::Bool = false, mass::Vector{Float64} = Float64[])
+function ode_integrator(name::AbstractString, dae, make_solver; adjoint::Bool = false, mass::Vector{Float64} = Float64[], nonsmooth::Symbol = :warn)
     check_dae(name, dae)
+    check_model(name, dae, nonsmooth)
     joined, start = with_quadratures(dae)
     x, has_p = dae["x"], haskey(dae, "p")
     times = typeof(x).sym("times", 2)
@@ -436,7 +441,8 @@ function ode_integrator(name::AbstractString, dae, make_solver; adjoint::Bool = 
 end
 
 """
-    ode_event(name, dae, make_solver, make_event; adjoint = false, events = 1, terminal = true, exact = true, mass = Float64[]) -> CasADiCodegen.Function
+    ode_event(name, dae, make_solver, make_event; adjoint = false, events = 1, terminal = true, exact = true, mass = Float64[],
+              nonsmooth = :warn, switching = 0, switches = 0, guard = nothing) -> CasADiCodegen.Function
 
 Return the CasADi function `(x0, p, t0, tf) -> (xf, te)` that integrates `dae`
 from `t0` toward `tf` and stops at the event. The event is the first time `te`
@@ -473,6 +479,10 @@ elements change their sign at the same time, the first one counts.
 - `exact`: when false, fewer than `events` events can come before `tf`. The
   result `"ne"` then counts the events, a missing event has the time `tf` and
   the place 0, and the state goes on to `tf` with no transition.
+- `switching`, `switches`, `guard`: the switches of a model with modes (see
+  `switched_events`). The last `switching` elements of `"zero"` are switches,
+  at most `switches` of them before `tf`, and `make_event` then gets
+  `switching` as a sixth argument.
 
 The entry `"transition"` of `dae` is the state after an event, as an expression
 of the state before it, the parameters and the time. It has one column, or one
@@ -485,11 +495,16 @@ by the implicit function theorem, to any order. A missing event has the
 derivatives of `tf`. The places and the count have no derivatives.
 """
 function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::Bool = false, events::Integer = 1, terminal::Bool = true,
-                   exact::Bool = true, mass::Vector{Float64} = Float64[])
+                   exact::Bool = true, mass::Vector{Float64} = Float64[], nonsmooth::Symbol = :warn,
+                   switching::Integer = 0, switches::Integer = 0, guard = nothing)
     check_dae(name, dae; event = true)
+    check_model(name, dae, nonsmooth)
     @requires haskey(dae, "zero") "integrator \"$name\": the entry \"zero\" is necessary"
     @requires events >= 1 "integrator \"$name\": the number of events must be 1 or more; got $events"
-    arc = ode_integrator(name * "_arc", Dict{String,Any}(key => value for (key, value) in dae if !(key in ("zero", "transition"))), make_solver; adjoint, mass)
+    @requires 0 <= switching <= size(dae["zero"], 1) && (switching == 0) == (switches == 0) && switches >= 0 &&
+              (guard === nothing || switching > 0) "integrator \"$name\": switching, switches and guard go together"
+    arc = ode_integrator(name * "_arc", Dict{String,Any}(key => value for (key, value) in dae if !(key in ("zero", "transition"))), make_solver; adjoint, mass,
+                         nonsmooth = :ignore)
     x, has_p, has_quad = dae["x"], haskey(dae, "p"), haskey(dae, "quad")
     symbol = typeof(x).sym
     p = has_p ? dae["p"] : symbol("p", 0)
@@ -498,7 +513,8 @@ function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::
     surface = Front.Function("surface", [x, p, t], [Front.densify(dae["zero"])])
     model = Front.Function("rhs", [x, p, t], [Front.densify(dae["ode"])])
     emitted(g) = Emitted(build_function(g; expression = Val{false}, nonzeros = true), g, :nonzeros)
-    find = make_event(RightSide(emitted(model), mass, algebraic_slope(Front.densify(dae["ode"]), x, p, t, mass)), emitted(surface), n, m, k)
+    right_side = RightSide(emitted(model), mass, algebraic_slope(Front.densify(dae["ode"]), x, p, t, mass))
+    find = switching == 0 ? make_event(right_side, emitted(surface), n, m, k) : make_event(right_side, emitted(surface), n, m, k, switching)
 
     x0, t0, tf, z = Front.MX.sym("x0", n), Front.MX.sym("t0"), Front.MX.sym("tf"), Front.MX.sym("z", 2)
     q = has_p ? [Front.MX.sym("p", m)] : Front.MX[]
@@ -510,7 +526,7 @@ function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::
     chosen = k == 1 ? value : Front.dot(one_hot(place), value)
     # The unknowns are the time and the place. The place is the root of i - round(i), which no
     # input moves, so CasADi gives it no derivatives; a missing event is the root of te - tf.
-    residual = Front.vertcat([exact ? chosen : C.if_else(C.eq(place, Front.MX(0.0)), te - tf, chosen), place - C.floor(place + Front.MX(0.5))])
+    residual = Front.vertcat([exact && switching == 0 ? chosen : C.if_else(C.eq(place, Front.MX(0.0)), te - tf, chosen), place - C.floor(place + Front.MX(0.5))])
     # Inline, so that the calls of the integrator are at the top level of the graph of the user.
     residual_function = Front.Function(name * "_zero", [z, x0, q..., t0, tf], [residual], Dict("always_inline" => true))
     event_time = implicit_function(name * "_time", residual_function, find)
@@ -522,9 +538,16 @@ function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::
         has_quad && push!(sums, result[2])
         state, start = has_quad ? result[1] : result, to
     end
+    if switching > 0
+        parts = (; arc, event_time, jump, one_hot, x0, q, t0, tf, has_p, has_quad, k)
+        outputs, names = switched_events(name, parts; events, terminal, exact, switching, switches, guard)
+        return Front.Function(String(name), [x0, q..., t0, tf], outputs, has_p ? ["x0", "p", "t0", "tf"] : ["x0", "t0", "tf"], names,
+                              Dict("always_inline" => true))
+    end
     for _ in 1:events
         # Loop invariant: `state` at the time `start` follows the events of `times`, each with its jump, and `places` holds their places.
-        found = event_time(Front.vertcat([tf, Front.MX(0.0)]), state, q..., start, tf)
+        # The guess carries the place of the event at `start`, so that the search does not find it again.
+        found = event_time(Front.vertcat([tf, isempty(places) ? Front.MX(0.0) : places[end]]), state, q..., start, tf)
         push!(times, found[1])
         push!(places, found[2])
         advance(times[end])
@@ -588,7 +611,7 @@ function split_function(name::AbstractString, inputs, result, n::Integer, names)
 end
 
 """
-    ode_grid(name, dae, t0, times, make_solver; adjoint = false) -> CasADiCodegen.Function
+    ode_grid(name, dae, t0, times, make_solver; adjoint = false, nonsmooth = :warn) -> CasADiCodegen.Function
 
 Return the CasADi function `(x0, p) -> X`, or `x0 -> X`, whose column `k` is
 the state at `times[k]` of the integration that starts at `t0`. With
@@ -613,8 +636,9 @@ same times. With `adjoint`, a reverse derivative is one integration of the
 adjoint equations from the last time back to `t0` (see `GridAdjoint`), whose
 derivatives come from the forward sensitivities.
 """
-function ode_grid(name::AbstractString, dae, t0::Real, times::AbstractVector{<:Real}, make_solver; adjoint::Bool = false)
+function ode_grid(name::AbstractString, dae, t0::Real, times::AbstractVector{<:Real}, make_solver; adjoint::Bool = false, nonsmooth::Symbol = :warn)
     check_dae(name, dae)
+    check_model(name, dae, nonsmooth)
     @requires !isempty(times) && isfinite(t0) && all(isfinite, times) "integrator \"$name\": the times must be finite, and at least one is necessary"
     joined, start = with_quadratures(dae)
     has_p, nx = haskey(dae, "p"), size(dae["x"], 1)

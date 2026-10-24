@@ -61,6 +61,16 @@ time is the opposite of that value, so free times add no state to the integratio
 a model with the time in its right side adds one column of sensitivities for the
 initial time.
 
+## Through an event
+
+An integrator with an event is a chain of arcs, and the event time is a node of the graph
+between them, the root of the event function on the trajectory. CasADi differentiates that
+node by the implicit function theorem, so the chain rule through the arc before it, the
+transition and the arc after it gives the jump of the state transition matrix at the
+event, to any order. A switch written in the right side, such as an `if_else`, has no such
+node, and its derivatives lack that jump; [Discontinuous models](@ref discontinuities)
+shows how to find such switches and how to give them the right derivatives.
+
 ## Adjoint equations
 
 The sensitivity matrices cost one integration of the state for each initial state

@@ -148,3 +148,10 @@ factors are small together.
 
 An integrator of CasADi with an event function and the option `"transition"` has
 its own rules. [Integrators with events](@ref) shows how generated code replaces it.
+
+## Switches in the right side
+
+A switch on the state written in `"ode"`, such as an `if_else`, rather than as an event
+function gives the right values but wrong derivatives, and the integrator warns about it
+when it is built. [Discontinuous models](@ref discontinuities) lists the operations that
+count and gives the switches as events with the keyword `modes`, or smooths them.
