@@ -1,7 +1,7 @@
 # CasADiCodegen.jl
 
-[![Docs: dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://AstroGuild.github.io/CasADiCodegen.jl/dev/)
-[![Coverage](https://codecov.io/gh/AstroGuild/CasADiCodegen.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/AstroGuild/CasADiCodegen.jl)
+[![Docs: dev](https://img.shields.io/badge/docs-dev-blue.svg)](https://orbitology.github.io/CasADiCodegen.jl/dev/)
+[![Coverage](https://codecov.io/gh/Orbitology/CasADiCodegen.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/Orbitology/CasADiCodegen.jl)
 
 CasADiCodegen.jl is a package for generating plain Julia code from the functions of
 [CasADi](https://web.casadi.org/), the framework for symbolic modelling and
@@ -36,7 +36,7 @@ CasADi graph, which CasADi differentiates and the package emits. The interface o
 CasADiCodegen.jl supports Julia 1.12 and 1.13. Install it from GitHub:
 
 ```julia-repl
-pkg> add https://github.com/AstroGuild/CasADiCodegen.jl
+pkg> add https://github.com/Orbitology/CasADiCodegen.jl
 ```
 
 The binaries of CasADi 3.8.1 come with the package.
@@ -70,8 +70,8 @@ derivative  # [4.0, 1.0]
 ## Tutorials and Documentation
 
 For information on using the package, see the
-[documentation](https://AstroGuild.github.io/CasADiCodegen.jl/dev/). It starts
-with a [tutorial](https://AstroGuild.github.io/CasADiCodegen.jl/dev/getting_started/)
+[documentation](https://orbitology.github.io/CasADiCodegen.jl/dev/). It starts
+with a [tutorial](https://orbitology.github.io/CasADiCodegen.jl/dev/getting_started/)
 that builds a model, generates Julia functions for it and compares the forms of the
 generated code. Tutorials then solve the problems of the ModelingToolkit.jl
 documentation with CasADi models, from ODE and DAE models to nonlinear systems, static
@@ -91,7 +91,7 @@ CasADi, and the API reference ends the manual.
 - The package is tested on Linux; macOS is not tested. It does not load on Windows,
   because the Windows build of the CasADi front end lacks functions that it needs.
 
-The page [Scope and differences from CasADi](https://AstroGuild.github.io/CasADiCodegen.jl/dev/explanation/scope/)
+The page [Scope and differences from CasADi](https://orbitology.github.io/CasADiCodegen.jl/dev/explanation/scope/)
 of the manual lists all limits.
 
 ## Acknowledgements

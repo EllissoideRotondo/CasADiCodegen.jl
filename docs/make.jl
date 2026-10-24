@@ -9,7 +9,7 @@ makedocs(;
     modules = [CasADiCodegen, CasADiCodegen.Codegen, extension(:CasADiCodegenSciMLBaseExt), extension(:CasADiCodegenChainRulesCoreExt), extension(:CasADiCodegenSparseArraysExt), extension(:CasADiCodegenOptimizationBaseExt), extension(:CasADiCodegenBifurcationKitExt)],
     format = Documenter.HTML(;
         prettyurls = get(ENV, "CI", "false") == "true",
-        canonical = "https://AstroGuild.github.io/CasADiCodegen.jl",
+        canonical = "https://orbitology.github.io/CasADiCodegen.jl",
         edit_link = "main",
     ),
     # The front end exports names with docstrings of its own, which are not part of this manual.
@@ -68,6 +68,6 @@ makedocs(;
 )
 
 deploydocs(;
-    repo = "github.com/AstroGuild/CasADiCodegen.jl",
+    repo = "github.com/Orbitology/CasADiCodegen.jl",
     devbranch = "main",
 )

@@ -47,7 +47,7 @@ its solvers, use the front end alone or the code generation of CasADi for C.
 The package supports Julia 1.12 and 1.13. Install it from GitHub:
 
 ```julia-repl
-pkg> add https://github.com/AstroGuild/CasADiCodegen.jl
+pkg> add https://github.com/Orbitology/CasADiCodegen.jl
 ```
 
 The binaries of CasADi 3.8.1 and its Julia front end come with the package.
@@ -176,7 +176,7 @@ Depth = 2
 ## Contributing
 
 - Report bugs and request features on the
-  [issue tracker](https://github.com/AstroGuild/CasADiCodegen.jl/issues).
+  [issue tracker](https://github.com/Orbitology/CasADiCodegen.jl/issues).
 - Before opening a pull request, run the test suite with
   `julia --project=. -e 'using Pkg; Pkg.test()'` from the repository root. Each group
   of tests is a file `test/test_<group>.jl`, and `Pkg.test(; test_args = ["mx", "root"])`
