@@ -83,7 +83,8 @@ rather than throws, because a model that is only simulated is right.
 
 The method of `integrator` that takes the name of a plugin of CasADi as a `String`, such
 as `integrator("F", "cvodes", dae, t0, tf, opts)`, makes an integrator of CasADi, which
-misses the jump in its own sensitivities too. CasADi does not scan its model; when
+misses the jump in its own sensitivities too. That method takes no keyword `nonsmooth`,
+because CasADi does not scan its model; when
 `build_function` replaces such an integrator by generated code (see
 [Replace the solvers of CasADi](@ref)), the package scans the model, with the keyword
 `nonsmooth` of [`CasADiCodegen.Solvers`](@ref), also `:warn` by default.
