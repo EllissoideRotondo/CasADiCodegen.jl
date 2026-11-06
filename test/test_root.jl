@@ -54,7 +54,7 @@ end
 
 @testset "root of a system, with a matrix parameter" begin
     z, A, b = SX.sym("z", 2), SX.sym("A", 2, 2), SX.sym("b", 2)
-    residual = CasADiCodegen.Function("r", [z, A, b], [mtimes(A, z) + vertcat([z[1]^3, 0]) - b])
+    residual = CasADiCodegen.Function("r", [z, A, b], [mtimes(A, z) + vcat(z[1]^3, 0) - b])
     R = rootfinder("sys", SimpleNewtonRaphson(), residual; abstol = 1e-13)
     z0, Am, bv = MX.sym("z0", 2), MX.sym("A", 2, 2), MX.sym("b", 2)
     root = R(z0, Am, bv)
@@ -73,7 +73,7 @@ end
     n = 40
     z, q = SX.sym("z", n), SX.sym("q")
     at(i) = 1 <= i <= n ? z[i] : SX(0.0)
-    residual = CasADiCodegen.Function("bratu", [z, q], [vertcat([at(i - 1) - 2 * z[i] + at(i + 1) + q * exp(z[i]) / (n + 1)^2 for i in 1:n]...)])
+    residual = CasADiCodegen.Function("bratu", [z, q], [vcat([at(i - 1) - 2 * z[i] + at(i + 1) + q * exp(z[i]) / (n + 1)^2 for i in 1:n]...)])
     R = rootfinder("bratu", SimpleNewtonRaphson(), residual; abstol = 1e-12)
     newton = C.rootfinder("bratu_newton", "newton", residual)
     x, λ = MX.sym("x", n), MX.sym("λ")

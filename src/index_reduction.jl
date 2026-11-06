@@ -73,8 +73,8 @@ julia> using CasADiCodegen
 
 julia> q, v, T = SX.sym("q", 2), SX.sym("v", 2), SX.sym("T");
 
-julia> pendulum = Dict("x" => vertcat(q, v), "z" => T,
-                       "ode" => vertcat(v, T * q - vertcat(0, 9.81)), "alg" => q[1]^2 + q[2]^2 - 1);
+julia> pendulum = Dict("x" => vcat(q, v), "z" => T,
+                       "ode" => vcat(v, T * q - [0, 9.81]), "alg" => q[1]^2 + q[2]^2 - 1);
 
 julia> reduced = CasADiCodegen.reduce_index(pendulum);
 
@@ -82,8 +82,7 @@ julia> reduced.index, reduced.differentiations
 (3, [2])
 
 julia> reduced.invariants
-2×1 SX:
-[((sq(q_0)+sq(q_1))-1), (((2.*q_0)*v_0)+((2.*q_1)*v_1))]
+SX([((sq(q_0)+sq(q_1))-1), (((2.*q_0)*v_0)+((2.*q_1)*v_1))])
 ```
 """
 function reduce_index(dae::AbstractDict{<:AbstractString}; baumgarte_pole::Real = 0.0)
@@ -305,7 +304,7 @@ function reduced_dae(dae, graph, X, pole)
     nz = size(z, 1)
     t = get(dae, "t", nothing)
     zs, fresh = scalar_symbols(z)
-    fresh && ((f, g) = (C.substitute(f, z, Front.vertcat(zs)), C.substitute(g, z, Front.vertcat(zs))))
+    fresh && ((f, g) = (C.substitute(f, z, vertcat(zs)), C.substitute(g, z, vertcat(zs))))
     syms = Vector{X}(undef, length(var_base))
     syms[1:nz] = zs
     for j in eachindex(var_der)
@@ -315,11 +314,11 @@ function reduced_dae(dae, graph, X, pole)
     exprs[1:nz] = C.vertsplit(g)
     known = [j for j in eachindex(var_der) if var_der[j] != 0]
     time, slope = t === nothing ? (X[], X[]) : ([t], [X(1)])
-    arguments = Front.vertcat(vcat([x], syms[known], time))
-    seeds = Front.vertcat(vcat([f], syms[var_der[known]], slope))
+    arguments = vertcat(vcat([x], syms[known], time))
+    seeds = vertcat(vcat([f], syms[var_der[known]], slope))
     for order in 1:maximum(eq_order)
         targets = [e for e in eachindex(eq_der) if eq_der[e] != 0 && eq_order[e] == order - 1]
-        derivatives = C.vertsplit(Front.jtimes(Front.vertcat(exprs[targets]), arguments, seeds))
+        derivatives = C.vertsplit(Front.jtimes(vertcat(exprs[targets]), arguments, seeds))
         exprs[eq_der[targets]] = derivatives
     end
     chain(start, der) = (c = [start]; while der[c[end]] != 0; push!(c, der[c[end]]); end; c)
@@ -330,12 +329,12 @@ function reduced_dae(dae, graph, X, pole)
         pole == 0 && return exprs[c[end]]
         reduce(+, (binomial(k, j) * (-pole)^j * exprs[c[end-j]] for j in 1:k); init = exprs[c[end]])
     end
-    algebraic = Front.vertcat(syms[last.(var_chains)])
-    result = Dict{String,X}("x" => Front.vertcat(vcat([x], syms[states])), "z" => algebraic,
-                            "ode" => Front.vertcat(vcat([f], syms[var_der[states]])), "alg" => Front.vertcat(alg))
+    algebraic = vertcat(syms[last.(var_chains)])
+    result = Dict{String,X}("x" => vertcat(vcat([x], syms[states])), "z" => algebraic,
+                            "ode" => vertcat(vcat([f], syms[var_der[states]])), "alg" => vertcat(alg))
     haskey(dae, "p") && (result["p"] = dae["p"])
     t === nothing || (result["t"] = t)
-    invariants = Front.vertcat(reduce(vcat, (exprs[c[1:end-1]] for c in eq_chains); init = X[]))
+    invariants = vertcat(reduce(vcat, (exprs[c[1:end-1]] for c in eq_chains); init = X[]))
     jac = dependencies(C.jacobian_sparsity(result["alg"], algebraic))
     col_of = maximum_matching(jac, nz)
     if !all(!iszero, col_of)

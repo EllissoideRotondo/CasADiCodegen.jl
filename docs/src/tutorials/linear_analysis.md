@@ -47,7 +47,7 @@ plant(x, u) = (k * u - x) / τ
 c = K * x                                                  # the controller output, with y = x
 u = c + w
 f = CasadiFunction("closed_f", [x, w, p], [plant(x, u)])
-h = CasadiFunction("closed_h", [x, w, p], [vertcat(u, -c, x)])
+h = CasadiFunction("closed_h", [x, w, p], [vcat(u, -c, x)])
 lin, _ = CasADiCodegen.linearization(f, h)
 nothing # hide
 ```

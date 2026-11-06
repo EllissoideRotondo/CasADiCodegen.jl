@@ -38,10 +38,3 @@ CasADiCodegen.natural_continuation(::SciMLBase.AbstractNonlinearProblem, ::Any, 
 ```@docs
 BifurcationKit.BifurcationProblem(::CasADiCodegen.Function, ::Any, ::Any, ::Union{Symbol,Integer})
 ```
-
-## Constraints of an Opti object
-
-```@docs
-CasADiCodegen.bounded
-```
-

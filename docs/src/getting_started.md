@@ -15,15 +15,17 @@ operations, an `MX` expression is a graph of matrix operations and of calls to o
 functions, and a `DM` is a matrix of numbers. A `Function` of CasADi maps a list of
 inputs to a list of outputs, and CasADi differentiates it from its graph.
 
-`using CasADiCodegen` loads the official CasADi front end, the SWIG interface that ships
-with CasADi 3.8.1. Its calls are those of Python, and the
-[CasADi documentation](https://web.casadi.org/docs/) describes them. Four rules
-apply in Julia:
+`using CasADiCodegen` loads [CasADiNative.jl](https://github.com/casadi/CasADiNative.jl),
+the official Julia front end of CasADi 3.8.2, and exports its names. Its calls are those of
+Python, and the [CasADi documentation](https://web.casadi.org/docs/) describes them. Five
+rules apply in Julia:
 
-- The front end exports the common names: `SX`, `MX`, `DM`, `jacobian`, `gradient`,
-  `hessian`, `vertcat`, `horzcat`, `substitute` and others. A number or a Julia array of
-  numbers is accepted as the value of a symbol in `substitute` and as the point of the
-  Taylor series `CasADiCodegen.C.taylor` and `CasADiCodegen.C.mtaylor`.
+- The common names are exported: `SX`, `MX`, `DM`, `jacobian`, `gradient`, `hessian`,
+  `substitute` and others. A number or a Julia array of numbers is accepted wherever
+  CasADi takes a matrix.
+- Concatenation is that of Julia: `[a; b]`, `[a b]`, `vcat` and `hcat`.
+- Operations have the meaning that they have for Julia matrices: `*` is the matrix
+  product, `sin(x)` takes a scalar, and `sin.(x)` and `x .* y` act on each element.
 - Each other function of CasADi is in the module `CasADiCodegen.C`, for example
   `CasADiCodegen.C.sumsqr` and `CasADiCodegen.C.nlpsol`.
 - `CasadiFunction` makes a function of CasADi, because a bare `Function` is the abstract

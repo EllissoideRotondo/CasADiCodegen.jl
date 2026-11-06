@@ -43,7 +43,7 @@ of SX and of MX symbols both serve:
 
 ```@example bifurcation
 x, y, μ, α = SX.sym("x"), SX.sym("y"), SX.sym("μ"), SX.sym("α")
-pitchfork = CasadiFunction("pitchfork", [vertcat(x, y), vertcat(μ, α)], [vertcat(μ * x - x^3 + α * y, -y)])
+pitchfork = CasadiFunction("pitchfork", [vcat(x, y), vcat(μ, α)], [vcat(μ * x - x^3 + α * y, -y)])
 nothing # hide
 ```
 
@@ -83,7 +83,7 @@ branch, and `diagram.child` holds the diagrams of the branches that start on it:
 
 ```@example bifurcation
 options = ContinuationPar(nev = 2, p_min = -4.0, p_max = 6.0)
-diagram = bifurcationdiagram(problem, PALC(), 2, (args...) -> options; bothside = true)
+diagram = bifurcationdiagram(problem, PALC(), 2, (args...) -> options; bothside = Val(true))
 [(point.type, point.param) for point in diagram.γ.specialpoint]
 ```
 
@@ -128,11 +128,11 @@ by the name of the result, `radius`, while the states keep the names of their sy
 ```@example bifurcation
 u, v, ν, t = SX.sym("u"), SX.sym("v"), SX.sym("ν"), SX.sym("t")
 r2 = u^2 + v^2
-oscillator = CasadiFunction("oscillator", [vertcat(u, v), ν, t], [vertcat(ν * u - v - u * r2, u + ν * v - v * r2), sqrt(r2)],
+oscillator = CasadiFunction("oscillator", [vcat(u, v), ν, t], [vcat(ν * u - v - u * r2, u + ν * v - v * r2), sqrt(r2)],
                             ["state", "ν", "t"], ["rate", "radius"])
 problem = BifurcationProblem(oscillator, [0.0, 0.0], [1.0], :ν; record_from_solution = (:u, :radius))
 options = ContinuationPar(nev = 2, p_min = -3.0, p_max = 3.0)
-branch = continuation(problem, PALC(), options; bothside = true)
+branch = continuation(problem, PALC(), options; bothside = Val(true))
 [(point.type, point.param) for point in branch.specialpoint]
 ```
 

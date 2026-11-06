@@ -13,7 +13,7 @@ const TIGHT = (; abstol = 1e-13, reltol = 1e-13, specialize = SciMLBase.AutoSpec
 function two_body()
     x, p = SX.sym("x", 4), SX.sym("mu", 1)
     r3 = (x[1]^2 + x[2]^2)^1.5
-    Dict("x" => x, "p" => p, "ode" => vertcat([x[3], x[4], -p[1] * x[1] / r3, -p[1] * x[2] / r3]))
+    Dict("x" => x, "p" => p, "ode" => vcat(x[3], x[4], -p[1] * x[1] / r3, -p[1] * x[2] / r3))
 end
 
 two_body_integrator(; options...) = integrator("F", Vern9(), two_body(), 0.0, 3.0; TIGHT..., options...)

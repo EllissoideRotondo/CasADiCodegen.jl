@@ -75,8 +75,8 @@ keeps:
 
 ```julia
 s, c = MX.sym("s", 2), MX.sym("c", 2)                    # s = [height, speed], c = [gravity, restitution]
-ball = Dict("x" => s, "p" => c, "ode" => vertcat(s[2], -c[1]), "zero" => s[1],
-            "transition" => vertcat(s[1], -c[2] * s[2]))  # the speed changes its sign and loses a part
+ball = Dict("x" => s, "p" => c, "ode" => vcat(s[2], -c[1]), "zero" => s[1],
+            "transition" => vcat(s[1], -c[2] * s[2]))  # the speed changes its sign and loses a part
 bounce = integrator("bounce", Vern9(), ball; events = 3, terminal = false, direction = -1)
 
 s0, c0 = MX.sym("s0", 2), MX.sym("c0", 2)
@@ -101,10 +101,10 @@ function is positive inside the box, so that `direction = -1` finds the contacts
 
 ```julia
 s = MX.sym("s", 4)                                         # s = [x, y, vx, vy]
-flip_x, flip_y = vertcat(s[1], s[2], -s[3], s[4]), vertcat(s[1], s[2], s[3], -s[4])
-box = Dict("x" => s, "ode" => vertcat(s[3], s[4], -9.8 - 0.1 * s[3], -0.1 * s[4]),
-           "zero" => vertcat(s[1], s[2] + 1.5, 1.5 - s[2]),
-           "transition" => horzcat(flip_x, flip_y, flip_y))    # one column per event function
+flip_x, flip_y = vcat(s[1], s[2], -s[3], s[4]), vcat(s[1], s[2], s[3], -s[4])
+box = Dict("x" => s, "ode" => vcat(s[3], s[4], -9.8 - 0.1 * s[3], -0.1 * s[4]),
+           "zero" => vcat(s[1], s[2] + 1.5, 1.5 - s[2]),
+           "transition" => hcat(flip_x, flip_y, flip_y))    # one column per event function
 walls = integrator("walls", Vern9(), box; events = 17, terminal = false, direction = -1)
 sf, te, ie = walls(MX.sym("s0", 4), t0, tf)
 ```

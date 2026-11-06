@@ -33,11 +33,11 @@ The scalar, the column or the matrix of the CasADi scalars `values`, which `shap
 """
 function assemble(values, shape)
     isempty(shape) && return only(values)
-    column(v) = length(v) == 1 ? v[1] : CasADiCodegen.vertcat(v...)
+    column(v) = length(v) == 1 ? v[1] : vcat(v...)
     length(shape) == 1 && return column(values)
     @requires length(shape) == 2 "casadi_function: an array of $(length(shape)) dimensions has no CasADi shape; use a vector or a matrix"
     columns = [column(values[(j-1)*shape[1]+1:j*shape[1]]) for j in 1:shape[2]]
-    length(columns) == 1 ? columns[1] : CasADiCodegen.horzcat(columns...)
+    length(columns) == 1 ? columns[1] : hcat(columns...)
 end
 
 """

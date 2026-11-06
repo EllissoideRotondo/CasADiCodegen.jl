@@ -46,7 +46,7 @@ variable. `n_instructions`, a function of the CasADi front end in the module
 `CasADiCodegen.C`, counts the operations of the function:
 
 ```@example large
-heat = CasadiFunction("heat", [x, vertcat(k, c, uin)], [vertcat(equations...), x[N÷2]],
+heat = CasadiFunction("heat", [x, vcat(k, c, uin)], [vcat(equations...), x[N÷2]],
                       ["x", "p"], ["rhs", "y"])
 CasADiCodegen.C.n_instructions(heat)
 ```
@@ -125,7 +125,7 @@ for i in 1:n, j in i+1:n
     acceleration[3j-2:3j] .-= m[i] .* d ./ (r2 * sqrt(r2))
     global energy -= m[i] * m[j] / sqrt(r2)
 end
-bodies = CasadiFunction("bodies", [z, m], [vertcat(z[3n+1:6n], acceleration...), energy],
+bodies = CasadiFunction("bodies", [z, m], [vcat(z[3n+1:6n], acceleration...), energy],
                         ["z", "m"], ["rhs", "energy"])
 nothing # hide
 ```
@@ -163,8 +163,8 @@ make `uin` an argument of its own:
 ```@example large
 u = SX.sym("u")
 input_equations = [k * (N + 1)^2 * ((i == 1 ? u : x[i-1]) - 2x[i] + right(i)) - c * x[i]^3 for i in 1:N]
-f_chain = CasadiFunction("f", [x, u, vertcat(k, c)], [vertcat(input_equations...)])
-h_chain = CasadiFunction("h", [x, u, vertcat(k, c)], [x[N÷2]])
+f_chain = CasadiFunction("f", [x, u, vcat(k, c)], [vcat(input_equations...)])
+h_chain = CasadiFunction("h", [x, u, vcat(k, c)], [x[N÷2]])
 lin, lin! = CasADiCodegen.linearization(f_chain, h_chain)
 A, B, C, D = lin(x0, [0.0], [1.0, 5.0])
 B[1], C[N÷2], D[1]
@@ -200,7 +200,7 @@ closed loop with `d` as the input and both signals as outputs:
 xp, d, q = SX.sym("x"), SX.sym("d"), SX.sym("q", 2)     # q = [K, T]
 uP = -xp + d
 loop_f = CasadiFunction("loop_f", [xp, d, q], [(q[1] * uP - xp) / q[2]])
-loop_h = CasadiFunction("loop_h", [xp, d, q], [vertcat(uP, xp)])
+loop_h = CasadiFunction("loop_h", [xp, d, q], [vcat(uP, xp)])
 loop_lin, _ = CasADiCodegen.linearization(loop_f, loop_h)
 A_loop, B_loop, C_loop, D_loop = loop_lin([0.0], [0.0], [1.0, 1.0])
 ```

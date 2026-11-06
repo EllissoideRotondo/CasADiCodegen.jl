@@ -29,7 +29,7 @@ import SciMLBase
 
 z = SX.sym("z", 2)
 a, b = SX.sym("a"), SX.sym("b")
-p = vertcat(a, b)
+p = vcat(a, b)
 x, y = z[1], z[2]
 rosenbrock = CasadiFunction("rosenbrock", [z, p], [(a - x)^2 + b * (y - x^2)^2])
 ```
@@ -141,17 +141,17 @@ CasADi, in the module `CasADiCodegen.C` that holds the whole CasADi front end. A
 comparison such as `w[1]^2 + w[2]^2 <= 1` gives an expression of CasADi that `subject_to`
 takes as a constraint. A chain such as `-2 <= w[1] <= 2` cannot be one, because Julia
 evaluates it as `-2 <= w[1] && w[1] <= 2`, and `&&` takes a `Bool` only;
-[`bounded`](@ref CasADiCodegen.bounded)`(lb, w, ub)`, the `opti.bounded` of Python, gives
+`bounded(lb, w, ub)`, the `opti.bounded` of Python, gives
 the constraint with its two bounds:
 
 ```@example optimization
 C = CasADiCodegen.C
 opti = C.Opti()
-w = C.variable(opti, 2)
-pa, pb = C.parameter(opti), C.parameter(opti)
+w = variable(opti, 2)
+pa, pb = parameter(opti), parameter(opti)
 C.minimize(opti, (pa - w[1])^2 + pb * (w[2] - w[1]^2)^2)
-C.subject_to(opti, w[1]^2 + w[2]^2 <= 1)
-C.subject_to(opti, bounded([-2.0, -1.0], w, [2.0, 3.0]))
+subject_to(opti, w[1]^2 + w[2]^2 <= 1)
+subject_to(opti, bounded([-2.0, -1.0], w, [2.0, 3.0]))
 C.set_initial(opti, w, DM([0.14, 0.14]))
 C.set_value(opti, pa, DM(1.0))
 C.set_value(opti, pb, DM(100.0))

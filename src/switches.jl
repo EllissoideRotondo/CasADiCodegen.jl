@@ -44,29 +44,29 @@ function mode_model(name::AbstractString, dae, modes::Pair; gate::Bool = false)
     n, k = size(x, 1), size(m, 1)
     counter = gate ? T[T.sym("events_left")] : T[]
     augmented = Dict{String,Any}(key => value for (key, value) in dae if !(key in ("x", "ode", "zero", "transition")))
-    augmented["x"] = Front.vertcat([x, m, counter...])
-    augmented["ode"] = Front.vertcat([Front.densify(dae["ode"]), casadi_matrix(T, zeros(k + length(counter)))])
+    augmented["x"] = vertcat([x, m, counter...])
+    augmented["ode"] = vertcat([Front.densify(dae["ode"]), casadi_matrix(T, zeros(k + length(counter)))])
 
     user = haskey(dae, "zero") ? Front.densify(dae["zero"]) : nothing
     nu = user === nothing ? 0 : size(user, 1)
     # An event function of the user stays at 1, with no change of sign, when no event is left to count.
     gated = gate ? C.if_else(counter[1] > 0.5, user, casadi_matrix(T, ones(nu))) : user
     surfaces = C.times(m, S)
-    augmented["zero"] = nu == 0 ? surfaces : Front.vertcat([gated, surfaces])
+    augmented["zero"] = nu == 0 ? surfaces : vertcat([gated, surfaces])
 
     columns = T[]
     if nu > 0
         given = haskey(dae, "transition") ? Front.densify(dae["transition"]) : x
         for i in 1:nu
             after = size(given, 2) == 1 ? given : given[:, i]
-            push!(columns, Front.vertcat([after, m, (gate ? [counter[1] - 1] : T[])...]))
+            push!(columns, vertcat([after, m, (gate ? [counter[1] - 1] : T[])...]))
         end
     end
     for j in 1:k
         flip = casadi_matrix(T, [i == j ? -1.0 : 1.0 for i in 1:k])
-        push!(columns, Front.vertcat([x, C.times(m, flip), counter...]))
+        push!(columns, vertcat([x, C.times(m, flip), counter...]))
     end
-    augmented["transition"] = Front.horzcat(columns)
+    augmented["transition"] = horzcat(columns)
     @ensures size(augmented["x"], 1) == n + k + length(counter) && size(augmented["transition"], 2) == size(augmented["zero"], 1) "integrator \"$name\": the model with modes has the wrong size"
     augmented, k, nu
 end
@@ -111,50 +111,50 @@ function switched_events(name::AbstractString, parts; events::Integer, terminal:
         # `users` and `switched` count the events of the user and the switches among them.
         horizon = terminal && wanted > 0 ? C.if_else(done, start, tf) : tf
         # The guess carries the place of the event at `start`, so that the search does not find it again.
-        found = event_time(Front.vertcat([horizon, previous]), state, q..., start, horizon)
+        found = event_time(vertcat([horizon, previous]), state, q..., start, horizon)
         te, place = found[1], found[2]
         previous = place
         result = arc(state, q..., start, te)
         has_quad && push!(sums, result[2])
         state, start = has_quad ? result[1] : result, te
-        is_user, is_switch = C.and(place > 0.5, place < nu + 0.5), place > nu + 0.5
+        is_user, is_switch = C.logic_and(place > 0.5, place < nu + 0.5), place > nu + 0.5
         users, switched = users + is_user, switched + is_switch
         for j in 1:wanted
-            mask = C.and(is_user, C.eq(users, number(j)))
+            mask = C.logic_and(is_user, C.eq(users, number(j)))
             user_time[j], user_place[j], user_hit[j] = user_time[j] + mask * te, user_place[j] + mask * place, user_hit[j] + mask
         end
         for j in 1:switches
-            mask = C.and(is_switch, C.eq(switched, number(j)))
+            mask = C.logic_and(is_switch, C.eq(switched, number(j)))
             switch_time[j], switch_place[j], switch_hit[j] = switch_time[j] + mask * te, switch_place[j] + mask * (place - nu), switch_hit[j] + mask
         end
         if search == searches
-            state = C.attachAssert(state, C.not(is_switch), "integrator \"$name\": more than $switches switches before the final time; raise switches")
+            state = C.attachAssert(state, C.logic_not(is_switch), "integrator \"$name\": more than $switches switches before the final time; raise switches")
             break
         end
         if guard !== nothing
             value = guard[1](state, p_value, te, place)
-            state = C.attachAssert(state, C.or(C.not(is_switch), value > 0), guard[2])
+            state = C.attachAssert(state, C.logic_or(C.logic_not(is_switch), value > 0), guard[2])
         end
         if jump !== nothing
             after = jump(state, p_value, te)
             size(after, 2) > 1 && (after = Front.mtimes(after, one_hot(place)))
             # The last event of the user with `terminal` ends the integration before its transition.
-            apply = terminal && wanted > 0 ? C.or(is_switch, C.and(is_user, users < wanted - 0.5)) : place > 0.5
+            apply = terminal && wanted > 0 ? C.logic_or(is_switch, C.logic_and(is_user, users < wanted - 0.5)) : place > 0.5
             state = C.if_else(apply, after, state)
         end
-        terminal && wanted > 0 && (done = C.or(done, C.and(is_user, C.eq(users, number(wanted)))))
+        terminal && wanted > 0 && (done = C.logic_or(done, C.logic_and(is_user, C.eq(users, number(wanted)))))
     end
     exact && wanted > 0 &&
         (state = C.attachAssert(state, users > wanted - 0.5, "integrator \"$name\": fewer than $wanted events between the initial and the final time"))
     outputs, names = Front.MX[state], ["xf"]
     has_quad && (push!(outputs, reduce(+, sums)); push!(names, "qf"))
     if wanted > 0
-        push!(outputs, Front.vertcat([user_time[j] + (1 - user_hit[j]) * tf for j in 1:wanted])); push!(names, "te")
-        nu > 1 && (push!(outputs, Front.vertcat(user_place)); push!(names, "ie"))
+        push!(outputs, vertcat([user_time[j] + (1 - user_hit[j]) * tf for j in 1:wanted])); push!(names, "te")
+        nu > 1 && (push!(outputs, vertcat(user_place)); push!(names, "ie"))
         exact || (push!(outputs, users); push!(names, "ne"))
     end
-    push!(outputs, Front.vertcat([switch_time[j] + (1 - switch_hit[j]) * tf for j in 1:switches])); push!(names, "ts")
-    switching > 1 && (push!(outputs, Front.vertcat(switch_place)); push!(names, "is"))
+    push!(outputs, vertcat([switch_time[j] + (1 - switch_hit[j]) * tf for j in 1:switches])); push!(names, "ts")
+    switching > 1 && (push!(outputs, vertcat(switch_place)); push!(names, "is"))
     push!(outputs, switched); push!(names, "ns")
     @ensures length(outputs) == length(names) "integrator \"$name\": each result must have a name"
     outputs, names
@@ -192,7 +192,7 @@ function ModeFunctions(dae, augmented, S, mass::Vector{Float64})
 end
 
 "The augmented state `[x; m; 0...]` with the state `x` and the modes `m`."
-augmented_state(f::ModeFunctions, x, m) = Front.vertcat([x, m, (f.extra > 0 ? [Front.MX(f.extra, 1)] : Front.MX[])...])
+augmented_state(f::ModeFunctions, x, m) = vertcat([x, m, (f.extra > 0 ? [Front.MX(f.extra, 1)] : Front.MX[])...])
 
 """
     initial_mode(f::ModeFunctions, name, x0, p, t0, direction) -> MX
@@ -210,17 +210,17 @@ function initial_mode(f::ModeFunctions, name::AbstractString, x0, p, t0, directi
     off = C.abs(S0) > sqrt(eps()) * (1 + C.abs(S0))
     base = C.sign(S0)
     modes = map(1:f.k) do j
-        with(v) = augmented_state(f, x0, Front.vertcat([i == j ? number(v) : base[i] for i in 1:f.k]))
+        with(v) = augmented_state(f, x0, vertcat([i == j ? number(v) : base[i] for i in 1:f.k]))
         leaves_up = direction * f.rate(with(1), p, t0)[j] > 0
         leaves_down = direction * f.rate(with(-1), p, t0)[j] < 0
         mode = C.if_else(off[j], base[j], C.if_else(leaves_up, number(1), number(-1)))
         on = "integrator \"$name\": switching function $j is zero at the initial time, and"
-        mode = C.attachAssert(mode, C.or(off[j], C.not(C.and(leaves_up, leaves_down))),
+        mode = C.attachAssert(mode, C.logic_or(off[j], C.logic_not(C.logic_and(leaves_up, leaves_down))),
                               "$on the flow leaves its surface on both sides, so the initial mode is not defined; start off the surface")
-        C.attachAssert(mode, C.or(off[j], C.or(leaves_up, leaves_down)),
+        C.attachAssert(mode, C.logic_or(off[j], C.logic_or(leaves_up, leaves_down)),
                        "$on the flow leaves its surface on neither side: it slides on the surface or touches it; start off the surface, or smooth the switch")
     end
-    Front.vertcat(modes)
+    vertcat(modes)
 end
 
 """
@@ -311,7 +311,7 @@ function mode_integrator(name::AbstractString, dae, modes, make_solver, make_eve
     p_value = has_p ? q[1] : Front.MX(0, 1)
     names_in = has_p ? ["x0", "p"] : ["x0"]
     run(X0, from, to) = Dict(zip(names_out, as_list(G(X0, q..., from, to))))
-    start(from, direction) = Front.vertcat([x0, initial_mode(f, name, x0, p_value, from, direction), (gate ? [Front.MX(Float64(events))] : Front.MX[])...])
+    start(from, direction) = vertcat([x0, initial_mode(f, name, x0, p_value, from, direction), (gate ? [Front.MX(Float64(events))] : Front.MX[])...])
 
     if !grid
         from, to = free ? (Front.MX.sym("t0"), Front.MX.sym("tf")) : (Front.MX(t0), Front.MX(times[1]))
@@ -336,12 +336,12 @@ function mode_integrator(name::AbstractString, dae, modes, make_solver, make_eve
             r = run(X, Front.MX(from), Front.MX(stop))
             X, from = r["xf"], stop
             has_quad && (total = total + r["qf"])
-            at = Front.vertcat([checked_modes(f, name, X, p_value, Front.MX(stop)), (has_quad ? [total] : Front.MX[])...])
+            at = vertcat([checked_modes(f, name, X, p_value, Front.MX(stop)), (has_quad ? [total] : Front.MX[])...])
             foreach(i -> times[i] == stop && (columns[i] = at), eachindex(times))
         end
     end
-    initial = has_quad ? Front.vertcat([x0, Front.MX(C.DM(zeros(nq)))]) : x0
+    initial = has_quad ? vertcat([x0, Front.MX(C.DM(zeros(nq)))]) : x0
     foreach(i -> times[i] == t0 && (columns[i] = initial), eachindex(times))
-    M = Front.horzcat(columns)
+    M = horzcat(columns)
     Front.Function(String(name), [x0, q...], has_quad ? [M[1:n, :], M[n+1:n+nq, :]] : [M], names_in, has_quad ? ["xf", "qf"] : ["xf"])
 end

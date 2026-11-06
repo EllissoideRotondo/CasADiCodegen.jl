@@ -1,5 +1,5 @@
-# Julia functions as CasADi functions. The front end offers the type
-# `CasadiCallback`; this file adds a method of `callback` that takes a plain
+# Julia functions as CasADi functions. The front end offers the abstract type
+# `Callback`, whose subtypes define the virtual methods of a CasADi callback; this file adds a method of `callback` that takes a plain
 # Julia function, and a record of each such function, so that the emitter can
 # replace the call through CasADi by a direct Julia call.
 
@@ -25,7 +25,7 @@ struct JuliaCall
 end
 
 "A callback that has a record: `call` is the record and `evaluate` takes every argument."
-abstract type RecordedCallback <: Front.CasadiCallback end
+abstract type RecordedCallback <: C.Callback end
 
 # The CasADi side of a Julia function. `evaluate` takes every argument;
 # `derivative` is `nothing`, or the Julia function that gives the Jacobian
@@ -51,12 +51,13 @@ pattern(dims, n) = n == 0 ? C.Sparsity(dims[1], length(dims) == 2 ? dims[2] : 1)
 shaped(values, dims) = length(dims) == 1 ? values : reshape(values, dims)
 results(y) = y isa Tuple ? y : (y,)
 
-Front.cb_n_in(cb::RecordedCallback) = length(cb.call.shapes_in)
-Front.cb_n_out(cb::RecordedCallback) = length(cb.call.shapes_out)
-Front.cb_sparsity_in(cb::RecordedCallback, i) = pattern(cb.call.shapes_in[i], cb.call.nnz_in[i])
-Front.cb_sparsity_out(cb::RecordedCallback, i) = pattern(cb.call.shapes_out[i], cb.call.nnz_out[i])
+# The virtual methods of the callback; CasADi counts the arguments and results from 0.
+C.get_n_in(cb::RecordedCallback) = length(cb.call.shapes_in)
+C.get_n_out(cb::RecordedCallback) = length(cb.call.shapes_out)
+C.get_sparsity_in(cb::RecordedCallback, i) = pattern(cb.call.shapes_in[i+1], cb.call.nnz_in[i+1])
+C.get_sparsity_out(cb::RecordedCallback, i) = pattern(cb.call.shapes_out[i+1], cb.call.nnz_out[i+1])
 
-function Front.cb_eval(cb::RecordedCallback, arg)
+function C.eval_(cb::RecordedCallback, arg)
     call = cb.call
     # An input that is a structural zero has no values to shape; no function reads it.
     y = results(cb.evaluate((n == 0 ? Float64[] : shaped(C.nonzeros(a), dims)
@@ -67,12 +68,12 @@ function Front.cb_eval(cb::RecordedCallback, arg)
     end
 end
 
-C.Callback_has_jacobian(cb::JuliaCallback, args...) = cb.derivative !== nothing
+C.has_jacobian(cb::JuliaCallback) = cb.derivative !== nothing
 
 # CasADi asks for the function (inputs..., results...) -> one Jacobian block
 # per pair of result and input, ordered by result first. A block is a
 # structural zero when the result is one or when the input is not an argument.
-function C.Callback_get_jacobian(cb::JuliaCallback, name, names_in, names_out, options)
+function C.get_jacobian(cb::JuliaCallback, name, names_in, names_out, options)
     call = cb.call
     pairs = [(o, i) for o in eachindex(call.shapes_out) for i in eachindex(call.shapes_in)]
     shapes = Tuple{Vararg{Int}}[(prod(call.shapes_out[o]), prod(call.shapes_in[i])) for (o, i) in pairs]
@@ -119,10 +120,20 @@ function julia_function(f, name::String, nargs::Int, shapes_in, shapes_out, jaco
     @requires Base.isidentifier(name) "\"$name\" is not a valid function name"
     call = JuliaCall(name, f, nargs, shapes_in, shapes_out, nnz_in, nnz_out)
     evaluate = (arguments...) -> f(arguments[1:nargs]...)
-    proxy = Front.callback(JuliaCallback(call, evaluate, derivative_function(jacobian, call)); name, options...)
-    proxy_function = Front.Function(proxy)
-    JULIA_CALLS[C.__hash__(proxy_function)] = (call, proxy)
-    proxy_function
+    recorded_function(JuliaCallback(call, evaluate, derivative_function(jacobian, call)); options...)
+end
+
+"""
+    recorded_function(cb::RecordedCallback; options...) -> CasADiCodegen.Function
+
+Make the callback `cb` a CasADi function with the name of its record and the CasADi
+`options`, and record it in `JULIA_CALLS`, which also keeps `cb` alive.
+"""
+function recorded_function(cb::RecordedCallback; options...)
+    proxy = Front.callback(cb, cb.call.name, Dict{String,Any}(string(k) => v for (k, v) in options))
+    F = Front.Function(proxy)
+    JULIA_CALLS[C.__hash__(F)] = (cb.call, proxy)
+    F
 end
 
 """

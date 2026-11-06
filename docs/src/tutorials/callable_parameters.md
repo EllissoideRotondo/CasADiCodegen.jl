@@ -10,7 +10,7 @@ replace the data without building the model again, since the values of the inter
 and even its grid, can be parameters of the problem, so that the generated code stays
 the same and only the numbers that it receives change. Finally, we turn to smooth
 interpolation and to the interpolations of DataInterpolations.jl, which the model calls
-through [`CasADiCodegen.callback`](@ref), a CasADi function that runs Julia code.
+through [`CasADiCodegen.callback`](@ref CasADiCodegen.callback(::Any, ::AbstractString, ::Tuple, ::Tuple)), a CasADi function that runs Julia code.
 
 The examples need CasADiCodegen.jl, SciMLBase.jl, OrdinaryDiffEqTsit5.jl,
 DataInterpolations.jl and StaticArrays.jl. `CasADiCodegen.C` is the module of the
@@ -107,7 +107,7 @@ findall(!iszero, J), J[1, 6:7]
 The grid, too, can be an argument of a linear interpolant: with the number of points
 per dimension in place of the grid, the interpolant takes the point, the grid and the
 values, in this order. Both become parameters, which the right side joins into one
-argument with `vertcat`; each keeps its name. New data may then come on another
+argument with `vcat`; each keeps its name. New data may then come on another
 increasing grid, provided that it has the same number of points, here the values of
 ``\sin \pi t`` at 101 points of ``(0, 1)``, whose integral over ``(0, 1)`` is
 ``2/\pi = 0.63662``. The `tstops` follow the grid that the parameters hold:
@@ -115,7 +115,7 @@ increasing grid, provided that it has the same number of points, here the values
 ```@example callable
 table = C.interpolant("table", "linear", [length(grid)], 1, Dict("inline" => true))
 points = MX.sym("points", length(grid))
-rhs = CasadiFunction("rhs", [x, vertcat(points, data), t], [table(t, points, data)])
+rhs = CasadiFunction("rhs", [x, vcat(points, data), t], [table(t, points, data)])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [0.0], (0.0, 1.0), [grid; grid .^ 2])
 finer = collect(range(0.0, 1.0; length = length(grid)))
 sine = SciMLBase.remake(problem; p = [:points => finer, :data => sin.(pi .* finer)])

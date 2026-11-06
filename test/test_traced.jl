@@ -27,7 +27,7 @@ end
     x = SX.sym("x", 1)
     t = only(traced(x))
     outputs = [untraced(min(t, 1)), untraced(max(2t, -1)), untraced(clamp(t, -0.5, 0.5)), untraced(ifelse(t < 0, -t, t^2))]
-    g, _ = build_function(CasadiFunction("s", [x], [vertcat(outputs...)]); expression = Val{false})
+    g, _ = build_function(CasadiFunction("s", [x], [vcat(outputs...)]); expression = Val{false})
     for v in (-2.0, -0.3, 0.4, 3.0)
         @test g([v]) == [min(v, 1), max(2v, -1), clamp(v, -0.5, 0.5), v < 0 ? -v : v^2]
     end

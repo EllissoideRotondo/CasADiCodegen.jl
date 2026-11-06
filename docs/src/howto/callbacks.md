@@ -1,7 +1,7 @@
 # Call a Julia function from the model
 
 A model sometimes needs code that CasADi cannot see, such as an ephemeris, a table
-or any other Julia function. [`CasADiCodegen.callback`](@ref) makes such a function a
+or any other Julia function. [`CasADiCodegen.callback`](@ref CasADiCodegen.callback(::Any, ::AbstractString, ::Tuple, ::Tuple)) makes such a function a
 CasADi function that a matrix (MX) graph can call, and the generated code then calls
 the Julia function directly.
 

@@ -85,7 +85,7 @@ h([0.2]), h([0.8]), h([-1.0])
 
 A Julia function with branches that cannot be written this way, or one that calls
 code that accepts only `Float64`, enters the graph through
-[`CasADiCodegen.callback`](@ref) instead (see [Call a Julia function from the model](@ref)).
+[`CasADiCodegen.callback`](@ref CasADiCodegen.callback(::Any, ::AbstractString, ::Tuple, ::Tuple)) instead (see [Call a Julia function from the model](@ref)).
 
 ## Matrix graphs
 

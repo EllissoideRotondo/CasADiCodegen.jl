@@ -216,7 +216,7 @@ const TABLE_POINTS = [[0.3, 0.7], [1.0, 2.0], [4.99, 3.9], [-1.0, 5.0], [6.0, -2
     coefficients = [cos(0.4k) + 0.1k for k in 1:40]
     @testset "$kind with fixed values, lookup $modes" for (kind, modes) in (("linear", ["linear", "linear"]), ("bspline", ["binary", "linear"]))
         table = C.interpolant("table", kind, TABLE_GRID, values, Dict("lookup_mode" => modes))
-        f = CasADiCodegen.Function("f", [x], [table(x) * 2, C.jacobian(table(x), x), CasADiCodegen.hessian(table(x), x)])
+        f = CasADiCodegen.Function("f", [x], [table(x) * 2, C.jacobian(table(x), x), CasADiCodegen.hessian(table(x), x)[1]])
         g = native(f)
         @test all(all_agree(evaluated(g, f, [p]), mx_casadi(f, [p]); rtol = 1e-10) for p in TABLE_POINTS)
         kind == "bspline" && continue       # the written module and the dual numbers take one path for both kinds
@@ -348,7 +348,7 @@ end
 # The Newton rootfinder of CasADi is the same iteration in Julia code.
 @testset "Newton rootfinder of CasADi" begin
     x, L, a = MX.sym("x", 2), MX.sym("L", C.Sparsity.lower(2)), MX.sym("a")
-    residual = CasADiCodegen.Function("residual", [x, L], [C.mtimes(L, x) + x^3 - 1])
+    residual = CasADiCodegen.Function("residual", [x, L], [C.mtimes(L, x) + x .^ 3 - 1])
     values = [[0.4, 0.9], [1.3, 0.2, 0.7]]
     @testset "$label" for (label, options) in ("the options of CasADi" => Dict(), "no line search" => Dict("line_search" => false),
                                                 "other tolerances" => Dict("abstol" => 1e-6, "abstolStep" => 1e-3))
@@ -363,7 +363,7 @@ end
         @test @allocated(g(results, arguments)) <= 1024       # 304 bytes on Julia 1.13, for the calls of the solver; the bound leaves room for another version
     end
     # The unknown is the second input, the residual is the second result, and the other result is given at the root.
-    shifted = CasADiCodegen.Function("shifted", [a, x], [x * a, x^2 - a])
+    shifted = CasADiCodegen.Function("shifted", [a, x], [x * a, x .^ 2 - a])
     newton = C.rootfinder("newton", "newton", shifted, Dict("implicit_input" => true, "implicit_output" => true))
     f = CasADiCodegen.Function("f", [a, x], collect(newton(a, x)))
     g = native(f)
@@ -391,7 +391,7 @@ end
     at(i) = 1 <= i <= n ? z[i] : SX(0.0)
     bratu = [at(i - 1) - 2 * z[i] + at(i + 1) + q * exp(z[i]) / (n + 1)^2 for i in 1:n]
     # Row i holds equation i + 2, so the diagonal of the Jacobian is zero and the factorization must exchange rows.
-    residual = CasADiCodegen.Function("bratu", [z, q], [vertcat(bratu[[3:n; 1; 2]]...)])
+    residual = CasADiCodegen.Function("bratu", [z, q], [vcat(bratu[[3:n; 1; 2]]...)])
     newton = C.rootfinder("bratu_newton", "newton", residual)
     x, λ = MX.sym("x", n), MX.sym("λ")
     f = CasADiCodegen.Function("f", [x, λ], [newton(x, λ), C.jacobian(newton(x, λ), λ)])
@@ -407,7 +407,7 @@ end
 @testset "integrators of CasADi with a fixed step" begin
     x, p, u, t = MX.sym("x", 2), MX.sym("p"), MX.sym("u", 1, 3), MX.sym("t")
     control = MX.sym("c")
-    dae = Dict("x" => x, "p" => p, "u" => control, "t" => t, "ode" => C.vertcat([x[2], -p * C.sin(x[1]) + control * t]), "quad" => C.dot(x, x))
+    dae = Dict("x" => x, "p" => p, "u" => control, "t" => t, "ode" => vcat(x[2], -p * C.sin(x[1]) + control * t), "quad" => C.dot(x, x))
     values = [[0.4, -0.3], [1.7], [0.2, -0.1, 0.5]]
     @testset "$plugin" for plugin in ("rk", "collocation")
         # Seven elements from the start time 0.25 give one, two and four steps, so both branches of the loop run.
@@ -427,14 +427,14 @@ end
         end
         # The adjoint sensitivities are the reverse derivative of the same loop, so one method shows them too.
         if plugin == "collocation"
-            cost = CasADiCodegen.Function("cost", [x, p, u], [C.gradient(C.sumsqr(final) + quadrature[3], C.vertcat([x, p, C.vec(u)]))])
+            cost = CasADiCodegen.Function("cost", [x, p, u], [C.gradient(C.sumsqr(final) + quadrature[3], vcat(x, p, C.vec(u)))])
             @test all_agree(evaluated(native(cost), cost, values), mx_casadi(cost, values); rtol = 1e-9)
         end
     end
     # Collocation has unknowns for the algebraic states at each point; z = p x1 makes x1' = -z a decay.
     @testset "algebraic states" begin
         z = MX.sym("z")
-        rule = C.integrator("rule", "collocation", Dict("x" => x, "z" => z, "p" => p, "ode" => C.vertcat([-z, x[1]]), "alg" => z - p * x[1]), 0.0, [0.5, 1.0],
+        rule = C.integrator("rule", "collocation", Dict("x" => x, "z" => z, "p" => p, "ode" => vcat(-z, x[1]), "alg" => z - p * x[1]), 0.0, [0.5, 1.0],
                             Dict("number_of_finite_elements" => 2))
         reached = rule(x, MX(0.3), p, MX(0, 1), MX(), MX(), MX())
         f = CasADiCodegen.Function("f", [x, p], [reached[1], reached[2], C.jacobian(reached[2], p)])
@@ -443,21 +443,21 @@ end
     @testset "two adjoint directions at once" begin
         # CasADi asks for them for a Jacobian with two rows and many columns.
         wide = MX.sym("wide", 6)
-        many = C.integrator("many", "collocation", Dict("x" => x, "p" => wide, "ode" => -C.sum1(wide) * x^2 + wide[1:2], "quad" => x[1] * wide[3]), 0.0, [0.5, 1.0],
+        many = C.integrator("many", "collocation", Dict("x" => x, "p" => wide, "ode" => -C.sum1(wide) * x .^ 2 + wide[1:2], "quad" => x[1] * wide[3]), 0.0, [0.5, 1.0],
                             Dict("number_of_finite_elements" => 4))
         reached = many(x, MX(0, 1), wide, MX(0, 1), MX(), MX(), MX())
-        rows = CasADiCodegen.Function("rows", [x, wide], [C.jacobian(reached[1][:, 2], wide), C.jacobian(C.vertcat([reached[3][2], reached[1][1, 1]]), wide)])
+        rows = CasADiCodegen.Function("rows", [x, wide], [C.jacobian(reached[1][:, 2], wide), C.jacobian(vcat(reached[3][2], reached[1][1, 1]), wide)])
         point = [values[1], [0.3, -0.2, 0.5, 0.1, 0.4, 0.2]]
         @test all_agree(evaluated(native(rows), rows, point), mx_casadi(rows, point); rtol = 1e-9)
     end
     # The derivatives of the second order go through the same loop for both methods; rk keeps the code small.
     @testset "derivatives of the second order" begin
         w = MX.sym("w", 2)
-        rule = C.integrator("rule", "rk", Dict("x" => x, "p" => w, "u" => control, "ode" => -w[1] * x^2 * w[2] + control, "quad" => x[1] * w[1]), 0.0, [0.5, 1.0],
+        rule = C.integrator("rule", "rk", Dict("x" => x, "p" => w, "u" => control, "ode" => -w[1] * x .^ 2 * w[2] + control, "quad" => x[1] * w[1]), 0.0, [0.5, 1.0],
                             Dict("number_of_finite_elements" => 2))
         result = rule(x, MX(0, 1), w, u[1:2], MX(), MX(), MX())
         cost = C.sumsqr(result[1]) + result[3][2]
-        f = CasADiCodegen.Function("f", [x, w, u], [CasADiCodegen.hessian(cost, w), C.jacobian(C.jacobian(result[1][:, 2], w), x), C.jacobian(C.gradient(cost, x), u)])
+        f = CasADiCodegen.Function("f", [x, w, u], [CasADiCodegen.hessian(cost, w)[1], C.jacobian(C.jacobian(result[1][:, 2], w), x), C.jacobian(C.gradient(cost, x), u)])
         points = [values[1], [1.7, 0.6], values[3]]
         @test all_agree(evaluated(native(f), f, points), mx_casadi(f, points); rtol = 1e-8)
     end

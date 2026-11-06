@@ -75,8 +75,7 @@ true
 julia> x, width = SX.sym("x"), SX.sym("width");
 
 julia> CasADiCodegen.smooth_step(x, width)
-1×1 SX:
-((1+tanh((x/width)))/2)
+SX(((1+tanh((x/width)))/2))
 ```
 """
 function smooth_step(s, width; kind::Symbol = :tanh)
@@ -230,7 +229,7 @@ A symbolic SX input of the pattern `sparsity` whose nonzeros are the scalar symb
 function scalar_symbols(name::AbstractString, sparsity::C.Sparsity)
     n = C.nnz(sparsity)
     nonzeros = SX[SX.sym("$(name)_$j") for j in 0:n-1]
-    (n == 0 ? SX.sym(name, sparsity) : SX(sparsity, C.vertcat(nonzeros))), nonzeros
+    (n == 0 ? SX.sym(name, sparsity) : SX(sparsity, vertcat(nonzeros))), nonzeros
 end
 
 """
@@ -269,7 +268,7 @@ function smooth_scalar(g::C.Function, nonzeros::Vector{Vector{SX}}, flags_in::Ve
         end
     end
     @ensures all(v -> all(k -> isassigned(v, k), eachindex(v)), out) "smoothed: function \"$(C.name(g))\": a nonzero of a result was not written"
-    results = [C.nnz_out(g, o) == 0 ? SX(C.size1_out(g, o), C.size2_out(g, o)) : SX(C.sparsity_out(g, o), C.vertcat(out[o+1])) for o in 0:C.n_out(g)-1]
+    results = [C.nnz_out(g, o) == 0 ? SX(C.size1_out(g, o), C.size2_out(g, o)) : SX(C.sparsity_out(g, o), vertcat(out[o+1])) for o in 0:C.n_out(g)-1]
     results, [isempty(f) ? 0x00 : (reduce(|, f) & (SELECTED | SOFT)) | (all(truth, f) ? TRUTH : 0x00) for f in out_flags]
 end
 
@@ -381,7 +380,7 @@ function smooth_call(node::MX, flags::Vector{UInt8}, width::MX, s::Smoothing; ar
     class = C.class_name(callee)
     if C.is_a(callee, "SXFunction") || C.is_a(callee, "MXFunction")
         h, changed, results = smoothed_callee(callee, flags, s)
-        changed ? (as_list(C.call(h, [arguments; width], false, false)), results) : (nothing, results)
+        changed ? (as_list(C.call(h, [arguments..., width], false, false)), results) : (nothing, results)
     elseif class in ("Map", "ThreadMap", "OmpMap")
         info = C.info(callee)
         h, changed, results = smoothed_callee(info["f"]::C.Function, flags, s)
@@ -398,7 +397,7 @@ function smooth_call(node::MX, flags::Vector{UInt8}, width::MX, s::Smoothing; ar
         any(b -> b[2], branches) || return nothing, results
         @requires default !== nothing && all(!isnothing, cases) "smoothed: switch \"$(C.name(callee))\" has a branch that is not a function"
         switch = C.conditional(C.Function, C.name(callee) * "_smoothed", C.Function[b[1] for b in cases], default[1])
-        as_list(C.call(switch, [arguments; width], false, false)), results
+        as_list(C.call(switch, [arguments..., width], false, false)), results
     else
         if class in ("LinearInterpolant", "LinearInterpolantJac")
             @requires !soft(flags[1]) "smoothed: the point of the interpolant \"$(C.name(callee))\" is a smoothed value"
@@ -440,13 +439,13 @@ function transformed_function(g::C.Function, flags::Vector{UInt8}, s::Smoothing,
         width = SX.sym(input)
         symbols = [scalar_symbols(names_in[i+1], C.sparsity_in(g, i)) for i in 0:C.n_in(g)-1]
         results, out_flags = smooth_scalar(g, [last(x) for x in symbols], flags, width, s)
-        h = Front.Function(name, [SX[first(x) for x in symbols]; width], results, [names_in; input], names_out)
+        h = Front.Function(name, [SX[first(x) for x in symbols]..., width], results, [names_in; input], names_out)
     else
         @requires C.is_a(g, "MXFunction") "smoothed: function \"$(C.name(g))\" is not an SX or MX function"
         width = MX.sym(input)
         symbols = MX[x for x in C.mx_in(g)]
         results, out_flags = smooth_graph(defining_outputs(g), symbols, flags, width, s)
-        h = Front.Function(name, [symbols; width], results, [names_in; input], names_out)
+        h = Front.Function(name, [symbols..., width], results, [names_in; input], names_out)
     end
     h, s.rewrites > before, out_flags
 end
@@ -521,8 +520,7 @@ julia> using CasADiCodegen
 julia> x, width = SX.sym("x"), SX.sym("width");
 
 julia> CasADiCodegen.smoothed(sign(x - 1), width)
-1×1 SX:
-tanh(((x-1)/width))
+SX(tanh(((x-1)/width)))
 ```
 """
 function smoothed(f::C.Function; kind::Symbol = :tanh, input::AbstractString = "width", inputs = nothing)
@@ -550,7 +548,7 @@ function smoothed(ex::SX, width::SX; kind::Symbol = :tanh, inputs = nothing)
     s = Smoothing(kind)
     flags = UInt8[k in places ? SELECTED : 0x00 for k in eachindex(symbols)]
     results, _ = smooth_scalar(Front.Function("smoothing", symbols, [ex]), [[v] for v in symbols], flags, width, s)
-    ensure_smoothed(Front.Function("smoothed", [symbols; width], results), places, s)
+    ensure_smoothed(Front.Function("smoothed", [symbols..., width], results), places, s)
     only(results)
 end
 
@@ -561,7 +559,7 @@ function smoothed(ex::MX, width::MX; kind::Symbol = :tanh, inputs = nothing)
     s = Smoothing(kind)
     flags = UInt8[k in places ? SELECTED : 0x00 for k in eachindex(symbols)]
     results, _ = smooth_graph([ex], symbols, flags, width, s)
-    ensure_smoothed(Front.Function("smoothed", [symbols; width], results), places, s)
+    ensure_smoothed(Front.Function("smoothed", [symbols..., width], results), places, s)
     only(results)
 end
 

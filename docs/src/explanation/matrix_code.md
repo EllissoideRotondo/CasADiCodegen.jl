@@ -77,11 +77,11 @@ the code agrees with CasADi at every input.
 |---|---|
 | Interpolant, `linear` or `bspline`, with fixed values or with the values as an argument, and for `linear` also with the grid as an argument; also with the option `inline`, with which CasADi differentiates them by the values | The search in the grid and the B-spline recursion of CasADi, with the three values of the option `lookup_mode`: `linear` (a scan of the grid), `exact` (a direct computation on an equidistant grid) and `binary` (a bisection) |
 | B-spline node; `einstein`, a sum of products of tensor elements over repeated indices; the contracted Kronecker products (`kron_contract`), which multiply each block of a block matrix with a second operand without forming the Kronecker product; `repsum`, the sum of the equal blocks of a matrix; `find`, the index of the first nonzero element | The loops of CasADi over tables that are read from its C code |
-| `convexify`, which makes a symmetric matrix positive definite | The routines of CasADi 3.8.1, statement by statement, for the three strategies |
+| `convexify`, which makes a symmetric matrix positive definite | The routines of CasADi 3.8.2, statement by statement, for the three strategies |
 | `attachAssert`, `monitor`, `printme`, `dump`, `lift` (which marks an expression for the lifted Newton method of CasADi) | The check, the print or the file of CasADi; the value passes |
 | `map`, serial, on threads or with OpenMP | One loop over the blocks of columns, in one thread, that calls the mapped function; a map of a Julia function calls it once per block, written out |
 | External function from a compiled library | A direct call of the library, with `Float64` only |
-| Rootfinder `newton` | The iteration of CasADi 3.8.1 with its line search and its options |
+| Rootfinder `newton` | The iteration of CasADi 3.8.2 with its line search and its options |
 | Integrators `rk` and `collocation`, with forward and adjoint sensitivities and with derivatives of the second order | The loop of steps of CasADi, as a loop over the step function of CasADi; a collocation step is a Newton rootfinder |
 
 The table below gives the time of one call of the generated code with `Float64`,

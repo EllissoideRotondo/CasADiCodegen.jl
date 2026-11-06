@@ -7,7 +7,7 @@ const K = CasADiCodegen.Codegen
 "A model `x'' = u` whose `u` is the expression `law(x, b, t)`, with the parameter `b`."
 function switched(law; quad = nothing)
     x, b, t = SX.sym("x", 2), SX.sym("b"), SX.sym("t")
-    model = Dict{String,Any}("x" => x, "p" => b, "t" => t, "ode" => vertcat([x[2], law(x, b, t)]))
+    model = Dict{String,Any}("x" => x, "p" => b, "t" => t, "ode" => vcat(x[2], law(x, b, t)))
     quad === nothing || (model["quad"] = quad(x))
     model
 end
@@ -26,15 +26,15 @@ end
     @test_logs (:warn, r"\"quad\".*OP_FABS: 1 kink.*order 2") integrator("F", Vern9(), kinked; TIGHT...)
 end
 
-@testset "an integrator of CasADi warns, natively and in generated code" begin
+@testset "a replaced integrator of CasADi warns in generated code" begin
     x, b = MX.sym("x", 2), MX.sym("b")
-    model = Dict("x" => x, "p" => b, "ode" => vertcat([x[2], C.if_else(x[1] < 1, MX(1.0), b)]))
-    native = @test_logs integrator("bounce", "cvodes", model, 0.0, 2.0, Dict("nonsmooth" => "ignore"))
+    model = Dict("x" => x, "p" => b, "ode" => vcat(x[2], C.if_else(x[1] < 1, MX(1.0), b)))
+    native = integrator("bounce", "cvodes", model, 0.0, 2.0)
     f = CasADiCodegen.Function("f", [x, b], [native(x, MX(0, 1), b, MX(), MX(), MX(), MX())[1]])
-    @test_logs (:warn, r"integrator \"bounce\"") match_mode = :any K.algorithm(f; expand = false, solvers = Solvers(ode = Solver(Vern9(); TIGHT...)))
-    @test_logs K.algorithm(f; expand = false, solvers = Solvers(ode = Solver(Vern9(); TIGHT...), nonsmooth = :ignore))
-    signed = Dict("x" => x, "ode" => vertcat([x[2], C.sign(x[1])]))
-    @test_throws ArgumentError integrator("step", "rk", signed, 0.0, 1.0, Dict("nonsmooth" => "error"))
+    ode = Solver(Vern9(); TIGHT...)
+    @test_logs (:warn, r"integrator \"bounce\"") match_mode = :any K.algorithm(f; expand = false, solvers = Solvers(; ode))
+    @test_logs K.algorithm(f; expand = false, solvers = Solvers(; ode, nonsmooth = :ignore))
+    @test_throws ArgumentError K.algorithm(f; expand = false, solvers = Solvers(; ode, nonsmooth = :error))
 end
 
 @testset "nonsmooth_operations finds the switches on chosen inputs" begin
@@ -92,7 +92,7 @@ end
 "The double integrator with the mode `m` as its thrust, and its switching function."
 function thrust_model(; written = m -> m)
     x, m = SX.sym("x", 2), SX.sym("m")
-    Dict{String,Any}("x" => x, "ode" => vertcat([x[2], written(m)])), m => 1 - x[1]
+    Dict{String,Any}("x" => x, "ode" => vcat(x[2], written(m))), m => 1 - x[1]
 end
 
 @testset "modes: fixed times, the jump of the STM, the initial mode" begin
@@ -147,15 +147,15 @@ end
     @test_throws "slide" ode_emitted(CasADiCodegen.Function("s", [y0], [slide(y0)]), ([1.0],))
     # Two switching functions on one surface change their sign in one search: the second mode stays wrong.
     z, w = SX.sym("z", 2), SX.sym("w", 2)
-    twice = integrator("twice", Vern9(), Dict("x" => z, "ode" => vertcat([z[2], (w[1] + w[2]) / 2])), 0.0, 2.0;
-                       modes = w => vertcat([1 - z[1], 1 - z[1]]), switches = 2, TIGHT...)
+    twice = integrator("twice", Vern9(), Dict("x" => z, "ode" => vcat(z[2], (w[1] + w[2]) / 2)), 0.0, 2.0;
+                       modes = w => vcat(1 - z[1], 1 - z[1]), switches = 2, TIGHT...)
     z0 = MX.sym("z0", 2)
     @test_throws "one surface" casadi_eval(CasADiCodegen.Function("t", [z0], [twice(z0)]), [0.0, 0.0])
     # An event function of the user beside the switch, at v = -1/2 after it. The integration ends
     # there, before the transition of the user, and the results are those without modes.
     model, modes = thrust_model()
     x = model["x"]
-    model["zero"], model["transition"] = x[2] + 0.5, vertcat([x[1], -x[2]])
+    model["zero"], model["transition"] = x[2] + 0.5, vcat(x[1], -x[2])
     E = integrator("E", Vern9(), model; modes, switches = 2, TIGHT...)
     @test [C.name_out(E, j) for j in 0:C.n_out(E)-1] == ["xf", "te"]
     x0 = MX.sym("x0", 2)
@@ -173,7 +173,7 @@ end
                   [[1 - sqrt(2) * rest + rest^2 / 2, rest - sqrt(2)], [2 * sqrt(2) + 0.5], [sqrt(2), 3 * sqrt(2) + 1, 6.0], [2.0]], 1e-9)
     # The mode is a symbol of its own, the surface does not depend on it, and the bound needs modes.
     m, n2 = x[1], SX.sym("n")
-    plain = Dict("x" => x, "ode" => vertcat([x[2], SX(1.0)]))
+    plain = Dict("x" => x, "ode" => vcat(x[2], SX(1.0)))
     @test_throws ArgumentError integrator("bad", Vern9(), plain, 0.0, 1.0; modes = m => 1 - x[1], switches = 1, TIGHT...)
     @test_throws ArgumentError integrator("bad", Vern9(), plain, 0.0, 1.0; modes = n2 => 1 - x[1] + n2, switches = 1, TIGHT...)
     @test_throws ArgumentError integrator("bad", Vern9(), plain, 0.0, 1.0; switches = 1, TIGHT...)
@@ -185,14 +185,14 @@ end
 # a switch, or give a wrong Jacobian, depending on the calls before it. Oracle: a central difference.
 @testset "modes: a call does not depend on the calls before it" begin
     x, a, t, m = SX.sym("x", 2), SX.sym("a"), SX.sym("t"), SX.sym("m", 2)
-    model = Dict{String,Any}("x" => x, "p" => a, "t" => t, "ode" => vertcat([x[2] + 0.1 * m[2], a * m[1]]),
+    model = Dict{String,Any}("x" => x, "p" => a, "t" => t, "ode" => vcat(x[2] + 0.1 * m[2], a * m[1]),
                              "quad" => m[1] * x[1]^2 + m[2] * x[2] * a)
-    F = integrator("B", Vern9(), model, 0.0, 3.0; modes = m => vertcat([0.1 * t - x[1], x[2] - 0.5]), switches = 8, TIGHT...)
+    F = integrator("B", Vern9(), model, 0.0, 3.0; modes = m => vcat(0.1 * t - x[1], x[2] - 0.5), switches = 8, TIGHT...)
     x0, p = MX.sym("x0", 2), MX.sym("a")
     out = F(x0, p)
-    y = vertcat([out[1], out[2]])
+    y = vcat(out[1], out[2])
     # CasADi evaluates the graph that the generated code runs, with the same solvers, at a smaller cost of compilation.
-    g = CasADiCodegen.Function("g", [x0, p], [y, jacobian(y, vertcat([x0, p]))])
+    g = CasADiCodegen.Function("g", [x0, p], [y, jacobian(y, vcat(x0, p))])
     call(v) = casadi_eval(g, v[1:2], v[3])
     h, base = 1e-5, [-0.1, 0.2, 1.0]
     for v in (base, base + [1e-4, 0, 0], base, base + [0, 1e-4, 0], base)
@@ -203,9 +203,9 @@ end
     # The same model with the modes as states and the switches written as events of the user: 8 events in each call.
     X, b, τ = SX.sym("X", 4), SX.sym("a"), SX.sym("t")
     n, M = X[1:2], X[3:4]
-    S = vertcat([0.1 * τ - n[1], n[2] - 0.5])
-    hand = Dict{String,Any}("x" => X, "p" => b, "t" => τ, "ode" => vertcat([n[2] + 0.1 * M[2], b * M[1], SX(0.0), SX(0.0)]),
-                            "zero" => C.times(M, S), "transition" => horzcat([vertcat([n, -M[1], M[2]]), vertcat([n, M[1], -M[2]])]))
+    S = vcat(0.1 * τ - n[1], n[2] - 0.5)
+    hand = Dict{String,Any}("x" => X, "p" => b, "t" => τ, "ode" => vcat(n[2] + 0.1 * M[2], b * M[1], SX(0.0), SX(0.0)),
+                            "zero" => C.times(M, S), "transition" => hcat(vcat(n, -M[1], M[2]), vcat(n, M[1], -M[2])))
     H = integrator("H", Vern9(), hand; direction = -1, events = 9, exact = false, TIGHT...)
     events(v) = only(last(casadi_eval(H, [v[1:2]; sign(-v[1]); sign(v[2] - 0.5)], v[3], 0.0, 3.0)))
     @test [events(v) for v in (base, base + [1e-4, 0, 0], base + [1e-4, 0, 0], base, base + [0, 1e-4, 0], base)] == fill(8.0, 6)
@@ -225,7 +225,7 @@ evaluated(symbols, values, point...) = reduce(vcat, casadi_eval(CasADiCodegen.Fu
     s = 0.7^2 - 0.5
     @test evaluated([x, w], signs, 0.7, 0.03) ≈ [tanh(s / 0.03), tanh(s / 0.03), s / hypot(s, 0.03)] rtol = 1e-14
     # Nested switches converge to the original away from their surfaces.
-    nested = C.if_else(C.and(q > 0, S > 0), C.fmin(C.fmax(2 * S, SX(0.0)), SX(1.0)), SX(0.0))
+    nested = C.if_else(C.logic_and(q > 0, S > 0), C.fmin(C.fmax(2 * S, SX(0.0)), SX(1.0)), SX(0.0))
     @test abs(evaluated([x, q, w], [smoothed(nested, w)], 0.8, 0.3, 1e-6)[1] - 2 * (0.8^2 - 0.5)) < 1e-6
     # The soft condition is exactly 0 far from the surface, so a branch that is NaN there stays out.
     @test isfinite(evaluated([x, w], [smoothed(C.if_else(x > 0, sqrt(x), SX(0.0)), w)], -1.0, 1e-3)[1])

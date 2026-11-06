@@ -2,10 +2,10 @@
 # with the semantics of the C library. Each is kept as source text, because a
 # module written by `generate_julia` holds a copy of the ones it uses.
 const HELPER_SOURCE = Dict{Symbol,String}(
-    # C `fmin`/`fmax`: a NaN operand is ignored, and of two equal operands (such
-    # as 0.0 and -0.0) the second is returned, as CasADi does on x86-64 Linux.
-    :fmin => "fmin(x, y) = isnan(y) ? x : (x < y ? x : y)",
-    :fmax => "fmax(x, y) = isnan(y) ? x : (x > y ? x : y)",
+    # C `fmin`/`fmax`, which CasADi calls: a NaN operand is ignored, and -0.0 is less
+    # than 0.0, as in the GNU C library and IEEE 754-2019.
+    :fmin => "fmin(x, y) = isnan(y) ? x : isnan(x) ? y : x < y ? x : y < x ? y : signbit(x) ? x : y",
+    :fmax => "fmax(x, y) = isnan(y) ? x : isnan(x) ? y : x > y ? x : y > x ? y : signbit(x) ? y : x",
     # SpecialFunctions.erfinv throws outside [-1, 1]; the C library gives NaN.
     :erfinv => "erfinv(x) = abs(x) > one(x) ? oftype(float(x), NaN) : SpecialFunctions.erfinv(x)",
     # The structural nonzeros of an array in matrix shape, at the linear indices of a
@@ -221,8 +221,11 @@ function bspline!(w, k, kb, t, tb, c, cb, x, out, s)
                 end
             elseif xd == k[knots+nk]
                 w[b+degree+1] = one(eltype(w))
-            elseif k[knots+place+degree+1] == xd
-                degree > 0 && (w[b+degree] = one(eltype(w)))
+            elseif degree > 0 && k[knots+place+degree+1] == xd && k[knots+place+degree] < xd
+                # As in CasADi, the basis left of a knot applies only when the knot before it is
+                # smaller. A constant spline takes the span on the right: there, CasADi reads the
+                # knot before the first one, or writes before its work space.
+                w[b+degree] = one(eltype(w))
             else
                 w[b+degree+1] = one(eltype(w))
             end
@@ -295,7 +298,7 @@ function kron_outer!(w, m, mb, nb, a, ma, na, y)
     nothing
 end""",
     # The node of CasADi that makes a symmetric matrix positive definite (`casadi_convexify_eval` of
-    # CasADi 3.8.1, with the routines `casadi_cvx*` that it calls, statement by statement). The
+    # CasADi 3.8.2, with the routines `casadi_cvx*` that it calls, statement by statement). The
     # whole numbers `t[base+1:base+10]` are the strategy (0 shift of the diagonal, 1 eigenvalues
     # below the margin are replaced by it, 2 by their size), the stored part (0 all, 1 lower, 2
     # upper triangle), the numbers of nonzeros and of columns, whether the blocks are copied to a
@@ -315,8 +318,9 @@ function cvx_house!(w, v, nv)
     end
     s = sqrt(v0 * v0 + sigma)
     if sigma == 0
+        # A zero vector stands for the identity, whose beta is 0 (see `cvx_beta`).
         beta = oftype(v0, 2 * (v0 < 0))
-        w[v+1] = 1
+        w[v+1] = v0 < 0
     else
         v0 = v0 <= 0 ? v0 - s : -sigma / (v0 + s)
         v02 = v0 * v0
@@ -365,6 +369,15 @@ function cvx_house_apply_symm!(w, n, k, A, p, v, beta)
         a += stride + i + 1
     end
     nothing
+end
+# The beta of the Householder vector `v`, whose first element is 1, or 0 for the identity.
+function cvx_beta(w, v, nv)
+    w[v+1] == 0 && return zero(eltype(w))
+    dot = zero(eltype(w))
+    @inbounds for i in 1:nv
+        dot += w[v+i] * w[v+i]
+    end
+    2 / dot
 end
 function cvx_givens(a, b)
     b == 0 && return (one(a), zero(a))
@@ -482,7 +495,7 @@ function cvx_scalar(epsilon, reflect, eig)
     e = reflect ? abs(eig) : eig
     e > epsilon ? e : oftype(e, epsilon)
 end
-function cvx!(w, n, A, epsilon, tol, reflect, max_iter, trace, iw, pp, beta)
+function cvx!(w, n, A, epsilon, tol, reflect, max_iter, trace, iw, pp)
     n == 0 && return false
     if n == 1
         w[A+1] = cvx_scalar(epsilon, reflect, w[A+1])
@@ -495,8 +508,8 @@ function cvx!(w, n, A, epsilon, tol, reflect, max_iter, trace, iw, pp, beta)
         for i in 1:N
             w[v+i] = w[base+i]
         end
-        w[base+1], w[beta+k+1] = cvx_house!(w, v, N)
-        cvx_house_apply_symm!(w, n, k, A, pp, v, w[beta+k+1])
+        w[base+1], beta = cvx_house!(w, v, N)
+        cvx_house_apply_symm!(w, n, k, A, pp, v, beta)
     end
     @inbounds for i in 0:n-1, j in 0:n-1
         i - j >= 2 && (w[A+i+j*n+1] = 0)
@@ -532,8 +545,9 @@ function cvx!(w, n, A, epsilon, tol, reflect, max_iter, trace, iw, pp, beta)
     @inbounds for k in n-3:-1:0
         N = n - k - 1
         v = A + N * n
-        cvx_house_apply_symm!(w, n, k, A, pp, v, w[beta+k+1])
-        cvx_house_apply!(w, k + 1, N, n, A + k + 1, pp, v, w[beta+k+1])
+        beta = cvx_beta(w, v, N)
+        cvx_house_apply_symm!(w, n, k, A, pp, v, beta)
+        cvx_house_apply!(w, k + 1, N, n, A + k + 1, pp, v, beta)
     end
     false
 end
@@ -578,7 +592,6 @@ function convexify!(w, t, base, margin, x, out, scratch)
     block = scratch + nin
     trace = block + nmax * nmax
     pp = trace + 2 * max(nmax - 1, 0) * max_iter
-    beta = pp + nmax
     iw = workspace(ConvexifyTrace, Int, 1 + 3 * max_iter)
     offset = 0
     @inbounds for b in 0:nblocks-1
@@ -598,7 +611,7 @@ function convexify!(w, t, base, margin, x, out, scratch)
                 end
             end
         end
-        cvx!(w, n, H, margin, 1e-10, strategy == 2, max_iter, trace, iw, pp, beta) &&
+        cvx!(w, n, H, margin, 1e-10, strategy == 2, max_iter, trace, iw, pp) &&
             error("a matrix cannot be made positive definite: the eigenvalues of a block did not converge in ", max_iter, " iterations")
         for i in 0:n-1, j in 0:i
             w[H+n*i+j+1] = w[H+n*j+i+1]

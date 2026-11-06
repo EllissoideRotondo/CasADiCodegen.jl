@@ -31,7 +31,7 @@ using StaticArrays: SVector, SMatrix
     @test closeto([solution.u[end]], casadi_eval(two_body_integrator(), ODE_X0, ODE_MU), 1e-10)
     # Functions of the state alone, and of the state and the parameters; other keywords go to ODEFunction.
     x = SX.sym("x", 2)
-    g = SciMLBase.ODEFunction(CasADiCodegen.Function("g", [x], [vertcat(x[2], -x[1])]); jac_prototype = zeros(2, 2))
+    g = SciMLBase.ODEFunction(CasADiCodegen.Function("g", [x], [vcat(x[2], -x[1])]); jac_prototype = zeros(2, 2))
     @test g.jac_prototype == zeros(2, 2) && g.paramjac === nothing
     d2 = zeros(2)
     g(d2, [1.0, 2.0], nothing, 0.0)
@@ -45,7 +45,7 @@ end
 
 @testset "NonlinearFunction from a CasADi function" begin
     z, b = SX.sym("z", 2), SX.sym("b", 2)
-    f = SciMLBase.NonlinearFunction(CasADiCodegen.Function("r", [z, b], [vertcat(z[1]^3 + z[2], z[2] * 2) - b]))
+    f = SciMLBase.NonlinearFunction(CasADiCodegen.Function("r", [z, b], [vcat(z[1]^3 + z[2], z[2] * 2) - b]))
     r, J = zeros(2), zeros(2, 2)
     f(r, [1.0, 2.0], [0.5, 1.0])
     @test r == [2.5, 3.0]
@@ -60,7 +60,7 @@ end
     # A chain: each derivative depends on the state and its neighbors, so the Jacobian is tridiagonal.
     n = 6
     x, k, t = SX.sym("x", n), SX.sym("k"), SX.sym("t")
-    field(s) = vertcat([k * (j > 1 ? x[j-1] : 0.0) - 2 * x[j]^2 + (j < n ? x[j+1] : 0.0) * s for j in 1:n]...)
+    field(s) = vcat([k * (j > 1 ? x[j-1] : 0.0) - 2 * x[j]^2 + (j < n ? x[j+1] : 0.0) * s for j in 1:n]...)
     rhs = CasADiCodegen.Function("chain", [x, k, t], [field(t)])
     u, p, Jd = collect(1.0:n), [0.5], zeros(n, n)
     SciMLBase.ODEFunction(rhs).jac(Jd, u, p, 1.0)
@@ -86,7 +86,7 @@ end
 
 @testset "inplace = false gives functions of static arrays" begin
     u, k, t = SX.sym("u", 2), SX.sym("k"), SX.sym("t")
-    rhs = CasADiCodegen.Function("osc", [u, k, t], [vertcat(u[2], -k * u[1] + 0.1 * t)])
+    rhs = CasADiCodegen.Function("osc", [u, k, t], [vcat(u[2], -k * u[1] + 0.1 * t)])
     f, g = SciMLBase.ODEFunction(rhs; inplace = false), SciMLBase.ODEFunction(rhs)
     us, ks = SVector(1.0, 0.5), SVector(4.0)
     du, J, P = zeros(2), zeros(2, 2), zeros(2, 1)
@@ -101,7 +101,7 @@ end
     decay = SciMLBase.ODEFunction(CasADiCodegen.Function("decay", [x, k], [-k * x^2]); inplace = false)
     @test decay.jac(SVector(2.0), ks, 0.0) === SMatrix{1,1}(-16.0)
     z = SX.sym("z", 2)
-    r = SciMLBase.NonlinearFunction(CasADiCodegen.Function("r", [z, k], [vertcat(z[1]^2 - k, z[2] - z[1])]); inplace = false)
+    r = SciMLBase.NonlinearFunction(CasADiCodegen.Function("r", [z, k], [vcat(z[1]^2 - k, z[2] - z[1])]); inplace = false)
     @test SciMLBase.solve(SciMLBase.NonlinearProblem(r, SVector(1.0, 1.0), ks), SimpleNewtonRaphson(); abstol = 1e-12).u ≈ SVector(2.0, 2.0)
     @test_throws ArgumentError SciMLBase.ODEFunction(rhs; inplace = false, sparse = true)
     # A Jacobian of 33 by 33 states is above the limit of static arrays.
@@ -111,7 +111,7 @@ end
 
 @testset "keywords of the code and of the specialization" begin
     u, k = SX.sym("u", 3), SX.sym("k")
-    rhs = CasADiCodegen.Function("chain", [u, k], [vertcat(k * u[2] - u[1]^2, u[3] * u[1], sin(u[2]) - k)])
+    rhs = CasADiCodegen.Function("chain", [u, k], [vcat(k * u[2] - u[1]^2, u[3] * u[1], sin(u[2]) - k)])
     reference, du, dv = SciMLBase.ODEFunction(rhs), zeros(3), zeros(3)
     reference(du, [1.0, 2.0, 3.0], [0.5], 0.0)
     @test_throws ArgumentError reference(zeros(2), [1.0, 2.0, 3.0], [0.5], 0.0)   # the inline code keeps its checks
@@ -139,7 +139,7 @@ end
 @testset "OptimizationFunction from CasADi functions" begin
     x, p = SX.sym("x", 3), SX.sym("p", 2)
     objective = CasADiCodegen.Function("cost", [x, p], [p[1] * x[1]^2 * x[2] + sin(x[3]) * p[2]])
-    constraints = CasADiCodegen.Function("cons", [x, p], [vertcat(x[1] * x[2] * x[3] - p[1], x[1]^2 + x[3]^2)])
+    constraints = CasADiCodegen.Function("cons", [x, p], [vcat(x[1] * x[2] * x[3] - p[1], x[1]^2 + x[3]^2)])
     f = SciMLBase.OptimizationFunction(objective, constraints)
     xv, pv = [1.0, 2.0, 0.5], [3.0, 4.0]
     cost(u) = pv[1] * u[1]^2 * u[2] + sin(u[3]) * pv[2]
@@ -208,7 +208,7 @@ end
 # constructors of the SciML problems take the object, so that the user solves
 # the problem with a solver of the SciML ecosystem.
 using OrdinaryDiffEqRosenbrock: Rodas5P
-const CC = CasADiCodegen.casadi
+const CC = CasADiCodegen.C
 
 # The tests check the problems, not the code of the solver, which AutoSpecialize compiles once for all of them.
 # The set still takes more than 15 s, because each callback and each mass matrix compiles a solver of its own,
@@ -275,7 +275,7 @@ const AUTO = (; specialize = SciMLBase.AutoSpecialize)
     @testset "algebraic states give a mass matrix" begin
         z = MX.sym("z")
         # z = p x1 at each time, so that x1' = -z is a decay with the rate p.
-        rule = CC.integrator("rule", "idas", Dict("x" => x, "z" => z, "p" => p, "ode" => CC.vertcat([-z, x[1]]), "alg" => z - p * x[1]), 0.0, 1.0)
+        rule = CC.integrator("rule", "idas", Dict("x" => x, "z" => z, "p" => p, "ode" => vcat(-z, x[1]), "alg" => z - p * x[1]), 0.0, 1.0)
         problem = SciMLBase.ODEProblem(rule, [0.4, -0.3], [1.7]; z0 = [0.68], AUTO...)
         @test problem.u0 == [0.4, -0.3, 0.68]
         @test problem.f.mass_matrix == [1 0 0; 0 1 0; 0 0 0]
@@ -294,8 +294,8 @@ const AUTO = (; specialize = SciMLBase.AutoSpecialize)
     end
     @testset "an event function and its transition give a callback" begin
         y, e, g = MX.sym("y", 2), MX.sym("e"), MX.sym("g")
-        jump = CC.Function("transition", Dict("x" => y, "p" => e, "post_x" => CC.vertcat([y[1], -e * y[2]])), CC.event_in(), CC.event_out())
-        dae = Dict("x" => y, "p" => e, "u" => g, "ode" => CC.vertcat([y[2], -g]), "quad" => y[2]^2, "zero" => y[1])
+        jump = CC.Function("transition", Dict("x" => y, "p" => e, "post_x" => vcat(y[1], -e * y[2])), CC.event_in(), CC.event_out())
+        dae = Dict("x" => y, "p" => e, "u" => g, "ode" => vcat(y[2], -g), "quad" => y[2]^2, "zero" => y[1])
         ball = CC.integrator("ball", "cvodes", dae, 0.0, [0.6, 1.4, 2.5], Dict("transition" => jump))
         problem = SciMLBase.ODEProblem(ball, [1.5, 2.0], [0.8]; u = [9.81, 5.0, 12.0], AUTO...)
         solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-13, reltol = 1e-13)
@@ -339,7 +339,7 @@ end
 
 @testset "NonlinearProblem from a rootfinder of CasADi" begin
     a, x, b = MX.sym("a"), MX.sym("x", 2), MX.sym("b", 2)
-    residual = CasADiCodegen.Function("r", [a, x, b], [x * a, x^2 - a * b])
+    residual = CasADiCodegen.Function("r", [a, x, b], [x * a, x .^ 2 - a * b])
     @testset "$plugin" for plugin in ("newton", "kinsol", "fast_newton")
         finder = CC.rootfinder("finder", plugin, residual, Dict("implicit_input" => true, "implicit_output" => true))
         # The parameters are the other arguments of the rootfinder, in their order.
@@ -389,12 +389,12 @@ end
 
 @testset "OptimizationProblem from an Opti object" begin
     opti = CC.Opti()
-    z, a = CC.variable(opti, 2), CC.parameter(opti)
+    z, a = variable(opti, 2), parameter(opti)
     CC.minimize(opti, (z[1] - a)^2 + z[2]^2)
-    CC.subject_to(opti, z[1] + z[2] >= 1)
-    CC.subject_to(opti, z[1] <= 3)
+    subject_to(opti, z[1] + z[2] >= 1)
+    subject_to(opti, z[1] <= 3)
     # Julia lowers -1 <= z <= 4 to &&, which needs a Bool; bounded gives the constraint with two bounds.
-    CC.subject_to(opti, bounded([-1.0, -2.0], z, [4.0, 5.0]))
+    subject_to(opti, bounded([-1.0, -2.0], z, [4.0, 5.0]))
     CC.set_value(opti, a, CC.DM(0.25))
     CC.set_initial(opti, z, CC.DM([2.0, 1.5]))
     problem = SciMLBase.OptimizationProblem(opti; sparse = true)
@@ -404,7 +404,7 @@ end
     problem.f.cons(c, [2.0, 1.5], [0.25])
     @test problem.f.f([2.0, 1.5], [0.25]) ≈ 1.75^2 + 1.5^2 && c == [3.5, 2.0, 2.0, 1.5]
     unset = CC.Opti()
-    w, b = CC.variable(unset), CC.parameter(unset)
+    w, b = variable(unset), parameter(unset)
     CC.minimize(unset, (w - b)^2)
     @test_throws "give each parameter its value" SciMLBase.OptimizationProblem(unset)
 end
@@ -477,7 +477,7 @@ end
 
 @testset "names of the CasADi symbols in the solution" begin
     x, v, k, τ = SX.sym("x"), SX.sym("v"), SX.sym("k"), SX.sym("τ")
-    rhs = CasADiCodegen.Function("oscillator", [vertcat(x, v), k, τ], [vertcat(v, -k * x), (v^2 + k * x^2) / 2], ["u", "k", "τ"], ["du", "energy"])
+    rhs = CasADiCodegen.Function("oscillator", [vcat(x, v), k, τ], [vcat(v, -k * x), (v^2 + k * x^2) / 2], ["u", "k", "τ"], ["du", "energy"])
     problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [1.0, 0.0], (0.0, 1.0), [4.0])
     solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12)
     @test solution[:v] == solution[2, :]
@@ -488,22 +488,22 @@ end
     @test (remade.u0, remade.p) == ([1.0, 1.0], [9.0])
     # The elements of an MX symbol have the name of the symbol and their index from 0, as CasADi names those of an SX symbol.
     z, q = MX.sym("z", 2), MX.sym("q")
-    root = SciMLBase.solve(SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(CasADiCodegen.Function("r", [z, q], [z^2 - q])), [1.0, 1.0], [4.0]), SimpleNewtonRaphson())
+    root = SciMLBase.solve(SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(CasADiCodegen.Function("r", [z, q], [z .^ 2 - q])), [1.0, 1.0], [4.0]), SimpleNewtonRaphson())
     @test root[:z_1] ≈ 2.0
     # Names that occur twice give no names; a system of the user is kept.
-    twice = CasADiCodegen.Function("twice", [vertcat(x, v), SX.sym("x")], [vertcat(v, -x)])
+    twice = CasADiCodegen.Function("twice", [vcat(x, v), SX.sym("x")], [vcat(v, -x)])
     @test SciMLBase.ODEFunction(twice).sys === nothing
-    observed_twice = CasADiCodegen.Function("observed_twice", [vertcat(x, v), SX.sym("x")], [vertcat(v, -x), x^2])
+    observed_twice = CasADiCodegen.Function("observed_twice", [vcat(x, v), SX.sym("x")], [vcat(v, -x), x^2])
     @test_throws "need distinct names" SciMLBase.ODEFunction(observed_twice)
     @test SciMLBase.ODEFunction(rhs; sys = SciMLBase.SymbolCache([:a, :b], [:c], :s)).sys isa SciMLBase.SymbolCache
     # Bug: `observed` of a state name threw on a function without further results, which
     # `observe_state` of DynamicalSystemsBase.jl calls for a state, as ModelingToolkit allows.
-    plain = SciMLBase.ODEProblem(SciMLBase.ODEFunction(CasADiCodegen.Function("plain", [vertcat(x, v), k, τ], [vertcat(v, -k * x)])), [1.0, 2.0], (0.0, 1.0), [4.0])
+    plain = SciMLBase.ODEProblem(SciMLBase.ODEFunction(CasADiCodegen.Function("plain", [vcat(x, v), k, τ], [vcat(v, -k * x)])), [1.0, 2.0], (0.0, 1.0), [4.0])
     @test SciMLBase.SymbolicIndexingInterface.observed(plain, :v)([3.0, 5.0], [4.0], 0.0) == 5.0
     # A parameter symbol of several elements, here the values of an interpolant, is also one
-    # parameter with its name (bug: the parameters of `vertcat(s, w)` had no names).
+    # parameter with its name (bug: the parameters of `vcat(s, w)` had no names).
     w, s, t = MX.sym("w", 12), MX.sym("s"), MX.sym("t")
-    data = CasADiCodegen.Function("data", [MX.sym("y"), vertcat(s, w), t], [s * C.interpolant("table", "linear", [collect(0.0:11.0)], 1)(t, w)])
+    data = CasADiCodegen.Function("data", [MX.sym("y"), vcat(s, w), t], [s * C.interpolant("table", "linear", [collect(0.0:11.0)], 1)(t, w)])
     problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(data), [0.0], (0.0, 11.0), [2.0; ones(12)])
     @test problem.ps[:w] == ones(12) && problem.ps[:w_11] == 1.0 && problem.ps[:s] == 2.0
     # Bug: `remake` wrote the vector and then the former value of each element, in the order of a Dict.
@@ -526,7 +526,7 @@ end
 @testset "NonlinearFunction of more equations than unknowns" begin
     # Three lines through (2, 1): a least-squares problem with a residual of zero.
     z = SX.sym("z", 2)
-    lines = CasADiCodegen.Function("lines", [z], [vertcat(z[1] - 2z[2], z[1] + z[2] - 3, z[1]^2 - z[2] - 3)])
+    lines = CasADiCodegen.Function("lines", [z], [vcat(z[1] - 2z[2], z[1] + z[2] - 3, z[1]^2 - z[2] - 3)])
     f = SciMLBase.NonlinearFunction(lines)
     @test length(f.resid_prototype) == 3
     @test f.jac([2.0, 1.0], nothing) == [1.0 -2.0; 1.0 1.0; 4.0 -1.0]
@@ -537,8 +537,8 @@ end
 @testset "initialization of an ODEFunction" begin
     # D(x) = -x, 0 = total - x - y: x is differential, y algebraic.
     x, y, total, y0, t = SX.sym("x"), SX.sym("y"), SX.sym("total"), SX.sym("y0"), SX.sym("t")
-    u, p = vertcat(x, y), vertcat(total, y0)
-    rhs = CasADiCodegen.Function("rhs", [u, p, t], [vertcat(-x, total - x - y)])
+    u, p = vcat(x, y), vcat(total, y0)
+    rhs = CasADiCodegen.Function("rhs", [u, p, t], [vcat(-x, total - x - y)])
     mass = Diagonal([1.0, 0.0])
     newton = SciMLBase.OverrideInit(; nlsolve = SimpleNewtonRaphson())
     # The condition y = y0 fixes the algebraic state, and initialization solves for the differential one.
@@ -556,12 +556,12 @@ end
     # Regression: `remake` rebuilds the initialization data of SciMLBase, which then ignored the new state and parameters.
     @test SciMLBase.solve(SciMLBase.remake(problem; p = [5.0, 1.5]), Rodas5P(); initializealg = newton).u[1] ≈ [3.5, 1.5]
     # A solved parameter is an unknown of the initialization, and the solution has its value.
-    fixed_xy = CasADiCodegen.Function("fixed_xy", [u, p, t], [vertcat(x - 1, y - y0)])
+    fixed_xy = CasADiCodegen.Function("fixed_xy", [u, p, t], [vcat(x - 1, y - y0)])
     g = SciMLBase.ODEFunction(rhs; mass_matrix = mass, initialization = fixed_xy, solved_parameters = [:total])
     solution = SciMLBase.solve(SciMLBase.ODEProblem(g, [0.0, 0.0], (0.0, 1.0), [0.0, 2.0]), Rodas5P(); initializealg = newton)
     @test SciMLBase.successful_retcode(solution) && solution.ps[:total] ≈ 3.0 && solution.u[1] ≈ [1.0, 2.0]
     # More conditions than unknowns give a least-squares problem, which fails when they disagree.
-    over = CasADiCodegen.Function("over", [u, p, t], [vertcat(x - 1, y - y0)])
+    over = CasADiCodegen.Function("over", [u, p, t], [vcat(x - 1, y - y0)])
     h = SciMLBase.ODEFunction(rhs; mass_matrix = mass, initialization = over)
     gauss = SciMLBase.OverrideInit(; nlsolve = SimpleGaussNewton())
     consistent = SciMLBase.ODEProblem(h, [0.0, 0.0], (0.0, 1.0), [4.0, 3.0])
@@ -576,8 +576,8 @@ end
     @test_throws "not a parameter" SciMLBase.ODEFunction(rhs; initialization = fixed_y, solved_parameters = [:x])
     # Without a mass matrix: a steady state of the Lotka-Volterra system, where a condition on the derivatives calls the right side.
     a, b = SX.sym("a"), SX.sym("b")
-    lotka = CasADiCodegen.Function("lotka", [vertcat(a, b)], [vertcat(1.5a - a * b, -3b + a * b)])
-    steady = CasADiCodegen.Function("steady", [vertcat(a, b)], [lotka(vertcat(a, b))])
+    lotka = CasADiCodegen.Function("lotka", [vcat(a, b)], [vcat(1.5a - a * b, -3b + a * b)])
+    steady = CasADiCodegen.Function("steady", [vcat(a, b)], [lotka(vcat(a, b))])
     for inplace in (true, false)
         k = SciMLBase.ODEFunction(lotka; inplace, initialization = steady)
         start = inplace ? [2.0, 1.0] : SVector(2.0, 1.0)
@@ -589,9 +589,9 @@ end
 @testset "SDEFunction and SDEProblem from CasADi functions" begin
     # Drift and noise of two states, with the parameters a and b and the time.
     x, y, a, b, t = SX.sym("x"), SX.sym("y"), SX.sym("a"), SX.sym("b"), SX.sym("t")
-    u, p = vertcat(x, y), vertcat(a, b)
-    drift = CasADiCodegen.Function("drift", [u, p, t], [vertcat(a * (y - x), x * y - t)])
-    diagonal = CasADiCodegen.Function("diagonal", [u, p, t], [vertcat(b * x, b * y)])
+    u, p = vcat(x, y), vcat(a, b)
+    drift = CasADiCodegen.Function("drift", [u, p, t], [vcat(a * (y - x), x * y - t)])
+    diagonal = CasADiCodegen.Function("diagonal", [u, p, t], [vcat(b * x, b * y)])
     u0, p0, s = [1.0, 2.0], [3.0, 0.5], 0.25
     # A column of noise is diagonal noise: one Wiener process per state.
     f = SciMLBase.SDEFunction(drift, diagonal)
@@ -622,13 +622,13 @@ end
     @test static.noise_rate_prototype isa SMatrix{2,3} && static.f.g(static.u0, p0, s) == G
     @test SciMLBase.SDEFunction(drift, diagonal; inplace = false).g(SVector(1.0, 2.0), p0, s) === SVector(0.5, 1.0)
     @test_throws "the arguments of" SciMLBase.SDEFunction(drift, CasADiCodegen.Function("w", [u], [x]))
-    @test_throws "rows" SciMLBase.SDEFunction(drift, CasADiCodegen.Function("w", [u, p, t], [vertcat(x, y, t)]))
+    @test_throws "rows" SciMLBase.SDEFunction(drift, CasADiCodegen.Function("w", [u, p, t], [vcat(x, y, t)]))
 end
 
 @testset "DiscreteFunction and ImplicitDiscreteFunction from CasADi functions" begin
     # The map u⁺ = f(u, p, t) of two states, with the parameter a and the time, and the observed total.
     x, y, a, t = SX.sym("x"), SX.sym("y"), SX.sym("a"), SX.sym("t")
-    step = CasADiCodegen.Function("step", [vertcat(x, y), a, t], [vertcat(a * x * y, x + t), x + y], ["u", "a", "t"], ["next", "total"])
+    step = CasADiCodegen.Function("step", [vcat(x, y), a, t], [vcat(a * x * y, x + t), x + y], ["u", "a", "t"], ["next", "total"])
     u0, p0, s = [2.0, 3.0], [0.5], 1.0
     problem = SciMLBase.DiscreteProblem(step, u0, (0.0, 4.0), p0)
     next = zeros(2)
@@ -638,10 +638,10 @@ end
     # Out of place, the map returns a static vector.
     static = SciMLBase.DiscreteProblem(step, SVector(2.0, 3.0), (0.0, 4.0), p0; inplace = false)
     @test !SciMLBase.isinplace(static) && static.f(static.u0, p0, s) === SVector(3.0, 3.0)
-    @test_throws "column vectors of one size" SciMLBase.DiscreteFunction(CasADiCodegen.Function("w", [vertcat(x, y)], [x]))
+    @test_throws "column vectors of one size" SciMLBase.DiscreteFunction(CasADiCodegen.Function("w", [vcat(x, y)], [x]))
     # The residual 0 = F(u⁺, u, p, t) of an implicit map: a backward Euler step of u' = -a u³ with the step t, and the algebraic z = u².
     v, w, zn, z = SX.sym("v"), SX.sym("w"), SX.sym("zn"), SX.sym("z")
-    residual = CasADiCodegen.Function("euler", [vertcat(v, zn), vertcat(w, z), a, t], [vertcat(v - w + t * a * v^3, zn - v^2)])
+    residual = CasADiCodegen.Function("euler", [vcat(v, zn), vcat(w, z), a, t], [vcat(v - w + t * a * v^3, zn - v^2)])
     implicit = SciMLBase.ImplicitDiscreteProblem(residual, [1.0, 1.0], (0.0, 2.0), p0)
     r = fill(NaN, 2)
     implicit.f(r, [2.0, 1.0], [1.0, 9.0], p0, 0.5)
@@ -650,6 +650,6 @@ end
     # The residual takes the dual numbers of a nonlinear solver that differentiates it.
     @test ForwardDiff.jacobian(q -> (out = similar(q); implicit.f(out, q, [1.0, 9.0], p0, 0.5); out), [2.0, 1.0]) == [4.0 0.0; -4.0 1.0]
     # More equations than states give a least-squares problem, which needs its prototype.
-    @test length(SciMLBase.ImplicitDiscreteFunction(CasADiCodegen.Function("r", [v, w], [vertcat(v - w, v^2)])).resid_prototype) == 2
-    @test_throws "the same size" SciMLBase.ImplicitDiscreteFunction(CasADiCodegen.Function("r", [v, vertcat(w, z)], [v]))
+    @test length(SciMLBase.ImplicitDiscreteFunction(CasADiCodegen.Function("r", [v, w], [vcat(v - w, v^2)])).resid_prototype) == 2
+    @test_throws "the same size" SciMLBase.ImplicitDiscreteFunction(CasADiCodegen.Function("r", [v, vcat(w, z)], [v]))
 end

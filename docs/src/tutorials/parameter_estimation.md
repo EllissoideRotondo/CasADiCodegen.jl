@@ -34,7 +34,7 @@ using OrdinaryDiffEqVerner: Vern9
 
 x, p = MX.sym("x", 2), MX.sym("p", 4)
 α, β, γ, δ = p[1], p[2], p[3], p[4]
-model = Dict("x" => x, "p" => p, "ode" => vertcat((α - β * x[2]) * x[1], (δ * x[1] - γ) * x[2]))
+model = Dict("x" => x, "p" => p, "ode" => vcat((α - β * x[2]) * x[1], (δ * x[1] - γ) * x[2]))
 nothing # hide
 ```
 
@@ -164,14 +164,14 @@ time becomes an `ODEFunction` with generated code for the Jacobian by the state
 (`jac = true`) and by the parameters (`paramjac = true`). These two Jacobians are what
 the adjoint methods of SciMLSensitivity.jl need when they are told not to compute
 vector-Jacobian products themselves (`autojacvec = false`). The parameters are four scalar
-symbols joined by `vertcat`, so that the problem knows them by the names α, β, γ and δ,
+symbols joined by `vcat`, so that the problem knows them by the names α, β, γ and δ,
 which the last sections use; `SX` and `MX` symbols serve alike. The problem holds the
 point ``(1.3, 0.8, 2.7, 1.1)`` of the gradient above as its parameters:
 
 ```@example estimation
 u, t = SX.sym("u", 2), SX.sym("t")
 q = [SX.sym(name) for name in ("α", "β", "γ", "δ")]
-right_side = CasadiFunction("right_side", [u, vertcat(q...), t], [vertcat((q[1] - q[2] * u[2]) * u[1], (q[4] * u[1] - q[3]) * u[2])])
+right_side = CasadiFunction("right_side", [u, vcat(q...), t], [vcat((q[1] - q[2] * u[2]) * u[1], (q[4] * u[1] - q[3]) * u[2])])
 ode = SciMLBase.ODEProblem(SciMLBase.ODEFunction(right_side; jac = true, paramjac = true), [1.0, 1.0], (0.0, 10.0),
                            [1.3, 0.8, 2.7, 1.1])
 nothing # hide

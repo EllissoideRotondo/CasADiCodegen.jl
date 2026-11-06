@@ -53,7 +53,7 @@ end
     @test closeto(casadi_eval(f, [0.5], [2.0]), [[8.5], [1.0], [4.0]], 1e-12)
 
     y = SX.sym("y", 2)
-    D = integrator("D", Vern9(), Dict("x" => y, "ode" => vertcat([-y[1], 2 * y[2]])), 0.0, 1.0; TIGHT...)
+    D = integrator("D", Vern9(), Dict("x" => y, "ode" => vcat(-y[1], 2 * y[2])), 0.0, 1.0; TIGHT...)
     @test C.n_in(D) == 1
     y0 = MX.sym("y0", 2)
     d = CasADiCodegen.Function("d", [y0], [D(y0), jacobian(D(y0), y0), jacobian(jacobian(D(y0), y0), y0)])
@@ -61,14 +61,14 @@ end
     @test closeto(ode_emitted(d, ([3.0, 0.5],)), expected, 1e-11)
     @test closeto(casadi_eval(d, [3.0, 0.5]), expected, 1e-11)
 
-    B = integrator("B", Vern9(), Dict("x" => y, "ode" => vertcat([-y[1], 2 * y[2]])), 1.0, 0.0; TIGHT...)
+    B = integrator("B", Vern9(), Dict("x" => y, "ode" => vcat(-y[1], 2 * y[2])), 1.0, 0.0; TIGHT...)
     b = CasADiCodegen.Function("b", [y0], [B(D(y0))])
     @test closeto(ode_emitted(b, ([3.0, 0.5],)), [[3.0, 0.5]], 1e-11)
 end
 
 @testset "matrix right side that calls a function" begin
     a = SX.sym("a", 2)
-    force = CasADiCodegen.Function("force", [a], [vertcat([a[2], -sin(a[1])])])
+    force = CasADiCodegen.Function("force", [a], [vcat(a[2], -sin(a[1]))])
     x = MX.sym("x", 2)
     F = integrator("P", Vern9(), Dict("x" => x, "ode" => force(x)), 0.0, 2.0; TIGHT...)
     R = integrator("PR", "cvodes", Dict("x" => a, "ode" => force(a)), 0.0, 2.0, Dict("abstol" => 1e-12, "reltol" => 1e-12))
@@ -247,7 +247,7 @@ end
 @testset "quadratures" begin
     # x' = -p x with the quadrature of x: q(T) = x0 (1 - exp(-p T)) / p.
     x, p, t = SX.sym("x", 1), SX.sym("p", 1), SX.sym("t")
-    dae = Dict("x" => x, "p" => p, "t" => t, "ode" => -p * x, "quad" => vertcat([x, 2 * t]))
+    dae = Dict("x" => x, "p" => p, "t" => t, "ode" => -p * x, "quad" => vcat(x, 2 * t))
     a, k = 3.0, 0.7
     decay(T) = exp(-k * T)
     area(T) = a * (1 - decay(T)) / k
@@ -278,7 +278,7 @@ end
     # A body that falls: height h and speed v with h' = v, v' = -g. It reaches the ground at
     # te = t0 + (v0 + sqrt(v0^2 + 2 g h0)) / g, and the quadrature of v is then -h0.
     x, g, t = SX.sym("x", 2), SX.sym("g", 1), SX.sym("t")
-    fall = Dict("x" => x, "p" => g, "ode" => vertcat([x[2], -g[1]]), "zero" => x[1], "quad" => x[2])
+    fall = Dict("x" => x, "p" => g, "ode" => vcat(x[2], -g[1]), "zero" => x[1], "quad" => x[2])
     F = integrator("fall", Vern9(), fall; TIGHT...)
     @test [C.name_in(F, j) for j in 0:3] == ["x0", "p", "t0", "tf"]
     @test [C.name_out(F, j) for j in 0:2] == ["xf", "qf", "te"]
@@ -286,9 +286,9 @@ end
     final(v) = [0 * v[1], v[2] - v[3] * (landing(v) - v[4])]
     x0, q, t0, tf = MX.sym("x0", 2), MX.sym("q", 1), MX.sym("t0"), MX.sym("tf")
     out = F(x0, q, t0, tf)
-    all_in = vertcat([x0, q, t0])
+    all_in = vcat(x0, q, t0)
     f = CasADiCodegen.Function("f", [x0, q, t0, tf],
-        [out[1], out[2], out[3], jacobian(out[3], all_in), jacobian(out[1], all_in), hessian(out[3], x0), jacobian(out[3], tf)])
+        [out[1], out[2], out[3], jacobian(out[3], all_in), jacobian(out[1], all_in), hessian(out[3], x0)[1], jacobian(out[3], tf)])
     at = [10.0, 3.0, 9.81, 0.5]
     te = landing(at)
     expected = [[0.0, 3.0 - 9.81 * (te - 0.5)], [-10.0], [te], ForwardDiff.gradient(landing, at),
@@ -306,7 +306,7 @@ end
     # to the next one, half a period later. No parameter in the call when the model has none.
     y = SX.sym("y", 4)
     r3 = (y[1]^2 + y[2]^2)^1.5
-    orbit = Dict("x" => y, "ode" => vertcat([y[3], y[4], -y[1] / r3, -y[2] / r3]), "zero" => y[1] * y[3] + y[2] * y[4])
+    orbit = Dict("x" => y, "ode" => vcat(y[3], y[4], -y[1] / r3, -y[2] / r3), "zero" => y[1] * y[3] + y[2] * y[4])
     A = integrator("apsis", Vern9(), orbit; TIGHT...)
     @test C.n_in(A) == 3 && [C.name_out(A, j) for j in 0:1] == ["xf", "te"]
     half(v) = π * (1 / (2 / v[1] - v[4]^2))^1.5                                 # v = (x, y, vx, vy) at an apsis on the x axis
@@ -340,7 +340,7 @@ end
 
     # The direction of the crossing, and an event function of the time and of a parameter.
     w, c = SX.sym("w", 2), SX.sym("c", 1)
-    swing = Dict("x" => w, "p" => c, "t" => t, "ode" => vertcat([w[2], -w[1]]), "zero" => w[1] - c[1])
+    swing = Dict("x" => w, "p" => c, "t" => t, "ode" => vcat(w[2], -w[1]), "zero" => w[1] - c[1])
     time_of(; options...) = begin
         E = integrator("swing", Vern9(), swing; TIGHT..., options...)
         only(only(ode_emitted(CasADiCodegen.Function("e", [x0, q], [E(x0, q, MX(0.0), MX(6.0))[2]]), ([0.0, 1.0], [0.5]))))
@@ -348,7 +348,7 @@ end
     @test isapprox(time_of(; direction = 1), π / 6; atol = 1e-10)
     # With no point between the ends of a step, the solver looks for a change of sign at the ends only.
     @test isapprox(time_of(; direction = -1, interp_points = 0), 5π / 6; atol = 1e-10)
-    clock = Dict("x" => w, "p" => c, "t" => t, "ode" => vertcat([w[2], -w[1]]), "zero" => t - c[1])
+    clock = Dict("x" => w, "p" => c, "t" => t, "ode" => vcat(w[2], -w[1]), "zero" => t - c[1])
     K = integrator("clock", Vern9(), clock; TIGHT...)
     tk = K(x0, q, t0, tf)[2]
     k = CasADiCodegen.Function("k", [x0, q, t0, tf], [tk, jacobian(tk, q), jacobian(tk, t0)])
@@ -357,7 +357,7 @@ end
     @test closeto(ode_emitted(k, ([0.0, 1.0], [2.5], [4.0], [1.0])), [[2.5], [1.0], [0.0]], 1e-9)
 
     # Limits: a column of event functions, and free times only.
-    @test_throws ArgumentError integrator("e", Vern9(), merge(swing, Dict("zero" => horzcat([w, w]))); TIGHT...)
+    @test_throws ArgumentError integrator("e", Vern9(), merge(swing, Dict("zero" => hcat(w, w))); TIGHT...)
     @test_throws ArgumentError integrator("e", Vern9(), swing, 0.0, 1.0; TIGHT...)
     @test_throws ArgumentError integrator("e", Vern9(), swing, 0.0, [1.0, 2.0]; TIGHT...)
     @test_throws ArgumentError integrator("e", Vern9(), swing; TIGHT..., direction = 2)
@@ -370,7 +370,7 @@ end
 # The solver compiles again for dual numbers.
 @testset "dual numbers through an event" begin
     x, g = SX.sym("x", 2), SX.sym("g", 1)
-    fall = Dict("x" => x, "p" => g, "ode" => vertcat([x[2], -g[1]]), "zero" => x[1])
+    fall = Dict("x" => x, "p" => g, "ode" => vcat(x[2], -g[1]), "zero" => x[1])
     landing(v) = (v[2] + sqrt(v[2]^2 + 2 * v[3] * v[1])) / v[3]          # v = (h0, v0, g), from the time 0
     D = integrator("drop", Vern9(), fall; TIGHT..., specialize = SciMLBase.FullSpecialize)
     x0, q = MX.sym("x0", 2), MX.sym("q", 1)
@@ -384,8 +384,8 @@ end
 @testset "several events, with a jump of the state" begin
     # A ball that bounces: at the ground the speed changes its sign and loses a part, e.
     x, p = SX.sym("x", 2), SX.sym("p", 2)                                    # p = (g, e)
-    ball = Dict("x" => x, "p" => p, "ode" => vertcat([x[2], -p[1]]), "zero" => x[1], "quad" => SX(1.0),
-                "transition" => vertcat([x[1], -p[2] * x[2]]))
+    ball = Dict("x" => x, "p" => p, "ode" => vcat(x[2], -p[1]), "zero" => x[1], "quad" => SX(1.0),
+                "transition" => vcat(x[1], -p[2] * x[2]))
     F = integrator("ball", Vern9(), ball; events = 2, terminal = false, direction = -1, TIGHT...)
     @test [C.name_out(F, j) for j in 0:2] == ["xf", "qf", "te"] && C.size1(C.sparsity_out(F, 2)) == 2
     # From the height h with no speed: the ground at t1 = sqrt(2 h / g) and at t1 (1 + 2 e), then up with the speed e^2 g t1.
@@ -393,8 +393,8 @@ end
     final(v, T) = (t1 = sqrt(2 * v[1] / v[2]); d = T - t1 * (1 + 2 * v[3]); up = v[3]^2 * v[2] * t1;
                    [up * d - v[2] * d^2 / 2, up - v[2] * d])
     h0, q, tf = MX.sym("h0"), MX.sym("q", 2), MX.sym("tf")
-    out = F(vertcat([h0, MX(0.0)]), q, MX(0.0), tf)
-    every = vertcat([h0, q])
+    out = F(vcat(h0, MX(0.0)), q, MX(0.0), tf)
+    every = vcat(h0, q)
     f = CasADiCodegen.Function("bounces", [h0, q, tf], [out[1], out[2], out[3], jacobian(out[1], every), jacobian(out[3], every), jacobian(out[1], tf)])
     at, T = [5.0, 9.81, 0.8], 3.0
     expected = [final(at, T), [T], times(at), vec(ForwardDiff.jacobian(v -> final(v, T), at)), vec(ForwardDiff.jacobian(times, at)),
@@ -403,13 +403,13 @@ end
     @test closeto(casadi_eval(f, 5.0, [9.81, 0.8], T), expected, 1e-8)
     # The integration ends at the last event without a jump there: the state on the ground, before the second bounce.
     G = integrator("ball_end", Vern9(), ball; events = 2, direction = -1, TIGHT...)
-    ended = G(vertcat([h0, MX(0.0)]), q, MX(0.0), tf)
+    ended = G(vcat(h0, MX(0.0)), q, MX(0.0), tf)
     g = CasADiCodegen.Function("second", [h0, q, tf], [ended[1], ended[2], ended[3]])
     t1 = sqrt(2 * 5.0 / 9.81)
     @test closeto(ode_emitted(g, ([5.0], [9.81, 0.8], [T])), [[0.0, -0.8 * 9.81 * t1], [times(at)[2]], times(at)], 1e-9)
     # No "transition": the third time that an oscillator passes through zero, from (1, 0).
     y = SX.sym("y", 2)
-    swing = Dict("x" => y, "ode" => vertcat([y[2], -y[1]]), "zero" => y[1])
+    swing = Dict("x" => y, "ode" => vcat(y[2], -y[1]), "zero" => y[1])
     H = integrator("swing", Vern9(), swing; events = 3, TIGHT...)
     y0 = MX.sym("y0", 2)
     third = H(y0, MX(0.0), MX(50.0))
@@ -422,14 +422,14 @@ end
     swings = integrator("swing_loose", Vern9(), swing; events = 3, loose...)
     @test closeto(casadi_eval(CasADiCodegen.Function("l", [y0], [swings(y0, MX(0.0), MX(50.0))[2]]), [1.0, 0.0]), [[π / 2, 3π / 2, 5π / 2]], 1e-5)
     bounces = integrator("ball_loose", Vern9(), ball; events = 2, loose...)
-    b = bounces(vertcat([h0, MX(0.0)]), q, MX(0.0), tf)[3]
+    b = bounces(vcat(h0, MX(0.0)), q, MX(0.0), tf)[3]
     @test closeto(casadi_eval(CasADiCodegen.Function("b", [h0, q, tf], [b, jacobian(b, every)]), 5.0, [9.81, 0.8], T),
                   [times(at), vec(ForwardDiff.jacobian(times, at))], 1e-4)
     # Fewer events than asked before the final time.
     err = try ode_emitted(g, ([5.0], [9.81, 0.8], [1.5])); nothing catch e; e end
     @test err isa ErrorException && occursin("no event", err.msg)
     @test_throws "events" integrator("none", Vern9(), swing; events = 0, TIGHT...)
-    @test_throws "\"transition\", must have the size of the state" integrator("wide", Vern9(), merge(swing, Dict("transition" => vertcat([y, y]))); TIGHT...)
+    @test_throws "\"transition\", must have the size of the state" integrator("wide", Vern9(), merge(swing, Dict("transition" => vcat(y, y))); TIGHT...)
     @test_throws "\"transition\"" integrator("fixed", Vern9(), merge(delete!(copy(swing), "zero"), Dict("transition" => y)), 0.0, 1.0; TIGHT...)
     @test_throws "terminal" integrator("plain", Vern9(), delete!(copy(swing), "zero"); terminal = false, TIGHT...)
 end
@@ -444,8 +444,8 @@ end
     # speed changes its sign and keeps the part e1, at the wall 0 the part e2. The third event function
     # t - 3 changes its sign from negative to positive, which `direction = -1` ignores.
     x, e, τ = SX.sym("x", 2), SX.sym("e", 2), SX.sym("t")
-    walls = Dict("x" => x, "p" => e, "t" => τ, "ode" => vertcat([x[2], SX(0.0)]), "zero" => vertcat([x[1], 1 - x[1], τ - 3]),
-                 "transition" => horzcat([vertcat([x[1], -e[2] * x[2]]), vertcat([x[1], -e[1] * x[2]]), -x]))
+    walls = Dict("x" => x, "p" => e, "t" => τ, "ode" => vcat(x[2], SX(0.0)), "zero" => vcat(x[1], 1 - x[1], τ - 3),
+                 "transition" => hcat(vcat(x[1], -e[2] * x[2]), vcat(x[1], -e[1] * x[2]), -x))
     F = integrator("walls", Vern9(), walls; events = 4, exact = false, terminal = false, direction = -1, TIGHT...)
     @test [C.name_out(F, j) for j in 0:3] == ["xf", "te", "ie", "ne"]
     # From the position a in (0, 1) with the speed w > 0, up to the final time T; v = (a, w, e1, e2, T).
@@ -464,7 +464,7 @@ end
     end
     s0, q, tf = MX.sym("s0", 2), MX.sym("q", 2), MX.sym("tf")
     out = F(s0, q, MX(0.0), tf)
-    every = vertcat([s0, q, tf])
+    every = vcat(s0, q, tf)
     f = CasADiCodegen.Function("f", [s0, q, tf], [out[1], out[2], out[3], out[4], jacobian(out[1], every), jacobian(out[2], every)])
     for T in (4.0, 9.0)                            # two and three events of four
         at = [0.5, 1.0, 0.5, 0.8, T]
@@ -486,18 +486,18 @@ end
 
     # One event function: the count follows the times, and the integration ends at the last event or at the final time.
     # An elastic ball from the height 2 under the gravity 1 lands at 2 and at 6.
-    fall = Dict("x" => x, "p" => e, "ode" => vertcat([x[2], -e[1]]), "zero" => x[1], "transition" => vertcat([x[1], -x[2]]))
+    fall = Dict("x" => x, "p" => e, "ode" => vcat(x[2], -e[1]), "zero" => x[1], "transition" => vcat(x[1], -x[2]))
     G = integrator("fall_upto", Vern9(), fall; events = 2, exact = false, direction = -1, TIGHT...)
     @test [C.name_out(G, j) for j in 0:2] == ["xf", "te", "ne"]
     @test closeto(casadi_eval(G, [2.0, 0.0], [1.0, 0.0], 0.0, 5.0), [[1.5, -1.0], [2.0, 5.0], [1.0]], 1e-9)
     # Regression: a search that the solver stopped short of the final time counted as no event. Here 30
     # event functions t - c cross in the direction that `direction = -1` ignores, and each one ends a
     # step of the search, so that the search needs more steps than `maxiters` and the arc fewer.
-    clocks = merge(fall, Dict("t" => τ, "zero" => vertcat([x[1]; [τ - 0.05i for i in 1:30]])))
+    clocks = merge(fall, Dict("t" => τ, "zero" => vcat(x[1], [τ - 0.05i for i in 1:30]...)))
     short = integrator("fall_short", Vern9(), clocks; exact = false, direction = -1, TIGHT..., maxiters = 25)
     @test_throws "MaxIters" casadi_eval(short, [2.0, 0.0], [1.0, 0.0], 0.0, 5.0)
 
-    @test_throws "one column per event function" integrator("wide", Vern9(), merge(walls, Dict("transition" => horzcat([x, x]))); TIGHT...)
+    @test_throws "one column per event function" integrator("wide", Vern9(), merge(walls, Dict("transition" => hcat(x, x))); TIGHT...)
     @test_throws "exact" integrator("plain", Vern9(), delete!(copy(fall), "zero"); exact = false, TIGHT...)
 end
 
@@ -507,7 +507,7 @@ end
 @testset "adjoint sensitivities" begin
     # A forced oscillator with the time in its right side, three parameters and a quadrature.
     x, p, t = SX.sym("x", 2), SX.sym("p", 3), SX.sym("t")
-    dae = Dict("x" => x, "p" => p, "t" => t, "ode" => vertcat([x[2], -p[1] * x[1] + p[2] * sin(p[3] * t)]), "quad" => x[1]^2 * p[2])
+    dae = Dict("x" => x, "p" => p, "t" => t, "ode" => vcat(x[2], -p[1] * x[1] + p[2] * sin(p[3] * t)), "quad" => x[1]^2 * p[2])
     x0, q, t0, tf = MX.sym("x0", 2), MX.sym("q", 3), MX.sym("t0"), MX.sym("tf")
     inputs, point = [x0, q, t0, tf], ([0.4, -0.3], [1.3, 0.8, 2.1], [0.5], [3.0])
     function gradients(F, order)
@@ -538,7 +538,7 @@ end
     g = CasADiCodegen.Function("fixed", [x0, q], [cost, gradient(cost, x0), gradient(cost, q)])
     @test closeto(ode_emitted(g, point[1:2]), reference[1:3], 1e-9)
     y = SX.sym("y", 2)
-    plain = integrator("AP", Vern9(), Dict("x" => y, "ode" => vertcat([y[2], -y[1]])), 0.0, 1.0; adjoint = true, TIGHT...)
+    plain = integrator("AP", Vern9(), Dict("x" => y, "ode" => vcat(y[2], -y[1])), 0.0, 1.0; adjoint = true, TIGHT...)
     turned = plain(x0)
     h = CasADiCodegen.Function("plain", [x0], [gradient(turned[1] + 2 * turned[2], x0)])
     @test closeto(ode_emitted(h, point[1:1]), [[cos(1.0) - 2 * sin(1.0), sin(1.0) + 2 * cos(1.0)]], 1e-10)
@@ -547,7 +547,7 @@ end
     function sampled(F)
         states, sums = F(x0, q)
         cost = states[1, 2] * states[2, 2] + 3 * sums[2] + C.sumsqr(states) + C.sumsqr(sums)
-        CasADiCodegen.Function("grid", [x0, q], [gradient(cost, x0), gradient(cost, q), jacobian(gradient(cost, q), vertcat([x0, q]))])
+        CasADiCodegen.Function("grid", [x0, q], [gradient(cost, x0), gradient(cost, q), jacobian(gradient(cost, q), vcat(x0, q))])
     end
     grid = sampled(integrator("AG", Vern9(), dae, 0.5, times; adjoint = true, TIGHT...))
     expected = ode_emitted(sampled(integrator("FG", Vern9(), dae, 0.5, times; TIGHT...)), point[1:2])
@@ -570,7 +570,7 @@ end
 # than the forward sensitivities.
 @testset "adjoint gradient of a least-squares fit at its minimum" begin
     x, p = SX.sym("x", 2), SX.sym("p", 4)
-    lotka = Dict("x" => x, "p" => p, "ode" => vertcat([(p[1] - p[2] * x[2]) * x[1], (p[4] * x[1] - p[3]) * x[2]]))
+    lotka = Dict("x" => x, "p" => p, "ode" => vcat((p[1] - p[2] * x[2]) * x[1], (p[4] * x[1] - p[3]) * x[2]))
     times, θ, u0 = collect(0.0:0.1:10.0), [1.5, 1.0, 3.0, 1.0], [1.0, 1.0]
     q = MX.sym("q", 4)
     reference = integrator("LR", Vern9(), lotka, 0.0, times; TIGHT...)
@@ -589,12 +589,12 @@ end
 # where the integration ends. The exact solution of a body that falls is the oracle.
 @testset "adjoint sensitivities through an event" begin
     x, g = SX.sym("x", 2), SX.sym("g", 1)
-    F = integrator("AE", Vern9(), Dict("x" => x, "p" => g, "ode" => vertcat([x[2], -g[1]]), "zero" => x[1]); adjoint = true, TIGHT...)
+    F = integrator("AE", Vern9(), Dict("x" => x, "p" => g, "ode" => vcat(x[2], -g[1]), "zero" => x[1]); adjoint = true, TIGHT...)
     landing(v) = (v[2] + sqrt(v[2]^2 + 2 * v[3] * v[1])) / v[3]          # v = (h0, v0, g), from the time 0
     cost(v) = (v[2] - v[3] * landing(v)) + 2 * landing(v)                # the speed at the ground and twice the time
     x0, q = MX.sym("x0", 2), MX.sym("q", 1)
     xe, te = F(x0, q, MX(0.0), MX(20.0))
-    f = CasADiCodegen.Function("f", [x0, q], [gradient(xe[2] + 2 * te, vertcat([x0, q]))])
+    f = CasADiCodegen.Function("f", [x0, q], [gradient(xe[2] + 2 * te, vcat(x0, q))])
     @test closeto(ode_emitted(f, ([10.0, 3.0], [9.81])), [ForwardDiff.gradient(cost, [10.0, 3.0, 9.81])], 1e-8)
 end
 
@@ -685,7 +685,7 @@ end
     @test_throws "\"z\"" integrator("F", Vern9(), merge(dae, Dict("z" => SX.sym("z"))), 0.0, 1.0)
     @test_throws ArgumentError integrator("F", Vern9(), Dict("x" => x), 0.0, 1.0)
     @test_throws ArgumentError integrator("F", Vern9(), Dict("x" => x, "ode" => x[1]), 0.0, 1.0)
-    @test integrator("F", Vern9(), Dict("x" => x, "ode" => vertcat([x[2], SX(1, 1)])), 0.0, 1.0) isa CasADiCodegen.Function
+    @test integrator("F", Vern9(), Dict("x" => x, "ode" => vcat(x[2], SX(1, 1))), 0.0, 1.0) isa CasADiCodegen.Function
     @test_throws ArgumentError integrator("F", Vern9(), Dict("x" => SX.sym("x", 2, 2), "ode" => SX.sym("x", 2, 2)), 0.0, 1.0)
     @test_throws ArgumentError integrator("F", Vern9(), Dict("x" => x, "p" => SX.sym("p", 2, 2), "ode" => x), 0.0, 1.0)
     @test_throws ArgumentError integrator("F", Vern9(), merge(dae, Dict("t" => SX.sym("t", 2))), 0.0, 1.0)

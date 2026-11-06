@@ -58,7 +58,7 @@ minus 1 and the final velocity. The direct form of the control is a nested `if_e
 y, a = SX.sym("y", 3), SX.sym("a")                         # y = [x, v, λv], a = λx
 λv = y[3]
 u = C.if_else(λv > 1, SX(-1.0), C.if_else(λv < -1, SX(1.0), SX(0.0)))
-ode = vertcat(y[2], u, -a)
+ode = vcat(y[2], u, -a)
 rhs = CasadiFunction("rhs", [y, a], [ode], ["y", "a"], ["ode"])
 CasADiCodegen.nonsmooth_operations(rhs; inputs = ["y"])
 ```
@@ -75,8 +75,8 @@ Jacobian at the exact root:
 branchwise = integrator("branchwise", Vern9(), Dict("x" => y, "p" => a, "ode" => ode), 0.0, 3.0;
                         nonsmooth = :ignore, abstol = 1e-12, reltol = 1e-12)
 z = MX.sym("z", 2)                                         # z = [λx, λv(0)]
-yb = branchwise(vertcat(0, 0, z[2]), z[1])
-residual = vertcat(yb[1] - 1, yb[2])
+yb = branchwise(vcat(0, 0, z[2]), z[1])
+residual = vcat(yb[1] - 1, yb[2])
 CasadiFunction("check", [z], [jacobian(residual, z)])(exact)
 ```
 
@@ -97,10 +97,10 @@ this control:
 
 ```@example bang
 m = SX.sym("m", 2)
-switched = integrator("switched", Vern9(), Dict("x" => y, "p" => a, "ode" => vertcat(y[2], -(m[1] + m[2]) / 2, -a)), 0.0, 3.0;
-                      modes = m => vertcat(λv - 1, λv + 1), switches = 2, abstol = 1e-12, reltol = 1e-12)
-ym = switched(vertcat(0, 0, z[2]), z[1])
-shoot = CasadiFunction("shoot", [z], [vertcat(ym[1] - 1, ym[2])], ["z"], ["r"])
+switched = integrator("switched", Vern9(), Dict("x" => y, "p" => a, "ode" => vcat(y[2], -(m[1] + m[2]) / 2, -a)), 0.0, 3.0;
+                      modes = m => vcat(λv - 1, λv + 1), switches = 2, abstol = 1e-12, reltol = 1e-12)
+ym = switched(vcat(0, 0, z[2]), z[1])
+shoot = CasadiFunction("shoot", [z], [vcat(ym[1] - 1, ym[2])], ["z"], ["r"])
 nothing # hide
 ```
 
@@ -136,10 +136,10 @@ of a given width ``\varepsilon``; a comparison ``s > 0`` becomes
 
 ```@example bang
 w, W = SX.sym("width"), MX.sym("width")
-smooth = integrator("smooth", Vern9(), Dict("x" => y, "p" => vertcat(a, w), "ode" => CasADiCodegen.smoothed(ode, w; inputs = y)), 0.0, 3.0;
+smooth = integrator("smooth", Vern9(), Dict("x" => y, "p" => vcat(a, w), "ode" => CasADiCodegen.smoothed(ode, w; inputs = y)), 0.0, 3.0;
                     abstol = 1e-12, reltol = 1e-12)
-ys = smooth(vertcat(0, 0, z[2]), vertcat(z[1], W))
-shoot_smooth = CasadiFunction("shoot_smooth", [z, W], [vertcat(ys[1] - 1, ys[2])], ["z", "width"], ["r"])
+ys = smooth(vcat(0, 0, z[2]), vcat(z[1], W))
+shoot_smooth = CasadiFunction("shoot_smooth", [z, W], [vcat(ys[1] - 1, ys[2])], ["z", "width"], ["r"])
 nothing # hide
 ```
 

@@ -379,7 +379,7 @@ slice, and its interface does not say which. The function tries each form on
 evaluations of the node, rebuilt on fresh symbols. It keeps the form that
 reproduces them with `index_model`, and throws `ArgumentError` when none does.
 
-CasADi 3.8.1 evaluates a write at a fixed slice plus indices wrongly, so that
+CasADi 3.8.2 evaluates a write at a fixed slice plus indices wrongly, so that
 node is read from its adjoint (see `slice_write_data`).
 """
 function index_data(op::Symbol, node, slots)
@@ -450,7 +450,7 @@ Return the data of `index_data` for a write at a fixed slice plus index values.
 Element `e` of the written operand goes to the index `slice[s] + k[j]`, with
 `e = (j - 1) * length(slice) + s`.
 
-CasADi 3.8.1 evaluates this node wrongly, with values from other memory, so the
+CasADi 3.8.2 evaluates this node wrongly, with values from other memory, so the
 function does not evaluate it. The reverse derivative of the node by the
 written operand is a read at the same slice plus the same indices. CasADi
 evaluates that read correctly, and the slice is read from it.
@@ -621,7 +621,7 @@ function convexify_data(source::CSource)
     header = [strategy, findfirst(==(config["type_in"]), CONVEXIFY_PARTS) - 1, count, ncol, whole("scc_transform"), nblocks,
               whole("max_iter_eig"), nin, length(mapping), nmax]
     data = (; margin = c_real(config["margin"]), table = [header; colind; row; offsets; mapping; projection],
-            scratch = nin + (strategy == 0 ? 0 : nmax^2 + 2 * max(nmax - 1, 0) * header[7] + 2 * nmax))
+            scratch = nin + (strategy == 0 ? 0 : nmax^2 + 2 * max(nmax - 1, 0) * header[7] + nmax))
     @ensures length(data.table) == 10 + (ncol + 1) + count + (nblocks + 1) + length(mapping) + (nin == 0 ? 0 : count) "the tables of the node must be complete"
     data
 end
@@ -1164,7 +1164,7 @@ function forward_columns(f::C.Function, inputs::Vector{MX}, results::Vector{MX},
     actual = MX[MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
     width = 1 + directions
     # Direction `d` of an input, with `d = 0` for the values: one column of each group of `width` columns.
-    chosen(i, d) = (n = size(inputs[i], 2); n == 0 || size(inputs[i], 1) == 0 ? inputs[i] * 0 : C.horzcat(MX[C.densify(actual[i])[:, (k-1)*width+d+1] for k in 1:n]))
+    chosen(i, d) = (n = size(inputs[i], 2); n == 0 || size(inputs[i], 1) == 0 ? inputs[i] * 0 : horzcat(MX[C.densify(actual[i])[:, (k-1)*width+d+1] for k in 1:n]))
     empty_safe(i, d) = C.nnz(C.sparsity(inputs[i])) == 0 ? MX(C.sparsity(inputs[i])) : chosen(i, d)
     point = MX[empty_safe(i, 0) for i in eachindex(inputs)]
     groups = [as_list(C.call(value_function, point, false, true))]
@@ -1173,7 +1173,7 @@ function forward_columns(f::C.Function, inputs::Vector{MX}, results::Vector{MX},
         push!(groups, as_list(C.call(slope_function, MX[point; [empty_safe(i, d) for i in eachindex(inputs)]], false, true)))
     end
     joined(o) = C.nnz(C.sparsity_out(f, o - 1)) == 0 ? MX(C.sparsity_out(f, o - 1)) :
-                C.project(C.horzcat(MX[C.densify(group[o])[:, k] for k in 1:size(results[o], 2) for group in groups]), C.sparsity_out(f, o - 1))
+                C.project(horzcat(MX[C.densify(group[o])[:, k] for k in 1:size(results[o], 2) for group in groups]), C.sparsity_out(f, o - 1))
     actual, MX[joined(o) for o in eachindex(results)]
 end
 
@@ -1194,13 +1194,13 @@ one (see `forward_columns`); `inputs` then have the columns of one direction.
 function integrator_results(f::C.Function, inputs::Vector{MX}, lists, count::Int, nadj::Int, outer::Int)
     shape_out(o) = (C.size1_out(f, o), C.size2_out(f, o) ÷ (1 + outer))
     fitted(value, o) = outer == 0 ? C.project(C.reshape(value, shape_out(o)...), C.sparsity_out(f, o)) : C.reshape(value, shape_out(o)...)
-    results = MX[fitted(C.vertcat(lists[o+1]), o) for o in 0:2]
+    results = MX[fitted(vertcat(lists[o+1]), o) for o in 0:2]
     if nadj > 0
         # A seed has one column per output time and direction, and so have the results for the controls; the
         # others have one column per direction.
-        value = C.vertcat(MX[C.vec(C.densify(r)) for r in results])
+        value = vertcat(MX[C.vec(C.densify(r)) for r in results])
         empty(i) = C.nnz(C.sparsity(inputs[i])) == 0
-        seed(a) = C.vertcat(MX[C.vec(C.horzcat(MX[C.densify(inputs[i])[:, (k-1)*nadj+a] for k in 1:count])) for i in 5:7 if !empty(i)])
+        seed(a) = vertcat(MX[C.vec(horzcat(MX[C.densify(inputs[i])[:, (k-1)*nadj+a] for k in 1:count])) for i in 5:7 if !empty(i)])
         for (i, o) in ((1, 3), (2, 4), (3, 5), (4, 6))
             if empty(i)
                 push!(results, outer == 0 ? MX(C.sparsity_out(f, o)) : MX(shape_out(o)...))
@@ -1208,7 +1208,7 @@ function integrator_results(f::C.Function, inputs::Vector{MX}, lists, count::Int
             end
             slopes = MX[C.densify(C.jtimes(value, inputs[i], seed(a), true)) for a in 1:nadj]
             columns = i == 4 ? MX[slopes[a][:, k] for k in 1:count for a in 1:nadj] : slopes
-            push!(results, fitted(C.vec(C.horzcat(columns)), o))
+            push!(results, fitted(C.vec(horzcat(columns)), o))
         end
     else
         append!(results, MX[MX(C.sparsity_out(f, o)) for o in 3:6])
@@ -1229,7 +1229,7 @@ const FIXED_STEP_CLASSES = ("RungeKutta", "Collocation")
 
 Return an MX function with the inputs and the results of the fixed-step CasADi
 integrator `f` (`rk` or `collocation`), or `nothing` for an integrator with
-events. It ports the loop of CasADi 3.8.1 (`Integrator::eval` and
+events. It ports the loop of CasADi 3.8.2 (`Integrator::eval` and
 `FixedStepIntegrator::advance_noevent`): a `fold` over the CasADi step function
 between two output times.
 
@@ -1269,7 +1269,7 @@ function fixed_step_function(f::C.Function)
     x, p, controls = dense(1), dense(3), dense(4)
     q = MX(C.DM(zeros(C.nnz_out(step, 2) * (1 + nfwd))))
     # The collocation method starts its unknowns from the state at each point; the sensitivities of a first guess are not used.
-    v = nv1 == 0 ? MX(0, 1) : C.vertcat(MX[C.repmat(C.vertcat(MX[first_part(x, nx1), first_part(dense(2), nz1)]), nv1 ÷ (nx1 + nz1), 1); MX(C.DM(fill(NaN, nv1 * nfwd)))])
+    v = nv1 == 0 ? MX(0, 1) : vertcat(MX[C.repmat(vertcat(MX[first_part(x, nx1), first_part(dense(2), nz1)]), nv1 ÷ (nx1 + nz1), 1); MX(C.DM(fill(NaN, nv1 * nfwd)))])
     states, algebraic, quadratures = MX[], MX[], MX[]
     t, nu = t0, nu1 * (1 + nfwd)
     # One step with its sensitivities as a function of its own, so that the steps between two output times are a loop.
@@ -1281,9 +1281,9 @@ function fixed_step_function(f::C.Function)
         next = as_list(C.call(step, point, false, true))
         if forward !== nothing
             slopes = as_list(C.call(forward, MX[point; next; MX(1, 0); MX(1, 0); seeds(xs, nx1); seeds(vs, nv1); seeds(p, np1); seeds(u, nu1)], false, true))
-            next = MX[C.vertcat(MX[C.vec(next[o]), C.vec(slopes[o])]) for o in 1:3]
+            next = MX[vertcat(MX[C.vec(next[o]), C.vec(slopes[o])]) for o in 1:3]
         end
-        C.Function("$(C.name(f))_step", MX[state, t, h, p, u], MX[C.vertcat(MX[C.vec(next[1]), C.vec(next[2]), qs + C.vec(next[3])])])
+        C.Function("$(C.name(f))_step", MX[state, t, h, p, u], MX[vertcat(MX[C.vec(next[1]), C.vec(next[2]), qs + C.vec(next[3])])])
     end
     loops = Dict{Int,C.Function}()
     for (k, t_next) in enumerate(times)
@@ -1293,10 +1293,10 @@ function fixed_step_function(f::C.Function)
         u = controls[(k-1)*nu+1:k*nu]
         steps = get!(() -> nj == 1 ? one : C.fold(one, nj), loops, nj)
         each(value) = C.repmat(value, 1, nj)
-        state = C.vec(only(as_list(C.call(steps, MX[C.vertcat(MX[x, v, q]), MX(C.DM(reshape([start + j * h for j in 0:nj-1], 1, nj))), each(MX(h)), each(p), each(u)], false, true))))
+        state = C.vec(only(as_list(C.call(steps, MX[vertcat(MX[x, v, q]), MX(C.DM(reshape([start + j * h for j in 0:nj-1], 1, nj))), each(MX(h)), each(p), each(u)], false, true))))
         x, v, q = state[1:nx], state[nx+1:nx+nv], state[nx+nv+1:nx+nv+nq]
         push!(states, x)
-        push!(algebraic, C.vertcat(MX[v[(d+1)*nv1-nz1+1:(d+1)*nv1] for d in 0:nfwd]))
+        push!(algebraic, vertcat(MX[v[(d+1)*nv1-nz1+1:(d+1)*nv1] for d in 0:nfwd]))
         push!(quadratures, q)
         t = t_next
     end

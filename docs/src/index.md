@@ -3,10 +3,10 @@
 CasADiCodegen.jl is a package for generating plain Julia code from the functions of
 [CasADi](https://web.casadi.org/), the framework for symbolic modelling and
 algorithmic differentiation. A model is built and differentiated with CasADi, through
-the Julia front end of CasADi that the package includes, and CasADiCodegen.jl then
-emits the model and its derivatives as Julia functions, which run without CasADi and
-accept Julia arrays, static arrays, sparse matrices and the dual numbers of
-ForwardDiff.jl.
+[CasADiNative.jl](https://github.com/casadi/CasADiNative.jl), the official Julia front
+end of CasADi, and CasADiCodegen.jl then emits the model and its derivatives as Julia
+functions, which run without CasADi and accept Julia arrays, static arrays, sparse
+matrices and the dual numbers of ForwardDiff.jl.
 
 Features include:
 
@@ -50,7 +50,7 @@ The package supports Julia 1.12 and 1.13. Install it from GitHub:
 pkg> add https://github.com/Orbitology/CasADiCodegen.jl
 ```
 
-The binaries of CasADi 3.8.1 and its Julia front end come with the package.
+The package depends on CasADiNative.jl, which brings the binaries of CasADi 3.8.2 and its Julia front end.
 
 ## Contents
 

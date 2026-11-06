@@ -73,8 +73,8 @@ variables, slopes = (x, vx, y, vy), (vx, λ * x, vy, λ * y - g)
 ddt(e) = sum(jacobian(e, s) * ds for (s, ds) in zip(variables, slopes))
 
 constraint = x^2 + y^2 - 1
-u, p = vertcat(y, vy, x, vx, λ), vertcat(g, x0, y0, vy0)
-rhs = CasadiFunction("pendulum", [u, p, t], [vertcat(vy, λ * y - g, constraint, ddt(constraint), ddt(ddt(constraint)))])
+u, p = vcat(y, vy, x, vx, λ), vcat(g, x0, y0, vy0)
+rhs = CasadiFunction("pendulum", [u, p, t], [vcat(vy, λ * y - g, constraint, ddt(constraint), ddt(ddt(constraint)))])
 mass = Diagonal([1.0, 1.0, 0.0, 0.0, 0.0])
 nothing # hide
 ```
@@ -88,7 +88,7 @@ and does not fail where that Jacobian is singular:
 
 ```@example init
 initialize = SciMLBase.OverrideInit(; nlsolve = LevenbergMarquardt())
-conditions(rows...) = CasadiFunction("conditions", [u, p, t], [vertcat(rows...)])
+conditions(rows...) = CasadiFunction("conditions", [u, p, t], [vcat(rows...)])
 
 function pendulum(guess, rows...; tspan = (0.0, 1.5), parameters = [1.0, 1.0, 0.0, 0.0])
     f = SciMLBase.ODEFunction(rhs; mass_matrix = mass, initialization = conditions(rows...),
@@ -280,7 +280,7 @@ observed variable, the second result of the right side:
 
 ```@example init
 x, total, x0, y0 = SX.sym("x"), SX.sym("total"), SX.sym("x0"), SX.sym("y0")
-q = vertcat(total, x0, y0)
+q = vcat(total, x0, y0)
 sum_model = CasadiFunction("sum_model", [x, q, t], [-x, total - x], ["u", "p", "t"], ["du", "y"])
 nothing # hide
 ```
@@ -290,7 +290,7 @@ With the conditions `x = 1` and `y = 2`, the value of `total` in the problem is 
 and the solution holds the value that the initialization found:
 
 ```@example init
-both = CasadiFunction("both", [x, q, t], [vertcat(x - x0, (total - x) - y0)])
+both = CasadiFunction("both", [x, q, t], [vcat(x - x0, (total - x) - y0)])
 f = SciMLBase.ODEFunction(sum_model; initialization = both, solved_parameters = [:total])
 solution = SciMLBase.solve(SciMLBase.ODEProblem(f, [0.0], (0.0, 1.0), [0.0, 1.0, 2.0]), Tsit5();
                            initializealg = initialize, abstol = 1e-8, reltol = 1e-8)
@@ -316,8 +316,8 @@ derivatives vanish, so its conditions are its right side itself:
 
 ```@example init
 r, s = SX.sym("r"), SX.sym("s")
-prey = vertcat(r, s)
-slope = vertcat(1.5r - r * s, -3s + r * s)
+prey = vcat(r, s)
+slope = vcat(1.5r - r * s, -3s + r * s)
 lotka = CasadiFunction("lotka", [prey], [slope])
 steady = SciMLBase.ODEFunction(lotka; initialization = CasadiFunction("steady", [prey], [slope]))
 solution = SciMLBase.solve(SciMLBase.ODEProblem(steady, [2.0, 1.0], (0.0, 10.0)), Tsit5();
@@ -330,7 +330,7 @@ second. A condition can also hold an expression of the state that is not a varia
 the model: with the derivative of `r` at zero and `r + s = 2`, the start is ``(0.5, 1.5)``:
 
 ```@example init
-observed = CasadiFunction("observed", [prey], [vertcat(slope[1], r + s - 2)])
+observed = CasadiFunction("observed", [prey], [vcat(slope[1], r + s - 2)])
 solution = SciMLBase.solve(SciMLBase.ODEProblem(SciMLBase.ODEFunction(lotka; initialization = observed), [1.0, 1.0], (0.0, 10.0)),
                            Tsit5(); initializealg = initialize, abstol = 1e-8, reltol = 1e-8)
 solution.u[1]

@@ -82,7 +82,7 @@ end
     v, w = MX.sym("v", 2), MX.sym("w", 2)
     solver = C.nlpsol("bounded", "ipopt", Dict("x" => v, "p" => w, "f" => C.sumsqr(v - w), "g" => v[1] + v[2]))
     q, u = MX.sym("q", 2), MX.sym("u")
-    r = solved(solver; x0 = MX(C.DM([0.0, 0.0])), p = q, ubx = C.vertcat(MX[u, MX(Inf)]), ubg = MX(100.0))
+    r = solved(solver; x0 = MX(C.DM([0.0, 0.0])), p = q, ubx = reduce(vcat, MX[u, MX(Inf)]), ubg = MX(100.0))
     f = CasADiCodegen.Function("f", [q, u], [r["x"], r["lam_x"], r["lam_g"], C.jacobian(r["x"], q), C.jacobian(r["x"], u)])
     x, lam_x, lam_g, by_q, by_u = evaluated(native(f; solvers = SOLVERS), f, [[0.7, -0.2], [0.3]])
     @test x ≈ [0.3, -0.2] rtol = 1e-7
@@ -201,7 +201,7 @@ end
     solver = C.conic("quadratic", "qrqp", Dict("h" => C.Sparsity.diag(2), "a" => C.Sparsity.dense(1, 2)), quiet)
     d, q, c, u = MX.sym("d", C.Sparsity.diag(2)), MX.sym("q", 2), MX.sym("c"), MX.sym("u")
     # The upper bound `u` of the first unknown is active for the values below.
-    r = solved(solver; h = d, g = q, a = MX(C.DM([1.0 1.0])), lba = c, uba = c, ubx = C.vertcat(MX[u, MX(Inf)]))
+    r = solved(solver; h = d, g = q, a = MX(C.DM([1.0 1.0])), lba = c, uba = c, ubx = reduce(vcat, MX[u, MX(Inf)]))
     f = CasADiCodegen.Function("f", [d, q, c, u], [r["x"], r["cost"], r["lam_a"], r["lam_x"]])
     @test_throws "CasADiCodegen.Solvers(optimization = ...)" K.algorithm(f; expand = false)
     values = [[2.0, 4.0], [-1.4, 0.4], [2.0], [0.5]]

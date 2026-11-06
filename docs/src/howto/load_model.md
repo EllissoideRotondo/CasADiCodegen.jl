@@ -26,6 +26,6 @@ g, g! = build_function(f; expression = Val{false})
 g([2.0, 0.5])
 ```
 
-The file must come from CasADi 3.8.1, the version of the package, or from an older
+The file must come from CasADi 3.8.2, the version of the package, or from an older
 version: CasADi reads the files of its own version and of older versions only. A model that holds a solver of CasADi (`cvodes`,
 `nlpsol`, ...) also needs [Replace the solvers of CasADi](@ref).

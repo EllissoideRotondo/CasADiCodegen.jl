@@ -1,15 +1,6 @@
 # Tools on the structure of a model: the block-triangular form of a sparsity pattern, and
 # the matrices of the linearization of a state-space model.
 
-# `Sparsity::btf` of CasADi returns its permutations and blocks through six arguments of
-# type `std::vector<casadi_int>&`, which the SWIG front end drops: its `btf` returns the
-# number of blocks only. The method is called here in libcasadi itself. An empty
-# `std::vector` of libstdc++ is three null pointers (begin, end, end of the storage), so
-# Julia passes six such triples, and frees the storage that CasADi gives them.
-const BTF_SYMBOL = :_ZNK6casadi8Sparsity3btfERSt6vectorIxSaIxEES4_S4_S4_S4_S4_
-const BTF_METHOD = Base.OncePerProcess{Ptr{Cvoid}}(() -> Front.Libdl.dlsym(Front.Libdl.dlopen(Front.CasADi_jll.libcasadi), BTF_SYMBOL))
-const OPERATOR_DELETE = Base.OncePerProcess{Ptr{Cvoid}}(() -> Front.Libdl.dlsym(Front.Libdl.dlopen(Front.CasADi_jll.libcasadi), :_ZdlPv))
-
 """
     block_triangular_form(sparsity) -> NamedTuple
 
@@ -39,20 +30,10 @@ julia> CasADiCodegen.block_triangular_form(pattern).blocks
 ```
 """
 function block_triangular_form(sparsity::C.Sparsity)
-    vectors = zeros(UInt, 3, 6)
-    blocks = GC.@preserve sparsity vectors ccall(BTF_METHOD(), Clonglong,
-                                                (Ptr{Cvoid}, Ptr{UInt}, Ptr{UInt}, Ptr{UInt}, Ptr{UInt}, Ptr{UInt}, Ptr{UInt}),
-                                                sparsity.ptr, pointer(vectors, 1), pointer(vectors, 4), pointer(vectors, 7),
-                                                pointer(vectors, 10), pointer(vectors, 13), pointer(vectors, 16))
-    parts = map(1:6) do k
-        start, stop = vectors[1, k], vectors[2, k]
-        @ensures stop >= start && (stop - start) % sizeof(Int64) == 0 "block_triangular_form: CasADi returned a vector that is not one of libstdc++"
-        values = start == 0 ? Int[] : Int.(copy(unsafe_wrap(Array, Ptr{Int64}(start), Int((stop - start) ÷ sizeof(Int64))))) .+ 1
-        start == 0 || ccall(OPERATOR_DELETE(), Cvoid, (Ptr{Cvoid},), Ptr{Cvoid}(start))
-        values
-    end
+    blocks, vectors... = C.btf(sparsity)
+    parts = map(v -> Int.(v) .+ 1, vectors)
     rowperm, colperm, rowblock, colblock, coarse_rowblock, coarse_colblock = parts
-    @ensures blocks == C.btf(sparsity) && isperm(rowperm) && length(rowperm) == C.size1(sparsity) &&
+    @ensures isperm(rowperm) && length(rowperm) == C.size1(sparsity) &&
              isperm(colperm) && length(colperm) == C.size2(sparsity) "block_triangular_form: the result of CasADi is not a permutation"
     rows, cols = C.get_triplet(sparsity)
     rowof, colof = invperm(rowperm), invperm(colperm)
@@ -112,9 +93,9 @@ function linearization_function(f::C.Function, g::C.Function, h::C.Function; spa
     dx, residual, y = f(x, z, u, p), g(x, z, u, p), h(x, z, u, p)
     J = Front.jacobian
     # The sensitivities of z: dz = -M [dx; du], from 0 = ∂g/∂z dz + ∂g/∂x dx + ∂g/∂u du.
-    M = C.solve(Front.densify(J(residual, z)), Front.densify(Front.horzcat([J(residual, x), J(residual, u)])))
+    M = C.solve(Front.densify(J(residual, z)), Front.densify(horzcat([J(residual, x), J(residual, u)])))
     nx, nu = C.size1_in(f, 0), C.size1_in(f, 2)
-    reduced(e) = Front.horzcat([J(e, x), J(e, u)]) - C.mtimes(J(e, z), M)
+    reduced(e) = horzcat([J(e, x), J(e, u)]) - C.mtimes(J(e, z), M)
     AB, CD = reduced(dx), reduced(y)
     matrix(J) = sparse ? J : Front.densify(J)
     blocks = [matrix(AB[:, 1:nx]), matrix(AB[:, nx+1:nx+nu]), matrix(CD[:, 1:nx]), matrix(CD[:, nx+1:nx+nu])]
@@ -169,7 +150,7 @@ julia> using CasADiCodegen
 
 julia> x, u, p = SX.sym("x", 2), SX.sym("u"), SX.sym("p");
 
-julia> f = CasadiFunction("f", [x, u, p], [vertcat(x[2], -p * x[1] + u)]);
+julia> f = CasadiFunction("f", [x, u, p], [vcat(x[2], -p * x[1] + u)]);
 
 julia> h = CasadiFunction("h", [x, u, p], [x[1:1]]);
 

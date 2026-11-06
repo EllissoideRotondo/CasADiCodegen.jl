@@ -27,8 +27,8 @@ pull2(r, m) = ([0.0 m[1]; 0.0 0.0; m[1] 0.0; 0.0 2.0], [r[2]; 0.0; r[1]; 0.0;;],
                [r[2] r[1]; 0.0 0.0], [0.0; 0.0;;])                                    # block 2 by r and by m
 end
 
-struct PlainCallback <: CasadiCallback end
-CasADiCodegen.cb_eval(::PlainCallback, arg) = [arg[1]]
+struct PlainCallback <: Callback end
+C.eval_(::PlainCallback, arg) = [arg[1]]
 
 const DRAG_X = [0.7, -1.3, 0.4]
 
@@ -127,8 +127,8 @@ end
     mix = callback(M.blend, "blend", ((2, 3), 3), (2, 1); jacobian = M.blend1)
     x, t, A = MX.sym("x", 3), MX.sym("t"), MX.sym("A", 2, 3)
     c = curve(2 * t)
-    y = LinearAlgebra.dot(c, x) * x + sin(c) + mix(A, curve(t) + x)[2] * x
-    f = CasADiCodegen.Function("f", [x, t, A], [y, jacobian(y, vertcat(x, t)), mix(A, x)[1]])
+    y = LinearAlgebra.dot(c, x) * x + sin.(c) + mix(A, curve(t) + x)[2] * x
+    f = CasADiCodegen.Function("f", [x, t, A], [y, jacobian(y, vcat(x, t)), mix(A, x)[1]])
     xv, tv, Av = DRAG_X, [0.3], [1.0 2.0 3.0; -1.0 0.5 2.0]
     expected = casadi_nonzeros(f(C.DM(xv), C.DM(tv), C.DM(Av)))
     blank() = [zeros(length(e)) for e in expected]
@@ -188,7 +188,7 @@ end
 @testset "tasks do not share the work vector" begin
     pause = callback(v -> (yield(); 2 .* v), "pause", (3,), (3,))
     v = MX.sym("v", 3)
-    a = sin(v)
+    a = sin.(v)
     f = CasADiCodegen.Function("f", [v], [3 * a + C.times(pause(a), a)])
     inputs = [DRAG_X .+ k for k in 1:8]
     for kwargs in ((; expand = false), (; chunk_size = 2))
@@ -207,10 +207,10 @@ end
     @test_throws "named function" generate_julia(f, IOBuffer())
     short = callback(v -> [1.0], "short", (3,), (2,))
     @test_throws DimensionMismatch emitted(CasADiCodegen.Function("s", [v], [short(v)]), [zeros(2)], (DRAG_X,))
-    plain = CasADiCodegen.Function(callback(PlainCallback(); name = "plain"))
+    plain = CasADiCodegen.Function(callback(PlainCallback(), "plain"))
     s = MX.sym("s")
     # A callback made with the type of the front end has no record of its Julia function: generated code cannot call it.
-    @test_throws "callback of a subtype of CasadiCallback" emitted(CasADiCodegen.Function("p", [s], [2 * plain(s)]), [zeros(1)], ([1.5],))
+    @test_throws "callback of a subtype of Callback" emitted(CasADiCodegen.Function("p", [s], [2 * plain(s)]), [zeros(1)], ([1.5],))
     @test_throws ArgumentError callback(sin, "bad name", (1,), (1,))
     @test_throws ArgumentError callback(sin, "shape", ((1, 2, 3),), (1,))
 end

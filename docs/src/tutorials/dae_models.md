@@ -101,9 +101,9 @@ the right side as a CasADi function:
 
 ```@example dae
 others = filter(s -> C.name(s) != "capacitor_v", unknowns)
-u = vertcat(capacitor.v, others...)
-p = vertcat(R, Cap, V)
-rc = CasadiFunction("rc", [u, p, t], [vertcat(differential, algebraic...)])
+u = vcat(capacitor.v, others...)
+p = vcat(R, Cap, V)
+rc = CasadiFunction("rc", [u, p, t], [vcat(differential, algebraic...)])
 nothing # hide
 ```
 
@@ -138,8 +138,8 @@ are known, and [`block_triangular_form`](@ref CasADiCodegen.block_triangular_for
 computes it from the sparsity pattern; its field `blocks` is the number of blocks:
 
 ```@example dae
-z = vertcat(others...)
-pattern = C.sparsity(jacobian(vertcat(algebraic...), z))
+z = vcat(others...)
+pattern = C.sparsity(jacobian(vcat(algebraic...), z))
 CasADiCodegen.block_triangular_form(pattern).blocks
 ```
 
@@ -193,7 +193,7 @@ end
 m, k, l = SX.sym("m"), SX.sym("k"), SX.sym("l")
 body = point_mass("mass")
 link = spring(body.pos, SX.zeros(2), k, l)
-gravity = vertcat(0, -9.81)
+gravity = vcat(0, -9.81)
 nothing # hide
 ```
 
@@ -203,8 +203,8 @@ length of the spring becomes a second result, so that it is an observed variable
 solution:
 
 ```@example dae
-rhs = vertcat(body.v, link.force / m + gravity)
-spring_mass = CasadiFunction("spring_mass", [vertcat(body.pos, body.v), vertcat(m, k, l), t], [rhs, link.x],
+rhs = vcat(body.v, link.force / m + gravity)
+spring_mass = CasadiFunction("spring_mass", [vcat(body.pos, body.v), vcat(m, k, l), t], [rhs, link.x],
                              ["u", "p", "t"], ["du", "spring_x"])
 nothing # hide
 ```
@@ -245,8 +245,8 @@ CasADi integrators:
 ```@example dae
 x, vx, y, vy, T = (SX.sym(name) for name in ("x", "vx", "y", "vy", "T"))
 g, L = SX.sym("g"), SX.sym("L")
-pendulum = Dict("x" => vertcat(x, vx, y, vy), "z" => T, "p" => vertcat(g, L),
-                "ode" => vertcat(vx, T * x, vy, T * y - g), "alg" => x^2 + y^2 - L^2)
+pendulum = Dict("x" => vcat(x, vx, y, vy), "z" => T, "p" => vcat(g, L),
+                "ode" => vcat(vx, T * x, vy, T * y - g), "alg" => x^2 + y^2 - L^2)
 reduced = CasADiCodegen.reduce_index(pendulum)
 reduced.index, reduced.differentiations
 ```

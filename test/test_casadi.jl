@@ -82,10 +82,10 @@ end
 # copysign is left out: it exposes the sign bit of a NaN (for example from
 # fmod(0, 0)), which IEEE 754 leaves open and which differs between C and Julia.
 const TREE_UNARY = [x -> -x, x -> C.sqrt(x), x -> x^2, x -> 2 * x, x -> C.abs(x), x -> C.sign(x),
-    x -> C.floor(x), x -> C.ceil(x), x -> 1 / x, x -> C.not(x)]
+    x -> C.floor(x), x -> C.ceil(x), x -> 1 / x, x -> C.logic_not(x)]
 const TREE_BINARY = [(x, y) -> x + y, (x, y) -> x - y, (x, y) -> x * y, (x, y) -> x / y,
     (x, y) -> C.lt(x, y), (x, y) -> C.le(x, y), (x, y) -> C.eq(x, y), (x, y) -> C.ne(x, y),
-    (x, y) -> C.and(x, y), (x, y) -> C.or(x, y), (x, y) -> C.fmod(x, y),
+    (x, y) -> C.logic_and(x, y), (x, y) -> C.logic_or(x, y), (x, y) -> C.fmod(x, y),
     (x, y) -> C.fmin(x, y), (x, y) -> C.fmax(x, y),
     (x, y) -> C.if_else(x, y, SX(0.0)), (x, y) -> C.remainder(x, y)]
 
@@ -98,7 +98,7 @@ function tree_function(steps, constant)
         push!(nodes, kind <= n ? TREE_UNARY[kind](pick(i)) :
                      TREE_BINARY[mod1(kind - n, length(TREE_BINARY))](pick(i), pick(j)))
     end
-    y = vertcat(nodes[end], nodes[max(end - 1, 1)])
+    y = vcat(nodes[end], nodes[max(end - 1, 1)])
     CasADiCodegen.Function("t", [x], [y, jacobian(y, x)])
 end
 
@@ -129,7 +129,7 @@ end
 @testset "sparse outputs and metadata" begin
     x = SX.sym("x", 3)
     rosenbrock = (1 - x[1])^2 + 100 * (x[2] - x[1]^2)^2 + x[3]^2
-    grad, hess = gradient(rosenbrock, x), hessian(rosenbrock, x)
+    grad, hess = gradient(rosenbrock, x), hessian(rosenbrock, x)[1]
     f = CasADiCodegen.Function("rosen", [x], [rosenbrock, grad, hess], ["x"], ["f", "g", "H"])
     alg = Algorithm(f)
     @test alg.names_in == ["x"] && alg.names_out == ["f", "g", "H"]
@@ -146,7 +146,7 @@ end
     n, chunk_size = 60, 100
     x = SX.sym("x", n)
     terms = [(x[i] - x[i+1])^2 / (1 + C.abs(x[i])) for i in 1:n-1]
-    y = vertcat(terms...)
+    y = vcat(terms...)
     f = CasADiCodegen.Function("big", [x], [y, jacobian(y, x)])
     alg = Algorithm(f)
     @test length(alg.instructions) > 3 * chunk_size
@@ -181,7 +181,7 @@ end
     X = MX.sym("X", 2, 2)
     v = MX.sym("v", 2)
     a = SX.sym("a", 2)
-    h = CasADiCodegen.Function("h", [a], [vertcat(a[1] * a[2], a[1] - a[2])])
+    h = CasADiCodegen.Function("h", [a], [vcat(a[1] * a[2], a[1] - a[2])])
     f = CasADiCodegen.Function("m", [X, v], [C.mtimes(X, v) + h(v)])
     alg = CasADiCodegen.Codegen.algorithm(f)               # CasADi expands it to SX
     Xv, vv = [1.0, 2.0, 3.0, 4.0], [0.5, -1.5]
@@ -209,8 +209,8 @@ const NORM_PS = (2, 1, Inf, -Inf, 0, 3, 1//2, -0.5, -1.5)
     D = C.diag(d)                                           # structural zeros count as elements
     outputs = [[LinearAlgebra.norm(M, p) for p in NORM_PS]; [LinearAlgebra.norm(D, p) for p in NORM_PS];
                [LinearAlgebra.norm([M[1, 1], M[2, 2], M[1, 3]], p) for p in NORM_PS];
-               LinearAlgebra.norm([M[:, 1], M[:, 2]], 1); LinearAlgebra.opnorm(M, 1); LinearAlgebra.opnorm(M, Inf);
-               LinearAlgebra.opnorm(M[:, 1]); LinearAlgebra.opnorm(M[1, :])]
+               [LinearAlgebra.norm([M[:, 1], M[:, 2]], 1), LinearAlgebra.opnorm(M, 1), LinearAlgebra.opnorm(M, Inf),
+                LinearAlgebra.opnorm(M[:, 1]), LinearAlgebra.opnorm(M[1, :])]]
     f = CasADiCodegen.Function("norms", [M, d], outputs)
     # Values with a zero element; all zeros, where the scaled formula must not give NaN; an infinite element.
     for (Mv, dv) in (([1.0 -2.0 0.5; 3.0 0.0 -1.0], [2.0, -0.5, 4.0]), (zeros(2, 3), zeros(3)),
@@ -232,6 +232,6 @@ end
     err = try [s; m]; nothing catch e; e end
     @test err isa ArgumentError && occursin("SX", err.msg) && occursin("MX", err.msg)
     @test_throws ArgumentError [m s]
-    @test_throws ArgumentError vertcat([s, m])
+    @test_throws ArgumentError vcat(s, m)
     @test_throws ArgumentError [m; [s[1], s[2]]]
 end

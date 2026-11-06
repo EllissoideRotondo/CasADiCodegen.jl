@@ -71,8 +71,8 @@ in this order; as for an ODE, a model without parameters or time takes fewer arg
 ```@example sde
 x, y, z = SX.sym("x"), SX.sym("y"), SX.sym("z")
 σ, ρ, β, t = SX.sym("σ"), SX.sym("ρ"), SX.sym("β"), SX.sym("t")
-u, p = vertcat(x, y, z), vertcat(σ, ρ, β)
-drift = CasadiFunction("lorenz", [u, p, t], [vertcat(σ * (y - x), x * (ρ - z) - y, x * y - β * z)])
+u, p = vcat(x, y, z), vcat(σ, ρ, β)
+drift = CasadiFunction("lorenz", [u, p, t], [vcat(σ * (y - x), x * (ρ - z) - y, x * y - β * z)])
 noise = CasadiFunction("noise", [u, p, t], [0.3 * u])
 u0, parameters = [5.0, 5.0, 1.0], [10.0, 2.33, 26.0]
 nothing # hide

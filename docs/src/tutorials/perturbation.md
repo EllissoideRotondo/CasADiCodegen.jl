@@ -55,7 +55,7 @@ function perturbation_model(name, F, order)
     x, v = SX.sym("x", order + 1), SX.sym("v", order + 1)
     series(c) = sum(ε^k * c[k+1] for k in 0:order)
     accelerations = taylor_coefficients(F(series(x), series(v), ε), ε, order)
-    return CasadiFunction(name, [vertcat(x, v)], [vertcat(v, accelerations...)]), accelerations
+    return CasadiFunction(name, [vcat(x, v)], [vcat(v, accelerations...)]), accelerations
 end
 nothing # hide
 ```
@@ -109,7 +109,7 @@ compare it with solves of the full equation, with ``\varepsilon`` as a parameter
 
 ```@example perturbation
 X, e, t = SX.sym("X", 2), SX.sym("e"), SX.sym("t")
-full = CasadiFunction("full", [X, e, t], [vertcat(X[2], -(1 + e * X[1])^(-2))])
+full = CasadiFunction("full", [X, e, t], [vcat(X[2], -(1 + e * X[1])^(-2))])
 full_problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(full), [0.0, 1.0], (0.0, 3.0), [0.0])
 series_at(ε) = sum(ε^k * hierarchy[Symbol("x_", k)][end] for k in 0:2)
 direct_at(ε) = SciMLBase.solve(SciMLBase.remake(full_problem; p = [ε]), Tsit5(); abstol = 1e-10, reltol = 1e-10)[1, end]
@@ -138,7 +138,7 @@ position:
 using OrdinaryDiffEqVerner: Vern9
 
 Xm, em = MX.sym("X", 2), MX.sym("e")
-ode = Dict("x" => Xm, "p" => em, "ode" => vertcat(Xm[2], -(1 + em * Xm[1])^(-2)))
+ode = Dict("x" => Xm, "p" => em, "ode" => vcat(Xm[2], -(1 + em * Xm[1])^(-2)))
 flow = integrator("flow", Vern9(), ode, 0.0, 3.0; abstol = 1e-12, reltol = 1e-12)
 position = flow(MX([0.0, 1.0]), em)[1]
 first_derivative = jacobian(position, em)

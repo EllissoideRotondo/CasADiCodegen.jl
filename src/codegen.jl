@@ -40,7 +40,8 @@ for level in 0:3
 end
 const OPTLEVEL_CONTEXTS = (OptLevel0, OptLevel1, OptLevel2, OptLevel3)
 
-const Front = parentmodule(@__MODULE__)
+# The front end, CasADiNative.jl, whose convenience layer the package extends.
+import CasADiNative as Front
 const C = Front.C
 const SX = C.SX
 const MX = C.MX

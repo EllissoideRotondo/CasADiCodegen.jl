@@ -354,9 +354,9 @@ struct SymbolicCallback <: RecordedCallback
 end
 SymbolicCallback(call, evaluate, jacobian) = SymbolicCallback(call, evaluate, jacobian, nothing)
 
-C.Callback_has_jacobian(cb::SymbolicCallback, args...) = true
-C.Callback_get_jacobian(cb::SymbolicCallback, name, names_in, names_out, options) = cb.jacobian(String(name))
-C.Callback_has_reverse(cb::SymbolicCallback, nadj) = cb.reverse !== nothing
+C.has_jacobian(cb::SymbolicCallback) = true
+C.get_jacobian(cb::SymbolicCallback, name, names_in, names_out, options) = cb.jacobian(String(name))
+C.has_reverse(cb::SymbolicCallback, nadj) = cb.reverse !== nothing
 
 column(v) = size(v, 2) == 1 && C.is_dense(v)
 flat(M) = reshape(M, length(M), 1)
@@ -429,14 +429,14 @@ function ode_integrator(name::AbstractString, dae, make_solver; adjoint::Bool = 
     joined, start = with_quadratures(dae)
     x, has_p = dae["x"], haskey(dae, "p")
     times = typeof(x).sym("times", 2)
-    joined["p"] = has_p ? Front.vertcat([dae["p"], times]) : times
+    joined["p"] = has_p ? vertcat([dae["p"], times]) : times
     # The time of the solver starts at zero.
     haskey(dae, "t") && (joined["ode"] = Front.substitute(joined["ode"], dae["t"], dae["t"] + times[1]))
     core = integration(name, joined, true, make_solver, start; adjoint, mass = full_mass(name, dae, mass, start))
     x0, t0, tf = Front.MX.sym("x0", size(x, 1)), Front.MX.sym("t0"), Front.MX.sym("tf")
     p = has_p ? [Front.MX.sym("p", size(dae["p"], 1))] : Front.MX[]
     # Inline, so that the graph of the user calls the integrator itself.
-    split_function(name, [x0, p..., t0, tf], core(x0, Front.vertcat([p..., t0, tf])), size(x0, 1),
+    split_function(name, [x0, p..., t0, tf], core(x0, vertcat([p..., t0, tf])), size(x0, 1),
                    has_p ? ["x0", "p", "t0", "tf"] : ["x0", "t0", "tf"])
 end
 
@@ -519,14 +519,14 @@ function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::
     x0, t0, tf, z = Front.MX.sym("x0", n), Front.MX.sym("t0"), Front.MX.sym("tf"), Front.MX.sym("z", 2)
     q = has_p ? [Front.MX.sym("p", m)] : Front.MX[]
     # The place `i` of the element that changed its sign selects it: one_hot(i) has a 1 in row i, and zeros for i = 0.
-    one_hot(i) = Front.vertcat([C.eq(i, Front.MX(Float64(j))) for j in 1:k])
+    one_hot(i) = vertcat([C.eq(i, Front.MX(Float64(j))) for j in 1:k])
     te, place = z[1], z[2]
     at_time = arc(x0, q..., t0, te)
     value = surface(has_quad ? at_time[1] : at_time, has_p ? q[1] : Front.MX(0, 1), te)
     chosen = k == 1 ? value : Front.dot(one_hot(place), value)
     # The unknowns are the time and the place. The place is the root of i - round(i), which no
     # input moves, so CasADi gives it no derivatives; a missing event is the root of te - tf.
-    residual = Front.vertcat([exact && switching == 0 ? chosen : C.if_else(C.eq(place, Front.MX(0.0)), te - tf, chosen), place - C.floor(place + Front.MX(0.5))])
+    residual = vertcat([exact && switching == 0 ? chosen : C.if_else(C.eq(place, Front.MX(0.0)), te - tf, chosen), place - C.floor(place + Front.MX(0.5))])
     # Inline, so that the calls of the integrator are at the top level of the graph of the user.
     residual_function = Front.Function(name * "_zero", [z, x0, q..., t0, tf], [residual], Dict("always_inline" => true))
     event_time = implicit_function(name * "_time", residual_function, find)
@@ -547,7 +547,7 @@ function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::
     for _ in 1:events
         # Loop invariant: `state` at the time `start` follows the events of `times`, each with its jump, and `places` holds their places.
         # The guess carries the place of the event at `start`, so that the search does not find it again.
-        found = event_time(Front.vertcat([tf, isempty(places) ? Front.MX(0.0) : places[end]]), state, q..., start, tf)
+        found = event_time(vertcat([tf, isempty(places) ? Front.MX(0.0) : places[end]]), state, q..., start, tf)
         push!(times, found[1])
         push!(places, found[2])
         advance(times[end])
@@ -560,8 +560,8 @@ function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::
     terminal || advance(tf)
     outputs, names = [state], ["xf"]
     has_quad && (push!(outputs, reduce(+, sums)); push!(names, "qf"))
-    push!(outputs, Front.vertcat(times)); push!(names, "te")
-    k > 1 && (push!(outputs, Front.vertcat(places)); push!(names, "ie"))
+    push!(outputs, vertcat(times)); push!(names, "te")
+    k > 1 && (push!(outputs, vertcat(places)); push!(names, "ie"))
     exact || (push!(outputs, reduce(+, [place > 0 for place in places])); push!(names, "ne"))
     Front.Function(String(name), [x0, q..., t0, tf], outputs, has_p ? ["x0", "p", "t0", "tf"] : ["x0", "t0", "tf"], names,
                    Dict("always_inline" => true))
@@ -591,8 +591,8 @@ function with_quadratures(dae)
     haskey(dae, "quad") || return joined, Float64[]
     quad = Front.densify(dae["quad"])
     count = size(quad, 1)
-    joined["x"] = Front.vertcat([dae["x"], typeof(dae["x"]).sym("quad", count)])
-    joined["ode"] = Front.vertcat([dae["ode"], quad])
+    joined["x"] = vertcat([dae["x"], typeof(dae["x"]).sym("quad", count)])
+    joined["ode"] = vertcat([dae["ode"], quad])
     joined, zeros(count)
 end
 
@@ -657,11 +657,11 @@ function ode_grid(name::AbstractString, dae, t0::Real, times::AbstractVector{<:R
             side(time, t0) && (columns[k] = X[:, searchsortedfirst(stops, time; by = s -> abs(s - t0))])
         end
     end
-    initial = isempty(start) ? x0 : Front.vertcat([x0, Front.MX(C.DM(start))])
+    initial = isempty(start) ? x0 : vertcat([x0, Front.MX(C.DM(start))])
     for k in eachindex(times)
         times[k] == t0 && (columns[k] = initial)
     end
-    M = whole === nothing ? Front.horzcat(columns) : whole
+    M = whole === nothing ? horzcat(columns) : whole
     outputs = isempty(start) ? [M] : [M[1:nx, :], M[nx+1:n, :]]
     Front.Function(String(name), [x0, p...], outputs, has_p ? ["x0", "p"] : ["x0"], isempty(start) ? ["xf"] : ["xf", "qf"])
 end
@@ -716,8 +716,8 @@ solver (see `RightSide`); `nothing` when `mass` is empty.
 function algebraic_slope(ode, x, p, t, mass::Vector{Float64})
     isempty(mass) && return nothing
     rows = findall(iszero, mass)
-    by_all = Front.jacobian(Front.vertcat([ode[r] for r in rows]), x)
-    by_state = Front.Function("slope", [x, p, t], [Front.densify(Front.horzcat([by_all[:, r] for r in rows]))])
+    by_all = Front.jacobian(vertcat([ode[r] for r in rows]), x)
+    by_state = Front.Function("slope", [x, p, t], [Front.densify(horzcat([by_all[:, r] for r in rows]))])
     Emitted(build_function(by_state; expression = Val{false}, nonzeros = true), by_state, :nonzeros)
 end
 
@@ -784,7 +784,7 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
             push!(zdot, flat(Front.mtimes(A, Q) + Front.jacobian(ode, p)[:, 1:columns]))
             append!(longer, zeros(n * columns))
         end
-        augmented = Dict("x" => Front.vertcat(z), "t" => t, "ode" => Front.vertcat(zdot))
+        augmented = Dict("x" => vertcat(z), "t" => t, "ode" => vertcat(zdot))
         has_p && (augmented["p"] = p)
         # Each column of a sensitivity matrix has the mass of the state.
         longer_mass = isempty(mass) ? mass : repeat(mass, 1 + given + columns)
@@ -801,7 +801,7 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
             rate = state_rate(ode, x, p, t, mass)(xf, q, q[own+2] - q[own+1])
             push!(parts, columns > own ? Qf[:, own+1] - rate : -rate, rate)
         end
-        blocks = has_p ? [Sf, Front.horzcat(parts)] : [Sf]
+        blocks = has_p ? [Sf, horzcat(parts)] : [Sf]
         # Inline, so that the call of the second integrator is at the top level of the graph of the user,
         # where the emitter writes scalar code around it.
         made[] = (has_p ? [x0, q, xf] : [x0, xf], blocks)
@@ -818,17 +818,17 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
         l, sums = symbol("l", n), symbol("s", columns)
         rates = [ode, -Front.jtimes(ode, x, l, true)]
         columns > 0 && push!(rates, -Front.jtimes(ode, p, l, true)[1:columns])
-        equations = Dict("x" => Front.vertcat([x, l, sums][1:length(rates)]), "p" => p, "t" => t, "ode" => Front.vertcat(rates))
+        equations = Dict("x" => vertcat([x, l, sums][1:length(rates)]), "p" => p, "t" => t, "ode" => vertcat(rates))
         # The derivatives of that integrator are forward sensitivities, so that the chain of integrators ends.
         backward = integration(name * "_a", equations, true, make_solver, zeros(columns); mass = isempty(mass) ? mass : [mass; mass; ones(columns)])
         x0, q, xf, seed = Front.MX.sym("x0", given), Front.MX.sym("p", m), Front.MX.sym("xf", n), Front.MX.sym("adj_xf", n)
-        returned = Front.vertcat([q[1:own], q[own+2], q[own+1]])       # the parameters with the two times exchanged
+        returned = vertcat([q[1:own], q[own+2], q[own+1]])       # the parameters with the two times exchanged
         at_end(value) = Front.Function("at_end", [x, p, t], [Front.densify(value)])(xf, q, q[own+2] - q[own+1])
         by_final = Front.dot(state_rate(ode, x, p, t, mass)(xf, q, q[own+2] - q[own+1]), seed)
         if isempty(mass)
-            zf = backward(Front.vertcat([xf, seed]), returned)
+            zf = backward(vertcat([xf, seed]), returned)
             by_initial = columns > own ? zf[2n+own+1] - by_final : -by_final
-            results = [zf[n+1:n+given], Front.vertcat([zf[2n+1:2n+own], by_initial, by_final])]
+            results = [zf[n+1:n+given], vertcat([zf[2n+1:2n+own], by_initial, by_final])]
         else
             # The final algebraic states are functions of the other final states, of the parameters and of the
             # time through the algebraic equations, so a seed on them goes to those: with the rows `a` of the
@@ -841,12 +841,12 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
             by_states = Front.mtimes(Pd, seed) + Front.mtimes(Pd, Front.mtimes(C.transpose(A), Front.mtimes(C.transpose(Pa), c)))
             pulled(value) = Front.mtimes(C.transpose(at_end(value)), Front.mtimes(C.transpose(Pa), c))
             # The multipliers of the algebraic states start from a guess, as those states do.
-            zf = backward(Front.vertcat([xf, Front.mtimes(C.transpose(Pd), by_states)]), returned)
+            zf = backward(vertcat([xf, Front.mtimes(C.transpose(Pd), by_states)]), returned)
             direct = columns > 0 ? pulled(Front.jacobian(ode, p)[:, 1:columns]) : nothing
             by_initial = columns > own ? zf[2n+own+1] + direct[own+1] - by_final : -by_final
             by_parameters = own > 0 ? [zf[2n+1:2n+own] + direct[1:own]] : []
             # An initial value of an algebraic state is a guess, on which no result depends.
-            results = [C.times(Front.MX(C.DM(mass[1:given])), zf[n+1:n+given]), Front.vertcat([by_parameters..., by_initial, by_final])]
+            results = [C.times(Front.MX(C.DM(mass[1:given])), zf[n+1:n+given]), vertcat([by_parameters..., by_initial, by_final])]
         end
         reverse = Front.Function("adj1_" * name, [x0, q, xf, seed], results, Dict("always_inline" => true))
     end
@@ -855,10 +855,7 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
     call = JuliaCall(String(name), run, length(shapes_in), shapes_in, [(nN,)], map(prod, shapes_in), [nN])
     # CasADi asks for the reverse derivatives of one seed at a time, and finds their function in the cache.
     options = adjoint ? (; cache = Dict("adj1_" * name => reverse), max_num_dir = 1) : (;)
-    proxy = Front.callback(SymbolicCallback(call, run, jacobian, reverse); name = String(name), options...)
-    F = Front.Function(proxy)
-    JULIA_CALLS[C.__hash__(F)] = (call, proxy)
-    F
+    recorded_function(SymbolicCallback(call, run, jacobian, reverse); options...)
 end
 
 """
@@ -878,7 +875,7 @@ function grid_reverse(name::AbstractString, x, p, t, ode, has_p::Bool, n::Int, g
     l, sums = symbol("l", n), symbol("s", columns)
     rates = [ode, -Front.jtimes(ode, x, l, true)]
     columns > 0 && push!(rates, -Front.jtimes(ode, p, l, true)[1:columns])
-    model = Front.Function("rhs", [Front.vertcat([x, l, sums][1:length(rates)]), p, t], [Front.densify(Front.vertcat(rates))])
+    model = Front.Function("rhs", [vertcat([x, l, sums][1:length(rates)]), p, t], [Front.densify(vertcat(rates))])
     rhs = build_function(model; expression = Val{false}, nonzeros = true)
     t0, stops = grid
     m, width = size(p, 1), length(stops)
@@ -894,7 +891,7 @@ function grid_reverse(name::AbstractString, x, p, t, ode, has_p::Bool, n::Int, g
         made[] === nothing || return Front.Function(jacobian_name, made[]..., Dict("always_inline" => true))
         x0, q, X, seed = symbols()
         Sf, Qf = sensitivities(x0, q)
-        J = columns > 0 ? Front.horzcat([Sf, Qf]) : Sf
+        J = columns > 0 ? horzcat([Sf, Qf]) : Sf
         result = Front.mtimes(C.transpose(J), seed)
         blocks = [Front.jacobian(result, x0)]
         has_p && push!(blocks, Front.jacobian(result, q))
@@ -905,9 +902,7 @@ function grid_reverse(name::AbstractString, x, p, t, ode, has_p::Bool, n::Int, g
 
     shapes_in = Tuple{Vararg{Int}}[(given,), (m,), (nN,), (nN,)][has_p ? (1:4) : [1, 3, 4]]
     call = JuliaCall(String(name) * "_a", run, length(shapes_in), shapes_in, [(nout,)], map(prod, shapes_in), [nout])
-    proxy = Front.callback(SymbolicCallback(call, run, jacobian); name = call.name)
-    F = Front.Function(proxy)
-    JULIA_CALLS[C.__hash__(F)] = (call, proxy)
+    F = recorded_function(SymbolicCallback(call, run, jacobian))
     x0, q, X, seed = symbols()
     r = F(arguments(x0, q, X, seed)...)
     results = has_p ? [r[1:given], r[given+1:nout]] : [r[1:given]]

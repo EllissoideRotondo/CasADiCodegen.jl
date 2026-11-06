@@ -19,7 +19,7 @@ using OrdinaryDiffEqVerner: Vern9
 import SciMLBase
 
 u, k, t = SX.sym("u", 2), SX.sym("k"), SX.sym("t")
-rhs = CasadiFunction("rhs", [u, k, t], [vertcat(u[2], -k * u[1])])     # also f(u) and f(u, p)
+rhs = CasadiFunction("rhs", [u, k, t], [vcat(u[2], -k * u[1])])     # also f(u) and f(u, p)
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [1.0, 0.0], (0.0, pi), [4.0])
 SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12).u[end]
 ```
@@ -33,7 +33,7 @@ We solve two equations in `z` with the parameter `q`:
 using SimpleNonlinearSolve: SimpleNewtonRaphson
 
 z, q = SX.sym("z", 2), SX.sym("q")
-residual = CasadiFunction("r", [z, q], [vertcat(z[1]^2 + z[2]^2 - q, z[1] - z[2])])   # also f(z)
+residual = CasadiFunction("r", [z, q], [vcat(z[1]^2 + z[2]^2 - q, z[1] - z[2])])   # also f(z)
 problem = SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(residual), [1.0, 0.5], [2.0])
 SciMLBase.solve(problem, SimpleNewtonRaphson(); abstol = 1e-12).u
 ```
@@ -46,7 +46,7 @@ problem needs no `adtype`:
 ```@example sciml
 v = SX.sym("v", 2)
 objective = CasadiFunction("J", [v, q], [(v[1] - q)^2 + v[2]^2])     # also f(v)
-constraints = CasadiFunction("c", [v, q], [vertcat(v[1] + v[2])])
+constraints = CasadiFunction("c", [v, q], [v[1] + v[2]])
 f = SciMLBase.OptimizationFunction(objective, constraints)
 problem = SciMLBase.OptimizationProblem(f, [0.0, 0.0], [1.0]; lcons = [1.0], ucons = [Inf])
 nothing # hide
@@ -60,9 +60,9 @@ parameters and the bounds of its constraints:
 ```@example sciml
 C = CasADiCodegen.C
 opti = C.Opti()
-w, a = C.variable(opti, 2), C.parameter(opti)
+w, a = variable(opti, 2), parameter(opti)
 C.minimize(opti, (w[1] - a)^2 + w[2]^2)
-C.subject_to(opti, w[1] + w[2] >= 1)
+subject_to(opti, w[1] + w[2] >= 1)
 C.set_value(opti, a, C.DM(0.25))
 problem = SciMLBase.OptimizationProblem(opti; sparse = true)
 problem.lcons, problem.ucons
@@ -115,7 +115,7 @@ has two diagonals:
 using SparseArrays
 
 y = SX.sym("y", 5)
-chain = CasadiFunction("chain", [y], [vertcat([y[i] - (i > 1 ? y[i-1]^2 : 0.0) for i in 1:5]...)])
+chain = CasadiFunction("chain", [y], [vcat([y[i] - (i > 1 ? y[i-1]^2 : 0.0) for i in 1:5]...)])
 SciMLBase.NonlinearFunction(chain; sparse = true).jac_prototype
 ```
 
@@ -154,14 +154,14 @@ generated code, under the name of that result:
 
 ```@example sciml
 x, v = SX.sym("x"), SX.sym("v")
-oscillator = CasadiFunction("oscillator", [vertcat(x, v), k, t], [vertcat(v, -k * x), (v^2 + k * x^2) / 2],
+oscillator = CasadiFunction("oscillator", [vcat(x, v), k, t], [vcat(v, -k * x), (v^2 + k * x^2) / 2],
                             ["u", "k", "t"], ["du", "energy"])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(oscillator), [1.0, 0.0], (0.0, pi), [4.0])
 solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12)
 solution[:x][end], solution[:energy][end], SciMLBase.remake(problem; p = [:k => 9.0]).p
 ```
 
-An argument may join named symbols with `vertcat`. A function whose arguments are not made of named symbols, or in which a name of a symbol
+An argument may join named symbols with `vcat`. A function whose arguments are not made of named symbols, or in which a name of a symbol
 or of a result occurs twice, gets no names, and a second result is then an error. The residual of
 `ImplicitDiscreteFunction` has one result and no observed variables. A `sys` given to the constructor
 replaces the names and the observed variables. Packages that read a problem through

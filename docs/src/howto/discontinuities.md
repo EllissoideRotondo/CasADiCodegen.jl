@@ -83,14 +83,10 @@ rather than throws, because a model that is only simulated is right.
 
 The method of `integrator` that takes the name of a plugin of CasADi as a `String`, such
 as `integrator("F", "cvodes", dae, t0, tf, opts)`, makes an integrator of CasADi, which
-misses the jump in its own sensitivities too. It is scanned in the same way when it is
-built, and its option `"nonsmooth" => "warn" | "error" | "ignore"` in `opts`, `"warn"` by
-default, selects the effect; the package removes the option before CasADi reads `opts`.
-When `build_function` replaces such an integrator by generated code (see
-[Replace the solvers of CasADi](@ref)), it scans the model again, with the keyword
-`nonsmooth` of [`CasADiCodegen.Solvers`](@ref), also `:warn` by default. The two settings
-are independent, since each acts at its own step, so a model that is known to be right
-needs both set to ignore its switches.
+misses the jump in its own sensitivities too. CasADi does not scan its model; when
+`build_function` replaces such an integrator by generated code (see
+[Replace the solvers of CasADi](@ref)), the package scans the model, with the keyword
+`nonsmooth` of [`CasADiCodegen.Solvers`](@ref), also `:warn` by default.
 
 [`CasADiCodegen.nonsmooth_operations`](@ref) counts the switches in any CasADi function,
 without an integrator, for the inputs that the user chooses. Here a double integrator has
@@ -104,7 +100,7 @@ import SciMLBase
 const C = CasADiCodegen.C
 
 x, p = SX.sym("x", 2), SX.sym("p")
-ode = vertcat(x[2], C.if_else(x[1] < 1, SX(1.0), SX(-1.0)) * min(p, 2))
+ode = vcat(x[2], C.if_else(x[1] < 1, SX(1.0), SX(-1.0)) * min(p, 2))
 rhs = CasadiFunction("rhs", [x, p], [ode], ["x", "p"], ["ode"])
 CasADiCodegen.nonsmooth_operations(rhs; inputs = "x"), CasADiCodegen.nonsmooth_operations(rhs; inputs = "p")
 ```
@@ -119,7 +115,7 @@ adaptive step size of the solver resolves the switch. Here the thrust is +1 belo
 ``x = 1`` and -1 above, written with `if_else`:
 
 ```@example disc
-written = Dict("x" => x, "ode" => vertcat(x[2], C.if_else(x[1] < 1, SX(1.0), SX(-1.0))))
+written = Dict("x" => x, "ode" => vcat(x[2], C.if_else(x[1] < 1, SX(1.0), SX(-1.0))))
 F = integrator("F", Vern9(), written, 0.0, 2.0; nonsmooth = :ignore, abstol = 1e-12, reltol = 1e-12)
 
 function fd_error(F)
@@ -150,7 +146,7 @@ without `modes`:
 
 ```@example disc
 m = SX.sym("m")
-switched = Dict("x" => x, "ode" => vertcat(x[2], m))
+switched = Dict("x" => x, "ode" => vcat(x[2], m))
 G = integrator("G", Vern9(), switched, 0.0, 2.0; modes = m => 1 - x[1], switches = 2, abstol = 1e-12, reltol = 1e-12)
 fd_error(G)
 ```
@@ -210,7 +206,7 @@ so they are called with the prefix `CasADiCodegen.`; `smooth_sign(s, ε)` is
 
 ```@example disc
 ε = SX.sym("width")
-model = Dict("x" => x, "p" => ε, "ode" => vertcat(x[2], CasADiCodegen.smooth_sign(1 - x[1], ε)))
+model = Dict("x" => x, "p" => ε, "ode" => vcat(x[2], CasADiCodegen.smooth_sign(1 - x[1], ε)))
 nothing # hide
 ```
 
@@ -264,7 +260,7 @@ the initial velocity as the unknown:
 ```@example disc
 H = integrator("H", Vern9(), model, 0.0, 2.0; abstol = 1e-10, reltol = 1e-10)
 v0, width = MX.sym("v0"), MX.sym("width")
-residual = CasadiFunction("residual", [v0, width], [H(vertcat(0, v0), width)[1] - 1.2])
+residual = CasadiFunction("residual", [v0, width], [H(vcat(0, v0), width)[1] - 1.2])
 problem = SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(residual), [0.0], [1.0])
 path = CasADiCodegen.natural_continuation(problem, SimpleNewtonRaphson(), [1.0, 0.1, 0.01, 1e-3];
                                           parameter = :width)

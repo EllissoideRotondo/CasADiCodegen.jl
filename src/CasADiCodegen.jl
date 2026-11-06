@@ -1,46 +1,34 @@
 """
     CasADiCodegen
 
-The official CasADi front end for Julia, plus Julia code generation.
+Julia code generation for CasADi functions.
 
-The module includes the SWIG-generated front end that ships with CasADi;
-`CasADiCodegen.C` is the generated module. It has four changes: a number in a Dict of
-options reaches CasADi with its type, where the generated code makes it a `bool`;
-`der(dae, x)` of a `DaeBuilder` declares the differential state `x`, where the generated
-code only reads an existing derivative; `jacobian` of a graph with an integrator with
-an event function gives the Jacobian of forward directions, where CasADi gives a wrong
-one; and `integrator` with a plugin name warns about a model that switches on the state,
-with the option `"nonsmooth"`. The package adds
-`build_function` and `generate_julia`, which turn a CasADi `Function` into
+The package works with CasADiNative.jl, the official Julia front end of CasADi, and
+exports its names (`SX`, `MX`, `jacobian`, ...); `CasADiCodegen.C` is the generated module
+of the front end. `build_function` and `generate_julia` turn a CasADi `Function` into
 plain Julia code.
 """
 module CasADiCodegen
 
-import CasADi_jll
-import CasADiSWIG_jll
-import Libdl
+import CasADiNative
+using CasADiNative
 import LinearAlgebra
-import OpenBLAS32_jll
 using PrecompileTools: @compile_workload
 
-# The plugins of CasADi (Ipopt, Bonmin) call the LP64 BLAS through libblastrampoline,
-# which Julia loads with an ILP64 BLAS only; with no LP64 one they compute garbage.
-function __init__()
-    if !Base.any(lib -> lib.interface == :lp64, LinearAlgebra.BLAS.lbt_get_config().loaded_libs)
-        LinearAlgebra.BLAS.lbt_forward(OpenBLAS32_jll.libopenblas_path)
-    end
-    @assert Base.any(lib -> lib.interface == :lp64, LinearAlgebra.BLAS.lbt_get_config().loaded_libs)
-end
+"The generated module of the front end, with every function and type of CasADi."
+const C = CasADiNative.C
+const Function = CasADiNative.Function
+const CasadiFunction = C.Function
 
-# The official front end: the generated module `casadi`, its alias `C`, the
-# convenience layer and its exports (`SX`, `MX`, `jacobian`, ...), with the changes
-# of front_end.jl.
-include("options.jl")
-include("front_end.jl")
-Base.include_dependency(CasADiSWIG_jll.casadi_native_body)
-Base.include_dependency(CasADiSWIG_jll.casadi_jl)
-include(typed_front_end, CasADiSWIG_jll.casadi_native_body)
-SHAPED_ZEROS[] == 2 || throw(AssertionError("$(SHAPED_ZEROS[]) methods zero(::T) and one(::T) of the front end were found, not 2; the front end has changed"))
+for name in names(CasADiNative)
+    name === :CasADiNative || @eval export $name
+end
+# The other names of the front end, for qualified access: `CasADiCodegen.densify`.
+for name in names(CasADiNative; all = true)
+    text = string(name)
+    (isempty(text) || text[1] in ('_', '#', '@') || name in (:eval, :include) || isdefined(@__MODULE__, name)) && continue
+    @eval const $name = CasADiNative.$name
+end
 
 include("codegen.jl")
 

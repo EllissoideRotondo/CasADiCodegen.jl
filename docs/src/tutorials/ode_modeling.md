@@ -150,8 +150,8 @@ end
 t = SX.sym("t")
 lag_1 = first_order_lag("lag_1", 1.5)
 lag_2 = first_order_lag("lag_2", lag_1.x)
-connected = CasadiFunction("connected", [vertcat(lag_1.x, lag_2.x), vertcat(lag_1.τ, lag_2.τ), t],
-                           [vertcat(lag_1.dx, lag_2.dx)])
+connected = CasadiFunction("connected", [vcat(lag_1.x, lag_2.x), vcat(lag_1.τ, lag_2.τ), t],
+                           [vcat(lag_1.dx, lag_2.dx)])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(connected), [-0.5, 1.0], (0.0, 10.0), [2.0, 4.0])
 solution = SciMLBase.solve(problem, Tsit5())
 solution[:lag_2_x][end]
@@ -212,8 +212,8 @@ Lorenz system:
 ```@example ode
 x, vx, y, z, t = SX.sym("x"), SX.sym("vx"), SX.sym("y"), SX.sym("z"), SX.sym("t")
 σ, ρ, β = SX.sym("σ"), SX.sym("ρ"), SX.sym("β")
-lorenz = CasadiFunction("lorenz", [vertcat(x, vx, y, z), vertcat(σ, ρ, β), t],
-                        [vertcat(vx, σ * (y - x), x * (ρ - z) - y, x * y - β * z)])
+lorenz = CasadiFunction("lorenz", [vcat(x, vx, y, z), vcat(σ, ρ, β), t],
+                        [vcat(vx, σ * (y - x), x * (ρ - z) - y, x * y - β * z)])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(lorenz), [1.0, 2.0, 0.0, 0.0], (0.0, 100.0),
                                [28.0, 10.0, 8 / 3])
 solution = SciMLBase.solve(problem, Tsit5())
@@ -244,8 +244,8 @@ using Random: Xoshiro
 
 x, y, t = SX.sym("x"), SX.sym("y"), SX.sym("t")
 α, β, γ, δ = SX.sym("α"), SX.sym("β"), SX.sym("γ"), SX.sym("δ")
-lotka_volterra = CasadiFunction("lotka_volterra", [vertcat(x, y), vertcat(α, β, γ, δ), t],
-                                [vertcat((α - β * y) * x, (δ * x - γ) * y)])
+lotka_volterra = CasadiFunction("lotka_volterra", [vcat(x, y), vcat(α, β, γ, δ), t],
+                                [vcat((α - β * y) * x, (δ * x - γ) * y)])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(lotka_volterra), [1.0, 1.0], (0.0, 10.0),
                                [1.5, 1.0, 3.0, 1.0])
 times = 0.0:0.1:10.0

@@ -28,7 +28,7 @@ end
 @testset "integrator with a variable step" begin
     x, p, u, t = MX.sym("x", 2), MX.sym("p"), MX.sym("u", 1, 3), MX.sym("t")
     control = MX.sym("c")
-    dae = Dict("x" => x, "p" => p, "u" => control, "t" => t, "ode" => C.vertcat([x[2], -p * C.sin(x[1]) + control * t]), "quad" => C.dot(x, x))
+    dae = Dict("x" => x, "p" => p, "u" => control, "t" => t, "ode" => vcat(x[2], -p * C.sin(x[1]) + control * t), "quad" => C.dot(x, x))
     rule = C.integrator("rule", "cvodes", dae, 0.0, [0.5, 1.0, 2.0])
     run(x0, parameter, controls) = rule(x0, MX(0, 1), parameter, controls, MX(), MX(), MX())
     final, quadrature = run(x, p, u)[1], run(x, p, u)[3]
@@ -39,7 +39,7 @@ end
     reached = fine(x, MX(0, 1), p, u, MX(), MX(), MX())
     cost(final, quadrature) = C.sumsqr(final) + quadrature[3]
     reference = CasADiCodegen.Function("reference", [x, p, u], [reached[1], reached[3], C.jacobian(reached[1], x), C.jacobian(reached[3], p),
-                                                                C.jacobian(reached[1][:, 3], u), C.gradient(cost(reached[1], reached[3]), C.vertcat([x, p, C.vec(u)]))])
+                                                                C.jacobian(reached[1][:, 3], u), C.gradient(cost(reached[1], reached[3]), vcat(x, p, C.vec(u)))])
     expected = mx_casadi(reference, values)
     solvers = Solvers(ode = PRECISE)
     @test_throws "CasADiCodegen.Solvers(ode = ...)" K.algorithm(f; expand = false)
@@ -49,7 +49,7 @@ end
     plain = CasADiCodegen.Function("plain", [x, p, u], [final])
     @testset "reverse mode" begin
         # The gradient of one number by all arguments, for which CasADi asks the integrator for adjoint sensitivities.
-        h = CasADiCodegen.Function("h", [x, p, u], [C.gradient(cost(final, quadrature), C.vertcat([x, p, C.vec(u)]))])
+        h = CasADiCodegen.Function("h", [x, p, u], [C.gradient(cost(final, quadrature), vcat(x, p, C.vec(u)))])
         @test evaluated(native(h; solvers), h, values)[1] ≈ expected[6] rtol = 1e-8
     end
     # The tolerances of the integrator of CasADi are those of the solver when the user gives none.
@@ -81,7 +81,7 @@ end
 
 @testset "rootfinder" begin
     a, x, b = MX.sym("a"), MX.sym("x", 2), MX.sym("b", C.Sparsity.diag(2))
-    residual = CasADiCodegen.Function("r", [a, x, b], [x * a, x^3 + C.mtimes(b, x) - a])
+    residual = CasADiCodegen.Function("r", [a, x, b], [x * a, x .^ 3 + C.mtimes(b, x) - a])
     values = [[2.0], [1.0, 1.0], [0.5, 3.0]]
     @testset "$plugin" for plugin in ("kinsol", "fast_newton")
         finder = C.rootfinder("finder", plugin, residual, Dict("implicit_input" => true, "implicit_output" => true, "abstol" => 1e-13))
@@ -105,7 +105,7 @@ end
     # The Hessian through an integrator with a variable step: CasADi asks for the forward derivative of the adjoint sensitivities.
     free = C.integrator("free", "cvodes", Dict("x" => x, "p" => p, "ode" => -p * x), 0.0, 1.0)
     cost = C.sumsqr(free(x, MX(0, 1), p, MX(0, 1), MX(), MX(), MX())[1])
-    f = CasADiCodegen.Function("f", [x, p], [C.gradient(cost, p), C.densify(CasADiCodegen.hessian(cost, C.vertcat([x, p])))])
+    f = CasADiCodegen.Function("f", [x, p], [C.gradient(cost, p), C.densify(CasADiCodegen.hessian(cost, vcat(x, p))[1])])
     slope, curve = evaluated(native(f; solvers = Solvers(ode = PRECISE)), f, values)
     decay = exp(-3.4)
     @test slope ≈ exact rtol = 1e-10
@@ -114,8 +114,8 @@ end
 
 @testset "integrator of CasADi with an event function" begin
     x, e, g = MX.sym("x", 2), MX.sym("e"), MX.sym("g")
-    dae = Dict("x" => x, "p" => e, "u" => g, "ode" => C.vertcat([x[2], -g]), "quad" => x[2]^2, "zero" => x[1])
-    transition = C.Function("transition", Dict("x" => x, "p" => e, "post_x" => C.vertcat([x[1], -e * x[2]])), C.event_in(), C.event_out())
+    dae = Dict("x" => x, "p" => e, "u" => g, "ode" => vcat(x[2], -g), "quad" => x[2]^2, "zero" => x[1])
+    transition = C.Function("transition", Dict("x" => x, "p" => e, "post_x" => vcat(x[1], -e * x[2])), C.event_in(), C.event_out())
     times = [0.6, 1.4, 2.5]
     ball = C.integrator("ball", "cvodes", dae, 0.0, times, Dict("transition" => transition))
     p, u = MX.sym("p"), MX.sym("u", 1, 3)
@@ -123,8 +123,8 @@ end
     final, quadrature = C.vec(results[1]), C.vec(results[3])
     # CasADi gives the Jacobian of an integrator with events the sparsity pattern of the model without them, so the
     # Jacobian is that of directional derivatives, one per argument.
-    arguments = C.vertcat([x, p, C.vec(u)])
-    slopes = C.jtimes(C.vertcat([final, quadrature]), arguments, MX(C.DM([Float64(i == j) for i in 1:6, j in 1:6])))
+    arguments = vcat(x, p, C.vec(u))
+    slopes = C.jtimes(vcat(final, quadrature), arguments, MX(C.DM([Float64(i == j) for i in 1:6, j in 1:6])))
     f = CasADiCodegen.Function("f", [x, p, u], [final, quadrature, C.densify(slopes)])
     # Four impacts, two of them in the last interval.
     values = [[1.5, 2.0], [0.8], [9.81, 5.0, 12.0]]
@@ -135,9 +135,8 @@ end
     # The Jacobian is that of the forward sensitivities, whose states jump at each impact.
     @test all_agree(evaluated(native(f; solvers), f, values), expected; rtol = 1e-8)
     @testset "jacobian of a graph with the integrator is that of forward directions" begin
-        slopes_jacobian = CasADiCodegen.Function("slopes_jacobian", [x, p, u], [C.densify(jacobian(C.vertcat([final, quadrature]), arguments))])
+        slopes_jacobian = CasADiCodegen.Function("slopes_jacobian", [x, p, u], [C.densify(jacobian(vcat(final, quadrature), arguments))])
         @test all_agree(evaluated(native(slopes_jacobian; solvers), slopes_jacobian, values), expected[3:3]; rtol = 1e-8)
-        @test_throws "jtimes" CasADiCodegen.Function("whole", [x, p, u], [final]).jacobian()
     end
     plain = CasADiCodegen.Function("plain", [x, p, u], [final])
     @testset "a written module has the solver" begin
@@ -150,7 +149,7 @@ end
     # As the integrator of CasADi, a call stops after `max_events` events, 20 by default: an elastic ball under a strong
     # gravity hits the ground about 30 times.
     @test_throws "more than 20 events" evaluated(native(plain; solvers), plain, [values[1], [1.0], fill(2000.0, 3)])
-    # An event exactly on an output time, where CasADi 3.8.1 misses it: the generated code applies it and returns
+    # An event exactly on an output time, where CasADi 3.8.2 misses it: the generated code applies it and returns
     # the state after it at that time, the exact solution of N' = 100 - N with N += 50 at t = 10.
     N, M, τ = MX.sym("N"), MX.sym("M"), MX.sym("t")
     injection = C.Function("transition", Dict("x" => N, "p" => M, "post_x" => N + M), C.event_in(), C.event_out())
@@ -176,7 +175,7 @@ dae_exact(x0, rate) = (final = x0[1] * exp(-rate); [final, x0[2] + x0[1] * (1 - 
 # integrator and the event each compile another solver; each part is the one case of its behavior.
 @testset "integrator of this package with algebraic states" begin
     y, p = MX.sym("y", 3), MX.sym("p")
-    model = Dict("x" => y, "p" => p, "ode" => C.vertcat([-y[3], y[1], y[3] - p * y[1]]))
+    model = Dict("x" => y, "p" => p, "ode" => vcat(-y[3], y[1], y[3] - p * y[1]))
     rule = CasADiCodegen.integrator("stiff", Rodas5P(), model, 0.0, 1.0; mass = [1.0, 1.0, 0.0], abstol = 1e-11, reltol = 1e-11, specialize = SciMLBase.AutoSpecialize)
     f = CasADiCodegen.Function("f", [y, p], [rule(y, p), C.jacobian(rule(y, p), y), C.jacobian(rule(y, p), p)])
     g = native(f)
@@ -195,14 +194,14 @@ dae_exact(x0, rate) = (final = x0[1] * exp(-rate); [final, x0[2] + x0[1] * (1 - 
     @testset "adjoint equations" begin
         backward = CasADiCodegen.integrator("stiff_a", Rodas5P(), model, 0.0, 1.0; mass = [1.0, 1.0, 0.0], adjoint = true, abstol = 1e-11, reltol = 1e-11, specialize = SciMLBase.AutoSpecialize)
         weights = [0.7, -1.3, 2.1]
-        h = CasADiCodegen.Function("h", [y, p], [C.gradient(C.dot(MX(C.DM(weights)), backward(y, p)), C.vertcat([y, p]))])
+        h = CasADiCodegen.Function("h", [y, p], [C.gradient(C.dot(MX(C.DM(weights)), backward(y, p)), vcat(y, p))])
         gradient = evaluated(native(h), h, [[0.4, -0.3, 0.2], [1.7]])[1]
         # The guess of the algebraic state has no effect on the result.
         @test gradient ≈ [by_state' * weights; 0.0; sum(by_rate .* weights)] rtol = 1e-7 atol = 1e-9
         # With free times the gradient by the final time is the rate of the weighted sum, and that by the initial time its opposite.
         free = CasADiCodegen.integrator("stiff_f", Rodas5P(), model; mass = [1.0, 1.0, 0.0], adjoint = true, abstol = 1e-11, reltol = 1e-11, specialize = SciMLBase.AutoSpecialize)
         ta, tb = MX.sym("ta"), MX.sym("tb")
-        k = CasADiCodegen.Function("k", [y, p, ta, tb], [C.gradient(C.dot(MX(C.DM(weights)), free(y, p, ta, tb)), C.vertcat([ta, tb]))])
+        k = CasADiCodegen.Function("k", [y, p, ta, tb], [C.gradient(C.dot(MX(C.DM(weights)), free(y, p, ta, tb)), vcat(ta, tb))])
         final = dae_exact([0.4, -0.3], 1.7)
         rate = sum([-final[3], final[1], -1.7 * final[3]] .* weights)
         @test evaluated(native(k), k, [[0.4, -0.3, 0.2], [1.7], [0.5], [1.5]])[1] ≈ [-rate, rate] rtol = 1e-7
@@ -217,18 +216,18 @@ dae_exact(x0, rate) = (final = x0[1] * exp(-rate); [final, x0[2] + x0[1] * (1 - 
     # With free times the derivative of an algebraic state by the final time comes from the algebraic equation, not from its residual.
     arc = CasADiCodegen.integrator("stiff", Rodas5P(), model; mass = [1.0, 1.0, 0.0], abstol = 1e-11, reltol = 1e-11, specialize = SciMLBase.AutoSpecialize)
     t0, tf = MX.sym("t0"), MX.sym("tf")
-    m = CasADiCodegen.Function("m", [y, p, t0, tf], [C.jacobian(arc(y, p, t0, tf), C.vertcat([y, t0, tf]))])
+    m = CasADiCodegen.Function("m", [y, p, t0, tf], [C.jacobian(arc(y, p, t0, tf), vcat(y, t0, tf))])
     final = dae_exact([0.4, -0.3], 1.7)
     rate = [-final[3], final[1], -1.7 * final[3]]
     @test reshape(evaluated(native(m), m, [[0.4, -0.3, 0.2], [1.7], [0.5], [1.5]])[1], 3, 5) ≈ [by_state zeros(3) -rate rate] rtol = 1e-7 atol = 1e-9
     # An event function of the algebraic state z = r x, with a jump of x, so that z no longer satisfies its equation after it.
     @testset "an event" begin
         w = MX.sym("w", 2)
-        decay = Dict("x" => w, "p" => p, "ode" => C.vertcat([-w[2], w[2] - p * w[1]]), "zero" => w[2] - 0.55, "transition" => C.vertcat([2w[1], w[2]]))
+        decay = Dict("x" => w, "p" => p, "ode" => vcat(-w[2], w[2] - p * w[1]), "zero" => w[2] - 0.55, "transition" => vcat(2w[1], w[2]))
         refill = CasADiCodegen.integrator("refill", Rodas5P(), decay; mass = [1.0, 0.0], events = 2, terminal = false, abstol = 1e-11, reltol = 1e-11,
                                           specialize = SciMLBase.AutoSpecialize)
         out = refill(w, p, MX(0.0), MX(1.6))
-        n = CasADiCodegen.Function("n", [w, p], [out[1], out[2], C.densify(C.jacobian(C.vertcat([out[1], out[2]]), C.vertcat([w, p])))])
+        n = CasADiCodegen.Function("n", [w, p], [out[1], out[2], C.densify(C.jacobian(vcat(out[1], out[2]), vcat(w, p)))])
         onset(x0, rate) = log(rate * x0 / 0.55) / rate
         exact(v) = (x = refilled(1.6, v[1], v[3]); [x, v[3] * x, onset(v[1], v[3]), onset(v[1], v[3]) + log(2) / v[3]])
         at = [1.0, 0.3, 1.1]                      # the second number is a guess of the algebraic state
@@ -245,7 +244,7 @@ end
 
 @testset "integrator of CasADi with algebraic states" begin
     x, z, p = MX.sym("x", 2), MX.sym("z"), MX.sym("p")
-    rule = C.integrator("rule", "idas", Dict("x" => x, "z" => z, "p" => p, "ode" => C.vertcat([-z, x[1]]), "alg" => z - p * x[1], "quad" => z), 0.0, [0.5, 1.0])
+    rule = C.integrator("rule", "idas", Dict("x" => x, "z" => z, "p" => p, "ode" => vcat(-z, x[1]), "alg" => z - p * x[1], "quad" => z), 0.0, [0.5, 1.0])
     results = rule(x, z, p, MX(0, 1), MX(), MX(), MX())
     f = CasADiCodegen.Function("f", [x, z, p], [results[1], results[2], results[3], C.jacobian(results[1][:, 2], p), C.jacobian(results[2][:, 2], x)])
     solvers = Solvers(dae = DAE_SOLVER)

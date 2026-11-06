@@ -18,7 +18,7 @@ using OrdinaryDiffEqVerner: Vern9
 
 x, mu = MX.sym("x", 4), MX.sym("mu")
 r3 = (x[1]^2 + x[2]^2)^1.5
-ode = vertcat(x[3], x[4], -mu * x[1] / r3, -mu * x[2] / r3)
+ode = vcat(x[3], x[4], -mu * x[1] / r3, -mu * x[2] / r3)
 model = Dict("x" => x, "p" => mu, "ode" => ode)
 nothing # hide
 ```
@@ -89,7 +89,7 @@ once.
 
 ```@example ode
 A = integrator("A", Vern9(), model, 0.0, 3.0; adjoint = true, abstol = 1e-13, reltol = 1e-13)
-cost = CasadiFunction("cost", [x0, p], [gradient(CasADiCodegen.C.sumsqr(A(x0, p)), vertcat(x0, p))])
+cost = CasadiFunction("cost", [x0, p], [gradient(CasADiCodegen.C.sumsqr(A(x0, p)), vcat(x0, p))])
 build_function(cost; expression = Val{false})[1]([1.0, 0.0, 0.0, 1.0], [1.0])
 ```
 
@@ -156,7 +156,7 @@ its diagonal: 0 for an algebraic state and 1 for the other states. The rows of
 using OrdinaryDiffEqRosenbrock: Rodas5P
 
 y, k = MX.sym("y", 3), MX.sym("k")                       # y[3] is algebraic: y[3] = k y[1]
-model = Dict("x" => y, "p" => k, "ode" => vertcat(-y[3], y[1], y[3] - k * y[1]))
+model = Dict("x" => y, "p" => k, "ode" => vcat(-y[3], y[1], y[3] - k * y[1]))
 stiff = integrator("stiff", Rodas5P(), model, 0.0, 1.0; mass = [1.0, 1.0, 0.0], abstol = 1e-11, reltol = 1e-11)
 ```
 

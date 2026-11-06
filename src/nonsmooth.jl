@@ -343,8 +343,7 @@ function check_model(name::AbstractString, dae, nonsmooth::Symbol; modes = nothi
     check_nonsmooth(label, f, place("x"), place("t"), place("p"); nonsmooth, exclude = modes === nothing ? Int[] : [length(symbols)])
 end
 
-"The remedies that the warning of an integrator of CasADi names."
-const CASADI_REMEDY = "Write the switch as an event function (\"zero\" and \"transition\"), smooth it with `CasADiCodegen.smoothed`, or pass the option \"nonsmooth\" => \"ignore\"."
+"The remedies that the warning of a replaced integrator of CasADi names."
 const REPLACED_REMEDY = "Write the switch as an event function (\"zero\" and \"transition\"), smooth it with `CasADiCodegen.smoothed`, or pass `nonsmooth = :ignore` to `CasADiCodegen.Solvers`."
 
 """
@@ -362,48 +361,3 @@ function check_casadi_model(label::AbstractString, dae::C.Function; nonsmooth::S
     outputs = [o for o in 0:C.n_out(dae)-1 if C.name_out(dae, o) in ("ode", "alg", "quad")]
     check_nonsmooth(label, with_outputs(dae, outputs), place("x", "z"), place("t"), place("p", "u"); nonsmooth, remedy)
 end
-
-"""
-    check_native_integrator(name, dae, options) -> options
-
-Read the option `"nonsmooth"` (`"warn"`, the default, `"error"` or `"ignore"`) of the
-integrator `name` of CasADi, check the model `dae` (a dictionary of SX or MX, or a
-function) with it, and return the options without that key, which CasADi does not know.
-The front end calls it first in each method of `integrator` with a plugin name.
-"""
-function check_native_integrator(name::AbstractString, dae, options)
-    label = "integrator \"$name\""
-    given = options isa AbstractDict ? [k for k in keys(options) if string(k) == "nonsmooth"] : []
-    setting = isempty(given) ? :warn : Symbol(string(options[only(given)]))
-    @requires setting in NONSMOOTH_SETTINGS "$label: the option \"nonsmooth\" must be \"warn\", \"error\" or \"ignore\"; got $(repr(options[only(given)]))"
-    rest = isempty(given) ? options : Dict{String,Any}(string(k) => v for (k, v) in options if string(k) != "nonsmooth")
-    setting === :ignore && return rest
-    model = casadi_model(dae)
-    model === nothing || check_casadi_model(label, model; nonsmooth = setting, remedy = CASADI_REMEDY)
-    rest
-end
-
-"""
-    casadi_model(dae) -> CasADiCodegen.Function or nothing
-
-The DAE function of the model `dae` of an integrator of CasADi, with the inputs `"t"`,
-`"x"`, `"z"`, `"p"`, `"u"` and the results `"ode"`, `"alg"`, `"quad"` that it has; `nothing`
-when `dae` is neither a function nor a dictionary of SX or MX, or when CasADi cannot make
-the function, an error that CasADi reports when it builds the integrator.
-"""
-casadi_model(dae::C.Function) = dae
-function casadi_model(dae::AbstractDict)
-    entries = Dict(string(k) => v for (k, v) in dae)
-    x = get(entries, "x", nothing)
-    x isa Symbolic || return nothing
-    keys_in = filter(key -> haskey(entries, key) && entries[key] isa typeof(x), ["t", "x", "z", "p", "u"])
-    outputs = filter(key -> haskey(entries, key) && entries[key] isa typeof(x), ["ode", "alg", "quad"])
-    isempty(outputs) && return nothing
-    try
-        Front.Function("dae", [entries[key] for key in keys_in], [entries[key] for key in outputs], keys_in, outputs)
-    catch err
-        err isa InterruptException && rethrow()
-        nothing
-    end
-end
-casadi_model(dae) = nothing

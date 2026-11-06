@@ -35,8 +35,8 @@ const OP_BUILDERS = Dict{Symbol,Tuple{Int,Function}}(
     :OP_ASIN => (1, x -> C.asin(x)), :OP_ACOS => (1, x -> C.acos(x)), :OP_ATAN => (1, x -> C.atan(x)),
     :OP_LT => (2, (x, y) -> C.lt(x, y)), :OP_LE => (2, (x, y) -> C.le(x, y)),
     :OP_EQ => (2, (x, y) -> C.eq(x, y)), :OP_NE => (2, (x, y) -> C.ne(x, y)),
-    :OP_NOT => (1, x -> C.not(x)), :OP_AND => (2, (x, y) -> C.and(x, y)),
-    :OP_OR => (2, (x, y) -> C.or(x, y)),
+    :OP_NOT => (1, x -> C.logic_not(x)), :OP_AND => (2, (x, y) -> C.logic_and(x, y)),
+    :OP_OR => (2, (x, y) -> C.logic_or(x, y)),
     :OP_FLOOR => (1, x -> C.floor(x)), :OP_CEIL => (1, x -> C.ceil(x)),
     :OP_FMOD => (2, (x, y) -> C.fmod(x, y)), :OP_FABS => (1, x -> C.abs(x)),
     :OP_SIGN => (1, x -> C.sign(x)), :OP_COPYSIGN => (2, (x, y) -> C.copysign(x, y)),
@@ -69,4 +69,4 @@ mx_casadi(f, nz) = casadi_nonzeros(
 # Fixed inputs with distinct values; the front end turns -0.0 into 0.0, so none is zero.
 mx_inputs(f) = [[0.37 * k - 1.3 + 0.11 * i for k in 1:n] for (i, n) in enumerate(nnz_in(f))]
 
-dense_values(m) = Vector{Float64}(C.nonzeros(C.densify(m)))
+dense_values(m) = C.nonzeros(C.densify(m))

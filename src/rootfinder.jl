@@ -70,8 +70,5 @@ function implicit_function(name::AbstractString, f::C.Function, solve)
 
     shapes_in = [C.size2(sp) == 1 ? (C.size1(sp),) : (C.size1(sp), C.size2(sp)) for sp in patterns]
     call = JuliaCall(String(name), solve, length(shapes_in), shapes_in, [(n,)], map(prod, shapes_in), [n])
-    proxy = Front.callback(SymbolicCallback(call, solve, jacobian); name = String(name))
-    F = Front.Function(proxy)
-    JULIA_CALLS[C.__hash__(F)] = (call, proxy)
-    F
+    recorded_function(SymbolicCallback(call, solve, jacobian))
 end

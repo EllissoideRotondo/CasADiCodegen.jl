@@ -280,7 +280,7 @@ using OrdinaryDiffEqVerner: Vern9
 
 x, mu = MX.sym("x", 4), MX.sym("mu")
 r3 = (x[1]^2 + x[2]^2)^1.5
-model = Dict("x" => x, "p" => mu, "ode" => vertcat(x[3], x[4], -mu * x[1] / r3, -mu * x[2] / r3))
+model = Dict("x" => x, "p" => mu, "ode" => vcat(x[3], x[4], -mu * x[1] / r3, -mu * x[2] / r3))
 F = integrator("F", Vern9(), model, 0.0, 3.0; abstol = 1e-13, reltol = 1e-13)
 
 x0, p = MX.sym("x0", 4), MX.sym("p")
@@ -1302,7 +1302,7 @@ using CasADiCodegen
 import SciMLBase
 
 x, v, k, t = SX.sym("x"), SX.sym("v"), SX.sym("k"), SX.sym("t")
-rhs = CasadiFunction("rhs", [vertcat(x, v), k, t], [vertcat(v, -k * x), (v^2 + k * x^2) / 2],
+rhs = CasadiFunction("rhs", [vcat(x, v), k, t], [vcat(v, -k * x), (v^2 + k * x^2) / 2],
                      ["u", "k", "t"], ["du", "energy"])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [1.0, 0.0], (0.0, pi), [4.0])
 # After `solution = solve(problem, Tsit5())`: solution[:x], solution[:energy]
@@ -1380,8 +1380,8 @@ using CasADiCodegen
 import SciMLBase
 
 x, mu, sigma, t = SX.sym("x"), SX.sym("mu"), SX.sym("sigma"), SX.sym("t")
-drift = CasadiFunction("drift", [x, vertcat(mu, sigma), t], [mu * x])
-noise = CasadiFunction("noise", [x, vertcat(mu, sigma), t], [sigma * x])
+drift = CasadiFunction("drift", [x, vcat(mu, sigma), t], [mu * x])
+noise = CasadiFunction("noise", [x, vcat(mu, sigma), t], [sigma * x])
 f = SciMLBase.SDEFunction(drift, noise)          # geometric Brownian motion
 ```
 """
@@ -1877,9 +1877,9 @@ function initialization_data(f::CasADiCodegen.Function, conditions::CasADiCodege
         p[i] = T.sym(named ? string(parameters[i]) : "q_$i")
     end
     t = T.sym("t")
-    arguments = [CasADiCodegen.vertcat(u...), CasADiCodegen.vertcat(p...), t][1:k]
+    arguments = [vcat(u...), vcat(p...), t][1:k]
     call(g) = (r = g(arguments...); CasADiCodegen.densify(C.n_out(g) == 1 ? r : r[1]))
-    column(parts) = isempty(parts) ? T(0, 1) : CasADiCodegen.vertcat(parts...)
+    column(parts) = isempty(parts) ? T(0, 1) : vcat(parts...)
     value, extra = call(f), call(conditions)
     equations = column([[value[i] for i in algebraic_rows(mass)]; [extra[i] for i in 1:C.size1(C.sparsity(extra))]])
     unknowns = column([u; p[places]])
@@ -2003,7 +2003,7 @@ function SciMLBase.OptimizationFunction(objective::CasADiCodegen.Function, const
     call(name, expression, new) = Allocating{2}(sciml_function(name, arguments, expression, true; codegen...), new)
     # A prototype for each sparse matrix; the dense form has none.
     prototype(name, M) = sparse ? (; name => sparse_prototype("OptimizationFunction", M)) : (;)
-    H = hess ? CasADiCodegen.hessian(cost, x) : nothing
+    H = hess ? first(CasADiCodegen.hessian(cost, x)) : nothing
     given = (; grad = call("grad", CasADiCodegen.gradient(cost, x), Val((C.size1(x),))), hess = hess ? call("hess", H, result(H)) : nothing,
              (hess ? prototype(:hess_prototype, H) : (;))...)
     value = nothing
@@ -2015,7 +2015,7 @@ function SciMLBase.OptimizationFunction(objective::CasADiCodegen.Function, const
         given = (; given..., cons = call("cons", value, Val((C.size1(value),))), cons_j = call("cons_j", J, result(J)), prototype(:cons_jac_prototype, J)...)
         if hess && !lag_h
             # The dense form has m·n² entries: with `sparse` only the stored values are written.
-            each = [CasADiCodegen.hessian(value[j], x) for j in 1:size(value, 1)]
+            each = [first(CasADiCodegen.hessian(value[j], x)) for j in 1:size(value, 1)]
             cons_h = inplace("cons_h", arguments, sparse ? each : map(CasADiCodegen.densify, each); codegen...)
             given = (; given..., cons_h = Allocating{2}(Hessians{n,typeof(cons_h)}(cons_h), sparse ? map(result, each) : Each{length(each)}(result(each[1]))),
                      (sparse ? (; cons_hess_prototype = [sparse_prototype("OptimizationFunction", Hj) for Hj in each]) : (;))...)
@@ -2024,7 +2024,7 @@ function SciMLBase.OptimizationFunction(objective::CasADiCodegen.Function, const
     if lag_h
         T = typeof(x)
         σ, μ = T.sym("sigma"), T.sym("mu", value === nothing ? 0 : size(value, 1))
-        upper = C.triu(CasADiCodegen.hessian(value === nothing ? σ * cost : σ * cost + C.dot(μ, value), x))
+        upper = C.triu(first(CasADiCodegen.hessian(value === nothing ? σ * cost : σ * cost + C.dot(μ, value), x)))
         lagrange = G.build_function(CasADiCodegen.Function("sciml_lag_h", [arguments..., σ, μ], [upper]);
                                     expression = Val{false}, nonzeros = true, codegen...)
         given = (; given..., lag_h = LagrangeHessian{n,typeof(lagrange)}(lagrange), prototype(:lag_hess_prototype, upper)...)
@@ -2159,7 +2159,7 @@ function SciMLBase.ODEProblem(dae::CasADiCodegen.C.DaeBuilder, tspan::Union{Noth
     # A model that does not use the time has a time of no element.
     time = C.nnz_in(g, 4) == 0 ? CasADiCodegen.MX(C.sparsity_in(g, 4)) : t
     ode, alg = g(G.part(state, 0, nx), G.part(state, nx, nz), G.part(parameters, 0, np), G.part(parameters, np, nu), time)
-    rhs = CasADiCodegen.Function(name, [state, parameters, t], [CasADiCodegen.vertcat(ode, alg)])
+    rhs = CasADiCodegen.Function(name, [state, parameters, t], [vcat(ode, alg)])
     differential, algebraic, constant, inputs = C.x(dae), C.z(dae), C.p(dae), C.u(dae)
     u0, p0 = C.start(dae, [differential; algebraic]), C.start(dae, [constant; inputs])
     @ensures length(u0) == nx + nz && length(p0) == np + nu "$label: the start values do not have the sizes of the model"

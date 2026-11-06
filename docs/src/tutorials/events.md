@@ -30,7 +30,7 @@ at the height 1:
 
 ```@example events
 s = SX.sym("s", 2)                                        # s = [x, v]
-fall = CasadiFunction("fall", [s], [vertcat(s[2], SX(-9.8))])
+fall = CasadiFunction("fall", [s], [vcat(s[2], SX(-9.8))])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(fall), [1.0, 0.0], (0.0, 5.0))
 nothing # hide
 ```
@@ -82,8 +82,8 @@ not end the integration:
 
 ```@example events
 m = MX.sym("m", 2)
-ball = Dict("x" => m, "ode" => vertcat(m[2], MX(-9.8)), "zero" => m[1],
-            "transition" => vertcat(m[1], -m[2]))
+ball = Dict("x" => m, "ode" => vcat(m[2], MX(-9.8)), "zero" => m[1],
+            "transition" => vcat(m[1], -m[2]))
 bounces = integrator("bounces", Tsit5(), ball; events = 6, terminal = false, direction = -1,
                      abstol = 1e-10, reltol = 1e-10)
 nothing # hide
@@ -99,7 +99,7 @@ function is an array, so the scalars `h`, `t0` and `tf` take vectors of one elem
 
 ```@example events
 h, t0, tf = MX.sym("h"), MX.sym("t0"), MX.sym("tf")
-sf, te = bounces(vertcat(h, MX(0.0)), t0, tf)
+sf, te = bounces(vcat(h, MX(0.0)), t0, tf)
 contact = CasadiFunction("contact", [h, t0, tf], [sf, te, jacobian(te, h)])
 contact_f, contact_f! = build_function(contact; expression = Val{false})
 xf, times, dtimes = contact_f([1.0], [0.0], [5.0])
@@ -133,11 +133,11 @@ inside:
 
 ```@example events
 b = MX.sym("b", 4)                                        # b = [x, y, vx, vy]
-flip_x = vertcat(b[1], b[2], -b[3], b[4])
-flip_y = vertcat(b[1], b[2], b[3], -b[4])
-box = Dict("x" => b, "ode" => vertcat(b[3], b[4], -9.8 - 0.1 * b[3], -0.1 * b[4]),
-           "zero" => vertcat(b[1], b[2] + 1.5, 1.5 - b[2]),
-           "transition" => horzcat(flip_x, flip_y, flip_y))
+flip_x = vcat(b[1], b[2], -b[3], b[4])
+flip_y = vcat(b[1], b[2], b[3], -b[4])
+box = Dict("x" => b, "ode" => vcat(b[3], b[4], -9.8 - 0.1 * b[3], -0.1 * b[4]),
+           "zero" => vcat(b[1], b[2] + 1.5, 1.5 - b[2]),
+           "transition" => hcat(flip_x, flip_y, flip_y))
 nothing # hide
 ```
 

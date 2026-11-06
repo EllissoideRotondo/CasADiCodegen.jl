@@ -4,73 +4,25 @@
 "A CasADi symbolic matrix: scalar graph (`SX`) or matrix graph (`MX`)."
 const Symbolic = Union{SX,MX}
 
-# Functions of `Base` that the front end does not cover. Each maps to the CasADi
-# operation with the same meaning for ordinary numbers.
-for (f, c) in ((:asinh, :asinh), (:acosh, :acosh), (:atanh, :atanh), (:log1p, :log1p),
-               (:expm1, :expm1), (:log10, :log10), (:!, :not))
-    @eval Base.$f(x::Symbolic) = C.$c(x)
-end
+# Functions of `Base` that the front end does not cover, elementwise as `log10` of the
+# front end.
 Base.log2(x::Symbolic) = log(x) / log(2.0)
 Base.exp2(x::T) where {T<:Symbolic} = C.power(convert(T, 2.0), x)
 Base.abs2(x::Symbolic) = C.times(x, x)
 
 """
-    inv(A)
-    inv(A, lsolver)
+    inv(A::MX, lsolver)
 
-Return the inverse of a symbolic square matrix, or the reciprocal of a scalar.
-
-For an `MX` matrix, `inv` of the CasADi front end returns the reciprocal of
-each element. This method takes the inverse from the linear solver `"qr"`, or
-from `lsolver`. CasADi accepts `lsolver` for `MX` only.
-
-Throws `DimensionMismatch` when `A` is not square.
+Return the inverse of the square matrix `A` from the linear solver `lsolver` of CasADi, for
+example `"qr"`. Throws `DimensionMismatch` when `A` is not square.
 """
-function Base.inv(A::Symbolic)
-    C.is_scalar(A) && return 1 / A
-    size(A, 1) == size(A, 2) || throw(DimensionMismatch("the matrix is not square: its size is $(size(A))"))
-    A isa SX ? C.inv(A) : C.inv(A, "qr")
-end
 function Base.inv(A::MX, lsolver::AbstractString)
     size(A, 1) == size(A, 2) || throw(DimensionMismatch("the matrix is not square: its size is $(size(A))"))
     C.inv(A, lsolver)
 end
-"""
-    (f::CasADiCodegen.Function)(arguments...)
-
-Evaluate `f` on its arguments, each a number, a Julia vector or matrix of numbers, a `DM`,
-an `SX` or an `MX`, as the front end does on numbers and CasADi matrices. A Julia array
-becomes a `DM`; the results are those of the call on `DM` arguments.
-"""
-function (f::C.Function)(arguments::Vararg{Union{Real,AbstractVecOrMat{<:Real},C.DM,SX,MX}})
-    f(map(a -> a isa AbstractVector ? C.DM(collect(Float64, a)) : a isa AbstractMatrix ? C.DM(Matrix{Float64}(a)) : a, arguments)...)
-end
-
 SpecialFunctions.erf(x::Symbolic) = C.erf(x)
 SpecialFunctions.erfinv(x::Symbolic) = C.erfinv(x)
 
-for (f, c) in ((:min, :fmin), (:max, :fmax), (:atan, :atan2), (:hypot, :hypot), (:rem, :fmod),
-               (:copysign, :copysign), (:&, :and), (:|, :or), (:!=, :ne))
-    @eval begin
-        Base.$f(x::T, y::T) where {T<:Symbolic} = C.$c(x, y)
-        Base.$f(x::T, y::Real) where {T<:Symbolic} = C.$c(x, convert(T, y))
-        Base.$f(x::Real, y::T) where {T<:Symbolic} = C.$c(convert(T, x), y)
-    end
-end
-
-"""
-    ifelse(condition, a, b)
-
-Return the symbolic selection: `a` where `condition` is not zero, else `b`.
-Both branches are evaluated, as in CasADi `if_else`.
-"""
-Base.ifelse(condition::T, a::Union{T,Real}, b::Union{T,Real}) where {T<:Symbolic} =
-    C.if_else(condition, convert(T, a), convert(T, b))
-
-# The front end exports its own `dot` and `cross`; these make the LinearAlgebra
-# functions of the same name work too.
-LinearAlgebra.dot(a::T, b::T) where {T<:Symbolic} = Front.dot(a, b)
-LinearAlgebra.cross(a::T, b::T) where {T<:Symbolic} = Front.cross(a, b)
 """
     norm(x::Union{SX,MX}, p::Real = 2)
 
@@ -97,7 +49,7 @@ function LinearAlgebra.norm(x::T, p::Real = 2) where {T<:Symbolic}
     # against overflow; a scale that is 0 or infinite is the norm.
     scale = p > 1 ? C.norm_inf(x) : C.mmin(a)
     scaled = scale * C.power(C.sum(C.power(a / scale, T(q))), T(inv(q)))
-    C.if_else(C.or(C.eq(scale, T(0.0)), C.eq(scale, T(Inf))), scale, scaled)
+    C.if_else(C.logic_or(C.eq(scale, T(0.0)), C.eq(scale, T(Inf))), scale, scaled)
 end
 
 """
@@ -133,62 +85,38 @@ shape of `a`; a vector becomes a column.
 """
 casadi_matrix(::Type{T}, a::AbstractVector{<:Real}) where {T} = T(collect(Float64, a))
 casadi_matrix(::Type{T}, a::AbstractMatrix{<:Real}) where {T} = T(Matrix{Float64}(a))
-casadi_matrix(::Type{T}, a::AbstractVector) where {T} = isempty(a) ? T(0, 1) : Front.vertcat(T[Front._ascat(T, e) for e in a])
+casadi_matrix(::Type{T}, a::AbstractVector) where {T} = isempty(a) ? T(0, 1) : C._vertcat(T[graph_element(T, e) for e in a])
 casadi_matrix(::Type{T}, a::AbstractMatrix) where {T} =
-    Front.vertcat(T[Front.horzcat(T[Front._ascat(T, a[i, j]) for j in axes(a, 2)]) for i in axes(a, 1)])
+    C._vertcat(T[C._horzcat(T[graph_element(T, a[i, j]) for j in axes(a, 2)]) for i in axes(a, 1)])
 
-# `zero` and `one` of a matrix, which the front end calls (see `shaped_zero_definitions!`).
-"""
-Return the zero of the shape of `x`, as `zero` of a Julia matrix: the structural zero, or
-for a 1 x 1 `x` the dense scalar 0, which `Float64` converts as a scalar.
-"""
-zero_matrix(x::T) where {T<:CasadiMatrix} = size(x) == (1, 1) ? T(0.0) : T(size(x, 1), size(x, 2))
-"Return the identity of the shape of the square matrix `x`, as `one` of a Julia matrix."
-function identity_matrix(x::T) where {T<:CasadiMatrix}
-    size(x, 1) == size(x, 2) || throw(DimensionMismatch("one: the matrix is not square: its size is $(size(x))"))
-    C.eye(T, size(x, 1))
+"Return the number or CasADi matrix `e` as a matrix of type `T`; an SX in an MX graph, or the reverse, throws."
+graph_element(::Type{T}, e) where {T} = e isa T ? e : e isa Symbolic ? throw(mixed_graphs(e, T)) : convert(T, e)
+
+# CasADi has no conversion between the two graphs, so one expression holds SX or MX only.
+mixed_graphs(x, T) =
+    ArgumentError("cannot join an $(typeof(x)) to an $T: CasADi cannot combine SX and MX in one expression; " *
+                  "build the SX part from MX symbols, or call an SX Function of it on MX arguments, " *
+                  "or expand an MX Function to SX")
+
+# The front end joins numbers, Julia arrays of numbers and CasADi matrices. Every
+# concatenation of the front end checks its pieces with `_catcheck`, so a Julia array of
+# symbols among them becomes one matrix there, and SX and MX together throw.
+function Front._catcheck(pieces::Vector{Any}, d)
+    T = graph_type(pieces)
+    for x in pieces, e in (x isa AbstractArray ? x : ())
+        e isa CasadiMatrix && size(e, 2) > 1 &&
+            throw(ArgumentError("concatenation: an element of a Julia array is a $(size(e, 1)) x $(size(e, 2)) matrix, " *
+                                "not a column; join the matrix itself"))
+    end
+    joined = Any[x isa AbstractArray && !(eltype(x) <: Real) ? casadi_matrix(T, x) : x for x in pieces]
+    foreach(x -> x isa Symbolic && graph_element(T, x), joined)
+    invoke(Front._catcheck, Tuple{Any,Any}, joined, d)
 end
 
-# Concatenation with Julia arrays. The front end concatenates CasADi matrices and numbers;
-# these methods let a Julia vector or matrix of numbers and symbols join them, as an array
-# joins arrays in Julia: `[x; v]` with a column `x` and a vector `v` is one column. A list of
-# matrices, such as the arguments of a function, is written with commas: `[x, y]`.
-"Return the CasADi matrix type of the result of concatenating `parts`."
-function concatenated_type(parts)
-    elements = Iterators.flatten(p isa AbstractArray ? p : (p,) for p in parts)
-    any(e -> e isa MX, elements) ? MX : any(e -> e isa SX, elements) ? SX : C.DM
-end
-
-"""
-    cat_part(T, a) -> T
-
-Return the part `a` of a concatenation as a CasADi matrix of type `T`. A Julia vector
-becomes a column and holds numbers or CasADi columns; a Julia matrix holds numbers or
-1 x 1 CasADi matrices. Throws `ArgumentError` for another element.
-"""
-cat_part(::Type{T}, a::Union{CasadiMatrix,Real}) where {T} = Front._ascat(T, a)
-function cat_part(::Type{T}, a::AbstractVector) where {T}
-    all(e -> e isa Real || (e isa CasadiMatrix && size(e, 2) == 1), a) ||
-        throw(ArgumentError("a Julia vector in a concatenation with a CasADi matrix holds numbers or columns; " *
-                            "write a list of matrices with commas, [x, y], or join them with vertcat"))
-    casadi_matrix(T, a)
-end
-function cat_part(::Type{T}, a::AbstractMatrix) where {T}
-    all(e -> e isa Real || (e isa CasadiMatrix && size(e) == (1, 1)), a) ||
-        throw(ArgumentError("a Julia matrix in a concatenation with a CasADi matrix holds numbers or 1 x 1 matrices; " *
-                            "join larger blocks with blockcat"))
-    casadi_matrix(T, a)
-end
-cat_parts(parts) = (T = concatenated_type(parts); [cat_part(T, p) for p in parts])
-
-const CatPart = Union{CasadiMatrix,Real,AbstractVecOrMat}
-Base.vcat(x::CasadiMatrix, xs::CatPart...) = Front.vertcat(cat_parts((x, xs...)))
-Base.hcat(x::CasadiMatrix, xs::CatPart...) = Front.horzcat(cat_parts((x, xs...)))
-function Base.hvcat(rows::Tuple{Vararg{Int}}, x::CasadiMatrix, xs::CatPart...)
-    parts = cat_parts((x, xs...))
-    sum(rows) == length(parts) || throw(ArgumentError("hvcat: the rows hold $(sum(rows)) blocks, but $(length(parts)) are given"))
-    ends = cumsum(collect(rows))
-    Front.vertcat([Front.horzcat(parts[e-n+1:e]) for (n, e) in zip(rows, ends)])
+"Return `MX` when the pieces, or the elements of an array among them, hold an MX; `SX` when they hold an SX; `DM` otherwise."
+function graph_type(pieces)
+    holds(T) = any(x -> x isa T || (x isa AbstractArray && any(e -> e isa T, x)), pieces)
+    holds(MX) ? MX : holds(SX) ? SX : C.DM
 end
 
 # As LinearAlgebra, an element of a Julia array that is not a scalar enters with its 2-norm.
@@ -197,14 +125,6 @@ function LinearAlgebra.norm(a::AbstractArray{T}, p::Real = 2) where {T<:Symbolic
     LinearAlgebra.norm(casadi_matrix(T, elements), p)
 end
 LinearAlgebra.opnorm(A::AbstractMatrix{T}, p::Real = 2) where {T<:Symbolic} = LinearAlgebra.opnorm(casadi_matrix(T, A), p)
-
-# CasADi has no conversion between the two graphs, so one expression holds SX or MX only.
-mixed_graphs(x, T) =
-    ArgumentError("cannot join an $(typeof(x)) to an $T: CasADi cannot combine SX and MX in one expression; " *
-                  "build the SX part from MX symbols, or call an SX Function of it on MX arguments, " *
-                  "or expand an MX Function to SX")
-Front._ascat(::Type{MX}, x::SX) = throw(mixed_graphs(x, MX))
-Front._ascat(::Type{SX}, x::MX) = throw(mixed_graphs(x, SX))
 
 # The elements of a symbolic matrix are its 1 x 1 matrices; those of a `DM` are numbers.
 Base.iterate(x::Symbolic, k::Int = 1) = k > length(x) ? nothing : (x[k], k + 1)
@@ -230,86 +150,40 @@ Base.sum(f, x::Symbolic; kwargs...) = sum(f.(x); kwargs...)
 # A `DM` sums as the Julia matrix of its values.
 Base.sum(d::C.DM; kwargs...) = sum(Matrix{Float64}(d); kwargs...)
 Base.sum(f, d::C.DM; kwargs...) = sum(f, Matrix{Float64}(d); kwargs...)
-Base.maximum(x::Symbolic) = C.mmax(x)
-Base.minimum(x::Symbolic) = C.mmin(x)
 
 # Numbers promote to symbols, so that `[x, 1.0]` is a vector of symbols.
 Base.promote_rule(::Type{T}, ::Type{<:Union{AbstractFloat,Integer,Rational,AbstractIrrational}}) where {T<:Symbolic} = T
 Base.promote_rule(::Type{T}, ::Type{C.DM}) where {T<:Symbolic} = T
 
+# The front end takes Julia arrays of numbers; a Julia array of symbols becomes a matrix.
 for op in (:+, :-, :*, :\)
     @eval begin
-        Base.$op(a::T, b::AbstractVecOrMat) where {T<:Symbolic} = $op(a, casadi_matrix(T, b))
-        Base.$op(a::AbstractVecOrMat, b::T) where {T<:Symbolic} = $op(casadi_matrix(T, a), b)
+        Base.$op(a::T, b::AbstractVecOrMat{<:Symbolic}) where {T<:Symbolic} = $op(a, casadi_matrix(T, b))
+        Base.$op(a::AbstractVecOrMat{<:Symbolic}, b::T) where {T<:Symbolic} = $op(casadi_matrix(T, a), b)
     end
 end
-LinearAlgebra.dot(a::T, b::AbstractVector) where {T<:Symbolic} = Front.dot(a, casadi_matrix(T, b))
-LinearAlgebra.dot(a::AbstractVector, b::T) where {T<:Symbolic} = Front.dot(casadi_matrix(T, a), b)
+LinearAlgebra.dot(a::T, b::AbstractVector{<:Symbolic}) where {T<:Symbolic} = LinearAlgebra.dot(a, casadi_matrix(T, b))
+LinearAlgebra.dot(a::AbstractVector{<:Symbolic}, b::T) where {T<:Symbolic} = LinearAlgebra.dot(casadi_matrix(T, a), b)
 
-# Indexing by a vector of indices or a vector of `Bool` that selects elements; the front
-# end takes integers, ranges and colons.
-const Indices = Union{Integer,AbstractRange,Colon,Vector{<:Integer}}
-index_list(i::Vector{Bool}) = findall(i)
-index_list(i) = i
-picked(x, i, d) = i isa Colon ? (1:size(x, d)) : i isa Integer ? (i:i) : index_list(i)
-function Base.getindex(x::Symbolic, i::Vector{<:Integer})
-    k = index_list(i)
-    isempty(k) ? typeof(x)(0, 1) : Front.vertcat([x[j] for j in k])
-end
-Base.getindex(x::Symbolic, i::Vector{<:Integer}, j::Indices) = selected(x, i, j)
-Base.getindex(x::Symbolic, i::Union{Integer,AbstractRange,Colon}, j::Vector{<:Integer}) = selected(x, i, j)
-selected(x, i, j) = casadi_matrix(typeof(x), [x[r, c] for r in picked(x, i, 1), c in picked(x, j, 2)])
-
-# Broadcasting. The front end applies a broadcast function to whole CasADi matrices, which
-# is right for the functions below, elementwise in CasADi; `*`, `/` and `^` become the
-# elementwise products of CasADi. Another function, such as `inv` or a closure, is applied to
-# each element.
-const WHOLE_MATRIX = (+, -, *, /, ^, sin, cos, tan, exp, exp2, log, sqrt, abs, tanh, sinh, cosh, asin, acos, atan,
-                      floor, ceil, sign, asinh, acosh, atanh, log1p, expm1, log10, log2, abs2, min, max, hypot,
-                      rem, copysign, &, |, !, !=, <, <=, >, >=, ==, ifelse, identity, SpecialFunctions.erf,
-                      SpecialFunctions.erfinv)
-whole_matrix(f) = any(g -> g === f, WHOLE_MATRIX)
-
-# A Julia array of symbols or numbers in a broadcast takes the type of the CasADi matrices.
-Front._castype(a::AbstractArray, rest...) =
-    foldl((T, e) -> e isa CasadiMatrix && Front._rank(typeof(e)) > Front._rank(T) ? typeof(e) : T, a; init = Front._castype(rest...))
-Front._coerce(::Type{T}, a::AbstractArray) where {T} = casadi_matrix(T, a)
-# A nested broadcast without CasADi matrices is a Julia array.
+# A broadcast without CasADi matrices inside one with them, such as `v .* 2` in `x .+ v .* 2`
+# with a Julia vector `v`, is a Julia array, which the front end then takes as an operand.
 Front._bceval(bc::Base.Broadcast.Broadcasted) = Base.Broadcast.materialize(bc)
+
+# CasADi applies an operation to whole matrices of one shape only. When the operands
+# have different shapes, such as a column and a row, the operation applies to each
+# element with the broadcast rules of Julia.
 function Front._bceval(bc::Base.Broadcast.Broadcasted{Front.CasadiStyle,<:Any,<:Function})
     args = map(Front._bceval, bc.args)
     bc.f === Base.literal_pow && return Front._apply(bc.f, args...)
-    T = Front._castype(args...)
-    values = map(a -> Front._coerce(T, a), args)
-    whole_matrix(bc.f) && same_shape(values) ? Front._bcop(bc.f)(values...) : elementwise(bc.f, T, values)
+    op = Front._bcop(bc.f)
+    op === nothing || !same_shape(args) ? Front._bcelem(bc.f, args) : op(args...)
 end
 
-# CasADi applies a function to whole matrices of one size, or to a matrix and a 1 x 1 one;
-# other shapes, such as a column and a row, are broadcast element by element.
-function same_shape(values)
-    shapes = [size(v) for v in values if v isa CasadiMatrix && size(v) != (1, 1)]
-    isempty(shapes) || all(==(first(shapes)), shapes)
+"Return whether the operands `args` that are matrices and not 1 x 1 all have one shape; a vector is a column."
+function same_shape(args)
+    shapes = [(size(a, 1), size(a, 2)) for a in args if (a isa CasadiMatrix || a isa AbstractArray) && length(a) != 1]
+    all(==(first(shapes, 1)...), shapes)
 end
-
-"""
-    elementwise(f, T, values) -> T
-
-Return the CasADi matrix of type `T` whose element (i, j) is `f` of the elements (i, j) of
-`values`. A CasADi matrix of one row or one column repeats it, as in broadcasting; another
-value, such as a number, is passed whole.
-"""
-function elementwise(f, ::Type{T}, values) where {T}
-    matrices = filter(v -> v isa CasadiMatrix, collect(Any, values))
-    rows, cols = maximum(m -> size(m, 1), matrices), maximum(m -> size(m, 2), matrices)
-    for m in matrices
-        size(m, 1) in (1, rows) && size(m, 2) in (1, cols) ||
-            throw(DimensionMismatch("broadcast: a matrix of size $(size(m)) does not match the size ($rows, $cols)"))
-    end
-    casadi_matrix(T, [f(map(v -> broadcast_element(v, i, j), values)...) for i in 1:rows, j in 1:cols])
-end
-broadcast_element(v::CasadiMatrix, i, j) = v[size(v, 1) == 1 ? 1 : i, size(v, 2) == 1 ? 1 : j]
-broadcast_element(v::Base.RefValue, i, j) = v[]
-broadcast_element(v, i, j) = v
 
 # In-place broadcasting into a Julia array or a CasADi matrix.
 function Base.copyto!(dest::AbstractArray, bc::Base.Broadcast.Broadcasted{Front.CasadiStyle})
@@ -329,24 +203,13 @@ function Base.copyto!(dest::CasadiMatrix, bc::Base.Broadcast.Broadcasted{Front.C
 end
 
 """
-    bounded(lb, x, ub)
+    vertcat(parts::AbstractVector) -> CasADi matrix
+    horzcat(parts::AbstractVector) -> CasADi matrix
 
-Return the constraint `lb <= x <= ub` on the expression `x` of an `Opti` object, for
-`subject_to`. The bounds are numbers, `DM` matrices or Julia arrays of numbers.
-
-A chained comparison such as `lb <= x <= ub` cannot give it: Julia evaluates
-`lb <= x && x <= ub`, and `&&` takes a `Bool` only.
+Join the CasADi matrices and numbers `parts` into one column of blocks or one row of
+blocks, as `vertcat` and `horzcat` of CasADi; an empty `parts` gives a 0 x 0 matrix of
+its element type, or a `DM`.
 """
-Front.bounded(lb::AbstractVecOrMat{<:Real}, ex::MX, ub) = Front.bounded(casadi_matrix(MX, lb), ex, ub)
-Front.bounded(lb::Union{Real,C.DM,MX}, ex::MX, ub::AbstractVecOrMat{<:Real}) = Front.bounded(lb, ex, casadi_matrix(MX, ub))
-
-# The value of a symbol in `substitute` and the point of a Taylor series are matrices of the
-# graph of the expression in CasADi; a number, a Julia array of numbers or a DM converts.
-const NumericValue = Union{Real,AbstractVecOrMat{<:Real},C.DM}
-as_graph(::Type{T}, v::Union{Real,C.DM}) where {T<:Symbolic} = convert(T, v)
-as_graph(::Type{T}, v::AbstractVecOrMat{<:Real}) where {T<:Symbolic} = casadi_matrix(T, v)
-C.substitute(ex::T, v::T, vdef::NumericValue) where {T<:Symbolic} = C.substitute(ex, v, as_graph(T, vdef))
-C.taylor(ex::SX, x::SX, a::NumericValue, order::Integer = 1) = C.taylor(ex, x, as_graph(SX, a), order)
-C.mtaylor(ex::SX, x::SX, a::NumericValue, order::Integer = 1) = C.mtaylor(ex, x, as_graph(SX, a), order)
-C.mtaylor(ex::SX, x::SX, a::NumericValue, order::Integer, order_contributions::AbstractVector{<:Integer}) =
-    C.mtaylor(ex, x, as_graph(SX, a), order, order_contributions)
+vertcat(parts::AbstractVector) = isempty(parts) ? empty_matrix(parts) : C._vertcat(collect(parts))
+horzcat(parts::AbstractVector) = isempty(parts) ? empty_matrix(parts) : C._horzcat(collect(parts))
+empty_matrix(parts) = (eltype(parts) <: CasadiMatrix ? eltype(parts) : C.DM)(0, 0)

@@ -29,22 +29,22 @@ end
 # the loop over the elements and the scalar operand, which the next test set checks.
 @testset "conditional and constant power on matrices" begin
     x = MX.sym("x", 3)
-    f = CasADiCodegen.Function("c", [x], [C.if_else(x, x + 1, MX(0.0)), x^2.5])
+    f = CasADiCodegen.Function("c", [x], [C.if_else(x, x + 1, MX(0.0)), x .^ 2.5])
     @test mx_close(f)
 end
 
 @testset "elementwise results are bit for bit those of CasADi" begin
     x, y, s = MX.sym("x", 2, 3), MX.sym("y", 2, 3), MX.sym("s")
-    f = CasADiCodegen.Function("x", [x, y, s], [C.times(x, y) + s, s / x - y, C.fmin(x, y) * 2, C.abs(x - s)])
+    f = CasADiCodegen.Function("x", [x, y, s], [C.times(x, y) + s, s ./ x - y, C.fmin(x, y) * 2, C.abs(x - s)])
     @test mx_same(f)
 end
 
 const STRUCTURAL = [
     "slice" => (:OP_GETNONZEROS, (A, B, v) -> A[2:3, 1]),
     "slice with a step" => (:OP_GETNONZEROS, (A, B, v) -> C.reshape(A, 9, 1)[1:4:9] * 2),
-    "scattered nonzeros" => (:OP_VERTCAT, (A, B, v) -> C.vertcat([A[1, 1], A[3, 2], A[2, 3]]) * 2),
-    "vertical join" => (:OP_VERTCAT, (A, B, v) -> C.vertcat([v, 2 * v, A[1:3, 2]]) + 1),
-    "horizontal join" => (:OP_HORZCAT, (A, B, v) -> C.horzcat([A, 2 * B, v]) + 1),
+    "scattered nonzeros" => (:OP_VERTCAT, (A, B, v) -> vcat(A[1, 1], A[3, 2], A[2, 3]) * 2),
+    "vertical join" => (:OP_VERTCAT, (A, B, v) -> vcat(v, 2 * v, A[1:3, 2]) + 1),
+    "horizontal join" => (:OP_HORZCAT, (A, B, v) -> hcat(A, 2 * B, v) + 1),
     "diagonal join" => (:OP_DIAGCAT, (A, B, v) -> 2 * C.diagcat([A, 2 * v])),
     "vertical split" => (:OP_VERTSPLIT, (A, B, v) -> C.vertsplit(2 * v, 1)[3] + C.vertsplit(2 * v, 1)[1]),
     "horizontal split" => (:OP_HORZSPLIT, (A, B, v) -> C.horzsplit(A + B, 1)[2] * 2),
@@ -77,13 +77,13 @@ end
 
 @testset "one value used twice by one operation" begin
     u = MX.sym("u", 3)
-    f = CasADiCodegen.Function("twice", [u], [C.vertcat([u, u]) * 2, C.horzcat([u, 2 * u, u]) + 1])
+    f = CasADiCodegen.Function("twice", [u], [vcat(u, u) * 2, hcat(u, 2 * u, u) + 1])
     @test mx_same(f)
 end
 
 @testset "sums into nonzeros, as reverse derivatives make them" begin
     x, seed = MX.sym("x", 4), MX.sym("seed", 6)
-    f = CasADiCodegen.Function("adj", [x, seed], [C.jtimes(C.vertcat([x[2:3], C.sin(x)]), x, seed, true)])
+    f = CasADiCodegen.Function("adj", [x, seed], [C.jtimes(vcat(x[2:3], C.sin(x)), x, seed, true)])
     @test :OP_ADDNONZEROS in mx_ops(f)
     @test mx_close(f)
 end
@@ -91,7 +91,7 @@ end
 @testset "sparse inputs and outputs" begin
     L = MX.sym("L", C.Sparsity.lower(3))
     D = MX.sym("D", C.Sparsity.diag(3))
-    f = CasADiCodegen.Function("sp", [L, D], [C.transpose(L) * 2, L + D, C.vertcat([L, D])])
+    f = CasADiCodegen.Function("sp", [L, D], [C.transpose(L) * 2, L + D, vcat(L, D)])
     @test nnz_in(f) == [6, 3]
     @test mx_same(f)
 end
@@ -108,12 +108,12 @@ end
 
 function call_case()
     a = SX.sym("a", 3)
-    h = CasADiCodegen.Function("h", [a], [vertcat(a[1] * a[2] + a[3], sin(a[3])), a[1] - a[2]])
+    h = CasADiCodegen.Function("h", [a], [vcat(a[1] * a[2] + a[3], sin(a[3])), a[1] - a[2]])
     p, q = MX.sym("p", 3), MX.sym("q", 3)
     m = CasADiCodegen.Function("m", [p, q], [h(C.times(p, q))[1] + q[1:2], C.transpose(C.reshape(p, 1, 3)) - h(q)[2]])
     v = MX.sym("v", 3)
     first_h, second_h = h(v), h(2 * v)
-    inner = m(v, C.vertcat([second_h[1], first_h[2]]))
+    inner = m(v, vcat(second_h[1], first_h[2]))
     CasADiCodegen.Function("top", [v], [inner[1] * 2, inner[2] + first_h[2], second_h[2]])
 end
 
@@ -169,8 +169,8 @@ end
 @testset "matrix source file runs without CasADi" begin
     v = MX.sym("v", 3)
     a = SX.sym("a", 3)
-    h = CasADiCodegen.Function("h", [a], [vertcat(a[1] * a[2], sin(a[3]))])
-    f = CasADiCodegen.Function("file", [v], [C.vertcat([h(v), v]) + C.DM([1.0, 2.0, 3.0, 4.0, 5.0])])
+    h = CasADiCodegen.Function("h", [a], [vcat(a[1] * a[2], sin(a[3]))])
+    f = CasADiCodegen.Function("file", [v], [vcat(h(v), v) + C.DM([1.0, 2.0, 3.0, 4.0, 5.0])])
     x = mx_inputs(f)
     mktempdir() do dir
         path = joinpath(dir, "gen.jl")
@@ -263,7 +263,7 @@ end
 # CasADi has no numerical evaluation for the inverse node, so Julia is the oracle.
 @testset "matrix inverse node and elementwise reciprocal" begin
     A = MX.sym("A", 2, 2)
-    f = CasADiCodegen.Function("both", [A], [C.inv_node(A), 1 / A])
+    f = CasADiCodegen.Function("both", [A], [C.inv_node(A), 1 ./ A])
     @test :OP_INVERSE in mx_ops(f)
     x = [[4.0, 1.0, 2.0, 3.0]]
     @test mx_emitted(f, x)[1] ≈ vec(inv([4.0 2.0; 1.0 3.0]))
@@ -308,17 +308,17 @@ end
 # and to a matrix function, equal CasADi bit for bit for any chunk size.
 # ---------------------------------------------------------------------------
 const GRAPH_H = let a = SX.sym("a", 3)
-    CasADiCodegen.Function("h", [a], [vertcat(a[2] * a[3], a[1] - a[2], a[3]), a[1] * a[1]])
+    CasADiCodegen.Function("h", [a], [vcat(a[2] * a[3], a[1] - a[2], a[3]), a[1] * a[1]])
 end
 const GRAPH_M = let p = MX.sym("p", 3), q = MX.sym("q", 3)
-    CasADiCodegen.Function("m", [p, q], [C.times(C.vertcat([p[2:3], q[1]]), q) + GRAPH_H(p)[1]])
+    CasADiCodegen.Function("m", [p, q], [C.times(vcat(p[2:3], q[1]), q) + GRAPH_H(p)[1]])
 end
 const GRAPH_STEPS = [
     (x, y) -> x + y, (x, y) -> x - y, (x, y) -> C.times(x, y), (x, y) -> C.fmin(x, y), (x, y) -> C.fmax(x, y),
     (x, y) -> -x, (x, y) -> 2 * x, (x, y) -> C.abs(x), (x, y) -> x[1] * y, (x, y) -> x - y[3],
-    (x, y) -> C.vertcat([x[2:3], y[1]]), (x, y) -> C.vertcat([y[3], x[1:2]]),
-    (x, y) -> C.transpose(C.reshape(C.vertcat([x, y]), 2, 3))[1:3, 2],
-    (x, y) -> C.horzsplit(C.horzcat([x, y]), 1)[2] + C.DM([1.0, -2.0, 0.5]),
+    (x, y) -> vcat(x[2:3], y[1]), (x, y) -> vcat(y[3], x[1:2]),
+    (x, y) -> C.transpose(C.reshape(vcat(x, y), 2, 3))[1:3, 2],
+    (x, y) -> C.horzsplit(hcat(x, y), 1)[2] + C.DM([1.0, -2.0, 0.5]),
     (x, y) -> GRAPH_H(x)[1], (x, y) -> GRAPH_H(y)[2] * x, (x, y) -> GRAPH_M(x, y),
     (x, y) -> C.mtimes(C.mtimes(x, C.transpose(y)), x), (x, y) -> C.dot(x, y) * y,
     (x, y) -> C.norm_1(x) - y, (x, y) -> C.norm_inf(y) * x, (x, y) -> C.mmin(x) + C.mmax(y) * y,
@@ -336,7 +336,7 @@ function graph_function(steps)
         @assert size(node) == (3, 1)
         push!(nodes, node)
     end
-    CasADiCodegen.Function("g", [u, v], [C.vertcat([nodes[end], nodes[max(end - 1, 1)]]), nodes[max(end - 2, 1)]])
+    CasADiCodegen.Function("g", [u, v], [vcat(nodes[end], nodes[max(end - 1, 1)]), nodes[max(end - 2, 1)]])
 end
 
 const graph_step = @composed function graph_step_(kind = Data.Integers(1, length(GRAPH_STEPS)),
@@ -361,7 +361,7 @@ end
 
 @testset "map without expansion" begin
     x, p = SX.sym("x", 2), SX.sym("p")
-    step = CasADiCodegen.Function("step", [x, p], [vertcat(x[2] * p, sin(x[1]) + p), x[1] * x[2]])
+    step = CasADiCodegen.Function("step", [x, p], [vcat(x[2] * p, sin(x[1]) + p), x[1] * x[2]])
     X, P = MX.sym("X", 2, 5), MX.sym("P", 1, 5)
     both = C.map(step, 5)(X, P)
     y, z = both[1], both[2]
@@ -382,7 +382,7 @@ end
 # blocks; the size of its code does not depend on the number of blocks.
 @testset "a transpose is a loop over blocks" begin
     transposed(n) = let X = MX.sym("X", 2, n), v = MX.sym("v", n)
-        CasADiCodegen.Function("t", [X, v], [C.transpose(X), C.vertcat([C.transpose(v[1:n-1]), C.transpose(v[2:n])]) + X[:, 1:n-1]])
+        CasADiCodegen.Function("t", [X, v], [C.transpose(X), vcat(C.transpose(v[1:n-1]), C.transpose(v[2:n])) + X[:, 1:n-1]])
     end
     code_length(f) = length(string(build_function(f; nonzeros = true, expression = Val{true}, expand = false)))
     @test mx_same(transposed(5))
@@ -393,20 +393,20 @@ end
     # The parts of a sparse column are operands of a join; the first part is structurally zero.
     a = MX.sym("a", C.Sparsity.triplet(4, 1, [2, 3], [0, 0]))
     parts = C.vertsplit(2 * a, [0, 2, 3, 4])
-    f = CasADiCodegen.Function("f", [a], [vertcat([parts[3], parts[2], parts[1]])])
+    f = CasADiCodegen.Function("f", [a], [vcat(parts[3], parts[2], parts[1])])
     @test :OP_VERTSPLIT in mx_ops(f) && mx_same(f)
     # A constant column with one nonzero, between two parts that have none.
     c = MX(C.DM(C.Sparsity.triplet(4, 1, [2], [0]), C.DM([1.5])))
     s = MX.sym("s")
-    g = CasADiCodegen.Function("g", [s], [horzcat([MX(1, 1), C.vertsplit(c, [0, 2, 3, 4])[2]]) * s])
+    g = CasADiCodegen.Function("g", [s], [hcat(MX(1, 1), C.vertsplit(c, [0, 2, 3, 4])[2]) * s])
     @test :OP_VERTSPLIT in mx_ops(g) && mx_same(g)
 end
 
 @testset "branches that run only when they are selected" begin
     a, c = MX.sym("a", 2), MX.sym("c")
-    y = C.if_else(c > 0, sin(a) / a[1], 2 * a, true)
+    y = C.if_else(c > 0, sin.(a) / a[1], 2 * a, true)
     f = CasADiCodegen.Function("f", [c, a], [y, jacobian(y, a)])
-    several = C.conditional(c, [sin(a), cos(a), a], 3 * a, true)
+    several = C.conditional(c, [sin.(a), cos.(a), a], 3 * a, true)
     g = CasADiCodegen.Function("g", [c, a], [several, jacobian(several, a)])
     av = [0.3, 1.7]
     for selector in (1.0, 0.0, -2.0, 0.5, 2.0, 2.9, 3.0, -0.5, -1.0, NaN)
@@ -419,7 +419,7 @@ end
     # The branch that is not selected does not run: it would divide by zero here and give NaN in a sum.
     @test mx_emitted(f, [[0.0], [0.0, 1.0]])[1] == [0.0, 2.0]
     # A branch with another pattern than the switch.
-    sparse_branch = C.if_else(c > 0, vertcat(a[1], MX(1, 1)), a, true)
+    sparse_branch = C.if_else(c > 0, vcat(a[1], MX(1, 1)), a, true)
     @test mx_same(CasADiCodegen.Function("s", [c, a], [sparse_branch]))
 end
 
@@ -455,10 +455,10 @@ const INDEXED_INPUTS = [[[-1.0, 0.0, 0.5, 2.0, 3.0, 6.0], [1.5, -2.5, 3.5, 0.25]
     end
 end
 
-# CasADi 3.8.1 evaluates a write at a fixed slice plus indices wrongly, with values from other
+# CasADi 3.8.2 evaluates a write at a fixed slice plus indices wrongly, with values from other
 # memory, so the oracle is the same write with each index written out: slice[s] + i[k].
 @testset "a sum at a slice plus indices" begin
-    places(i) = vertcat([1 + i[1], 3 + i[1], 1 + i[2], 3 + i[2]])
+    places(i) = vcat(1 + i[1], 3 + i[1], 1 + i[2], 3 + i[2])
     f = indexed_function((v, x, i, j) -> C.jtimes(C.get_nz(v, false, C.Slice(1, 5, 2), i), v, reshape(x, 2, 2), true))
     reference = indexed_function((v, x, i, j) -> C.jtimes(C.get_nz(v, false, places(i)), v, x, true))
     @test :OP_ADDNONZEROS_PARAM in mx_ops(f)

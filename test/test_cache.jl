@@ -17,7 +17,7 @@ compiled_for(g, types) = any(mi -> mi.specTypes <: Tuple{typeof(g),types...}, It
 @testset "cache of generated code on disk" begin
     directory = mktempdir()
     x, p = SX.sym("x", 3), SX.sym("p", 2, 2)
-    y = vertcat(sin(x[1]) * p[1, 1] + x[3], x[2]^2 * p[2, 2])
+    y = vcat(sin(x[1]) * p[1, 1] + x[3], x[2]^2 * p[2, 2])
     f = CasADiCodegen.Function("f", [x, p], [y, jacobian(y, x)])
     g, g! = build_function(f; expression = Val{false})
     h, h! = build_function(f; expression = Val{false}, cache = directory)
@@ -52,7 +52,7 @@ compiled_for(g, types) = any(mi -> mi.specTypes <: Tuple{typeof(g),types...}, It
     script = """
         using CasADiCodegen
         x, p = SX.sym("x", 3), SX.sym("p", 2, 2)
-        y = vertcat(sin(x[1]) * p[1, 1] + x[3], x[2]^2 * p[2, 2])
+        y = vcat(sin(x[1]) * p[1, 1] + x[3], x[2]^2 * p[2, 2])
         f = CasADiCodegen.Function("f", [x, p], [y, jacobian(y, x)])
         h, h! = build_function(f; expression = Val{false}, cache = $(repr(directory)))
         print(length(readdir($(repr(directory)))), " ", Base.invokelatest(h, $xv, $pv)[1] == $(g(xv, pv)[1]))
@@ -122,7 +122,7 @@ end
 # The set above writes an integrator in scalar code; this one writes an event, adjoint sensitivities and a rootfinder in matrix code.
 @testset "an event, adjoint sensitivities and a rootfinder in a written module" begin
     y, z, a = SX.sym("y", 2), MX.sym("z"), MX.sym("a")
-    swing = Dict("x" => y, "ode" => vertcat([y[2], -y[1]]), "zero" => y[1])
+    swing = Dict("x" => y, "ode" => vcat(y[2], -y[1]), "zero" => y[1])
     E = integrator("WE", Vern9(), swing; adjoint = true, direction = -1, TIGHT...)
     root = rootfinder("WR", SimpleNewtonRaphson(), CasADiCodegen.Function("cube", [z, a], [z^3 + z - a]); abstol = 1e-13)
     y0 = MX.sym("y0", 2)
@@ -141,7 +141,7 @@ end
 @testset "what a written module cannot hold" begin
     # A solver that is a local function, and a call through CasADi.
     y, y0 = SX.sym("y", 2), MX.sym("y0", 2)
-    swing = Dict("x" => y, "ode" => vertcat([y[2], -y[1]]))
+    swing = Dict("x" => y, "ode" => vcat(y[2], -y[1]))
     local_solver(rhs!, n, m) = (x0, q) -> x0
     x, p = SX.sym("x", 1), SX.sym("p", 1)
     H = CasADiCodegen.Codegen.ode_integrator("WH", Dict("x" => x, "p" => p, "ode" => -p * x), 0.0, 1.0, local_solver)

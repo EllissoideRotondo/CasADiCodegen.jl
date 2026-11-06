@@ -54,9 +54,7 @@ solver, unless the solver has them. A solver of the first four fields must have 
 `nonsmooth` is what a replaced integrator gives when a switch of its model depends on the
 state, or on the time and a parameter together: a warning, an `ArgumentError` with
 `:error`, or nothing with `:ignore`, as the keyword `nonsmooth` of `integrator`. This scan
-runs when generated code replaces the integrator. The option `"nonsmooth"` of the
-integrator of CasADi acts only when CasADi builds it; neither setting overrides the other.
-See [Discontinuous models](@ref discontinuities).
+runs when generated code replaces the integrator. See [Discontinuous models](@ref discontinuities).
 
 # Examples
 ```julia
@@ -137,7 +135,7 @@ function refuse(callee::C.Function)
     name, class = C.name(callee), C.class_name(callee)
     needs(kind, field) = "is $kind of CasADi, which generated code replaces by a solver of the SciML ecosystem; give one with the option solvers = CasADiCodegen.Solvers($field = ...)"
     reason = if class == "CallbackInternal"
-        "is a callback of a subtype of CasadiCallback, whose Julia function this package does not know; make it with CasADiCodegen.callback(f, name, sizes_in, sizes_out)"
+        "is a callback of a subtype of Callback, whose Julia function this package does not know; make it with CasADiCodegen.callback(f, name, sizes_in, sizes_out)"
     elseif class in FIXED_STEP_CLASSES && C.nnz_out(C.get_function(callee, "dae"), 3) > 0
         "is an integrator of CasADi with a fixed step and an event function, which generated code replaces by a solver of the SciML ecosystem; give one with the option solvers = CasADiCodegen.Solvers(overrides = [CasADiCodegen.Solver(I, alg)]), where I is the integrator"
     elseif class in VARIABLE_STEP_CLASSES
@@ -165,38 +163,6 @@ function piece(v, from::Int, pattern)
 end
 
 column_of(value) = C.vec(C.densify(value))
-
-"Whether `f`, or a function of its matrix graph, is an integrator of CasADi with an event function."
-function has_events(f::C.Function)
-    C.class_name(f) in INTEGRATOR_CLASSES && return C.nnz_out(C.get_function(f, "dae"), 3) > 0
-    C.is_a(f, "MXFunction") || return false
-    any(k -> C.instruction_id(f, k) == C.OP_CALL && has_events(C.which_function(C.instruction_MX(f, k))), 0:C.n_instructions(f)-1)
-end
-
-"""
-    event_jacobian(ex::MX, arg::MX) -> Union{MX,Nothing}
-
-The Jacobian of `ex` by `arg` from one forward direction per element of `arg`, dense, when
-the graph of `ex` holds an integrator of CasADi with an event function; `nothing` otherwise.
-`jacobian` of CasADi 3.8.1 gives such an integrator the sparsity pattern of the model without
-events, so the Jacobian that it builds on that pattern is wrong. The method `jacobian(ex, arg)`
-of the front end returns this Jacobian when it is not `nothing`.
-"""
-function event_jacobian(ex::C.MX, arg::C.MX)
-    has_events(Front.Function("graph", C.symvar(ex), [ex])) || return nothing
-    n = C.numel(arg)
-    C.jtimes(C.vec(ex), C.vec(arg), MX(C.DM([Float64(i == j) for i in 1:n, j in 1:n])))
-end
-
-"""
-    check_jacobian(f::CasADiCodegen.Function)
-
-Throw an `ArgumentError` when `f` holds an integrator of CasADi with an event function, whose
-Jacobian function CasADi 3.8.1 builds on a wrong sparsity pattern (see `event_jacobian`). The
-method `jacobian(f)` of the front end calls it.
-"""
-check_jacobian(f::C.Function) =
-    @requires !has_events(f) "the Jacobian function of \"$(C.name(f))\" would be wrong: it holds an integrator of CasADi with an event function, to which CasADi 3.8.1 gives the sparsity pattern of the model without events; take the derivatives with jtimes, one direction per input, or with jacobian of the expressions"
 
 """
     integrator_model(I::CasADiCodegen.Function) -> NamedTuple
@@ -269,7 +235,7 @@ function right_side(model)
             foreach(push!, parts, as_list(C.call(forward, MX[time; block(0); block(k)], false, false)))
         end
     end
-    du = C.vertcat(reduce(vcat, parts))
+    du = vertcat(reduce(vcat, parts))
     @ensures size(du, 1) == size(u, 1) "the equations of integrator \"$(model.name)\" must give one number per state"
     Front.Function((model.name::String) * "_rhs", [u, p, t], [du])
 end
@@ -334,7 +300,7 @@ function event_functions(model, transition)
     if directions > 0
         rate_after, quad_after = evaluate(MX[point[1]; after[1]; consistent; point[4:5]])[[1, 3]]
         along(value, seed) = reduce(+, (C.jtimes(value, point[i+1], seed[i]) for i in eachindex(seed) if C.nnz(C.sparsity(point[i+1])) > 0); init = MX(C.DM(zeros(size(value)...))))
-        chosen = C.vertcat(MX[C.eq(index, MX(Float64(i - 1))) for i in 1:ne])::MX
+        chosen = vertcat(MX[C.eq(index, MX(Float64(i - 1))) for i in 1:ne])::MX
         # The rate of the algebraic states, from the derivative of the algebraic equations along the trajectory.
         z_rate = nz1 == 0 ? after[2] :
                  piece(-C.solve(C.jacobian(alg, point[3]), C.jacobian(alg, time) + C.jtimes(alg, point[2], ode))::MX, 0, C.sparsity_in(dae, 2))::MX
@@ -355,7 +321,7 @@ function event_functions(model, transition)
     u, p, t = MX.sym("u", model.nx + model.nz + model.nq), MX.sym("p", model.np + model.nu), MX.sym("t")
     i, z = MX.sym("index"), MX.sym("z", model.nz)
     known = nz1 == 0 ? MX[] : MX[consistent]
-    core = Front.Function(model.name * "_jump", MX[time; point[2:5]; index; reduce(vcat, seeds; init = MX[]); known], MX[C.vertcat(results); shifts])
+    core = Front.Function(model.name * "_jump", MX[time; point[2:5]; index; reduce(vcat, seeds; init = MX[]); known], MX[vertcat(results); shifts])
     at = model_block(model, u, p, 0)
     called = as_list(C.call(core, MX[t; at; i; reduce(vcat, (model_block(model, u, p, k) for k in 1:directions); init = MX[]);
                                      nz1 == 0 ? MX[] : MX[piece(z, 0, C.sparsity_in(dae, 2))]], false, false))
@@ -365,10 +331,10 @@ function event_functions(model, transition)
     x_dirs, z_dirs = part(states, nx1 + nz1, directions * nx1), part(states, nx1 + nz1 + directions * nx1, directions * nz1)
     quadratures = part(u, model.nx + model.nz, model.nq)
     moved_sums = directions == 0 || nq1 == 0 ? quadratures :
-                 C.vertcat(MX[part(quadratures, 0, nq1); [part(quadratures, k * nq1, nq1) + called[1+k] for k in 1:directions]])
+                 vertcat(MX[part(quadratures, 0, nq1); [part(quadratures, k * nq1, nq1) + called[1+k] for k in 1:directions]])
     zero_values = evaluate(MX[C.nnz_in(dae, 0) == 0 ? MX(C.sparsity_in(dae, 0)) : t; at])[4]
     (; zero = Front.Function(model.name * "_zero", [u, p, t], [zero_values]),
-       jump = Front.Function(model.name * "_after", [u, p, t, i, z], [C.vertcat(MX[x_part, x_dirs, z_part, z_dirs, moved_sums])]))
+       jump = Front.Function(model.name * "_after", [u, p, t, i, z], [vertcat(MX[x_part, x_dirs, z_part, z_dirs, moved_sums])]))
 end
 
 """
@@ -426,7 +392,7 @@ end
 
 part(v, from::Int, n::Int) = n == 0 ? MX(0, 1) : v[from+1:from+n]::MX
 
-nonzero_column(v) = C.is_dense(v) ? C.vec(v) : C.nnz(C.sparsity(v)) == 0 ? MX(0, 1) : C.vertcat(MX[e for e in C.nonzeros(v)])
+nonzero_column(v) = C.is_dense(v) ? C.vec(v) : C.nnz(C.sparsity(v)) == 0 ? MX(0, 1) : vertcat(MX[e for e in C.nonzeros(v)])
 
 input_symbols(f::C.Function) = MX[MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
 
@@ -472,11 +438,11 @@ function solver_integrator(callee::C.Function)
     inputs = MX[MX.sym(C.name_in(callee, i), C.size1_in(callee, i), C.size2_in(callee, i) ÷ (1 + outer)) for i in 0:C.n_in(callee)-1]
     outer == 0 && nadj == 0 && (inputs = input_symbols(callee))
     dense(i) = C.vec(C.densify(inputs[i]))
-    x, p, controls = C.vertcat(MX[dense(1), dense(2), MX(C.DM(zeros(model.nq)))]), dense(3), dense(4)
+    x, p, controls = vertcat(MX[dense(1), dense(2), MX(C.DM(zeros(model.nq)))]), dense(3), dense(4)
     states, algebraic, quadratures, t = MX[], MX[], MX[], model.t0
     for (k, t_next) in enumerate(model.times)
         # Loop invariant: `x` has the states and the quadratures at the time `t`, and the lists hold them at the output times before it.
-        q = m > 0 ? MX[C.vertcat(MX[p, part(controls, (k - 1) * model.nu, model.nu)])] : MX[]
+        q = m > 0 ? MX[vertcat(MX[p, part(controls, (k - 1) * model.nu, model.nu)])] : MX[]
         x = arc(MX[x; q]..., MX(t), MX(t_next))
         push!(states, part(x, 0, model.nx))
         push!(algebraic, part(x, model.nx, model.nz))
@@ -508,8 +474,8 @@ function emitted_right_side(model)
     mass = [ones(model.nx); zeros(model.nz); ones(model.nq)]
     rows = findall(iszero, mass)
     u, p, t = MX.sym("u", length(mass)), MX.sym("p", model.np + model.nu), MX.sym("t")
-    by_all = C.jacobian(C.vertcat(MX[rhs(u, p, t)[r] for r in rows]), u)
-    slope = Front.Function(model.name * "_slope", [u, p, t], [C.densify(C.horzcat(MX[by_all[:, r] for r in rows]))])
+    by_all = C.jacobian(vertcat(MX[rhs(u, p, t)[r] for r in rows]), u)
+    slope = Front.Function(model.name * "_slope", [u, p, t], [C.densify(horzcat(MX[by_all[:, r] for r in rows]))])
     RightSide(emitted(rhs), mass, emitted(slope))
 end
 
@@ -534,7 +500,7 @@ function solver_events(callee::C.Function, model, solver)
     found = julia_function(run, model.name * "_events", 3, Tuple{Vararg{Int}}[(n,), (model.np,), (model.nu * nt,)], Tuple{Vararg{Int}}[(n * nt,)], nothing)
     inputs = input_symbols(callee)
     dense(i) = C.vec(C.densify(inputs[i]))
-    path = found(C.vertcat(MX[dense(1), dense(2), MX(C.DM(zeros(model.nq)))]), dense(3), dense(4))
+    path = found(vertcat(MX[dense(1), dense(2), MX(C.DM(zeros(model.nq)))]), dense(3), dense(4))
     lists = [[part(path, (k - 1) * n + from, size) for k in 1:nt] for (from, size) in ((0, model.nx), (model.nx, model.nz), (model.nx + model.nz, model.nq))]
     integrator_results(callee, inputs, lists, nt, 0, 0)
 end
@@ -553,7 +519,7 @@ function solver_rootfinder(callee::C.Function)
     model = rootfinder_model(callee)
     finder = Front.rootfinder(model.name * "_root", solver.alg, residual_function(model); solver.options...)
     inputs = input_symbols(callee)
-    others = C.vertcat(MX[nonzero_column(inputs[i+1]) for i in 0:length(inputs)-1 if i != model.iin])
+    others = vertcat(MX[nonzero_column(inputs[i+1]) for i in 0:length(inputs)-1 if i != model.iin])
     root = finder(nonzero_column(inputs[model.iin+1]), others)
     arguments = copy(inputs)
     arguments[model.iin+1] = piece(root, 0, C.sparsity_in(callee, model.iin))
@@ -633,7 +599,7 @@ function optimization_functions(model; hessians::Bool = true)
         g = Front.Function(model.name * "_" * name, [x, p], map(C.densify, results))
         Emitted(build_function(g; nonzeros = true, expression = Val{false}), g, :nonzeros)
     end
-    hessian(value) = Front.hessian(value, x)
+    hessian(value) = first(Front.hessian(value, x))
     (; cost = emitted("cost", [cost]), grad = emitted("grad", [C.gradient(cost, x)]),
        hess = hessians ? emitted("hess", [hessian(cost)]) : nothing,
        cons = emitted("cons", [cons]), cons_j = emitted("cons_j", [C.jacobian(cons, x)]),
@@ -698,7 +664,7 @@ function solver_conic(callee::C.Function)
     found = julia_function(solve, model.name * "_solve", 6, shapes_in, shapes_out, nothing)
     inputs = input_symbols(callee)
     h, g, a, lba, uba, lbx, ubx, x0 = inputs[1:8]
-    data = C.vertcat(MX[nonzero_column(h), column_of(g), nonzero_column(a)])
+    data = vertcat(MX[nonzero_column(h), column_of(g), nonzero_column(a)])
     x, lam_x, lam_a = found(column_of(x0), data, column_of(lbx), column_of(ubx), column_of(lba), column_of(uba))
     cost = column_of(model.objective(x, data))
     results = MX[x, cost, lam_a, lam_x]

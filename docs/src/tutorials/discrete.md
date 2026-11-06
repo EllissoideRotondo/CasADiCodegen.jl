@@ -81,8 +81,8 @@ S, I, R = SX.sym("S"), SX.sym("I"), SX.sym("R")
 proportion(rate) = 1 - exp(-rate * δt)
 infection = proportion(β * c * I / (S + I + R)) * S
 recovery = proportion(γ) * I
-sir = CasadiFunction("sir", [vertcat(S, I, R), vertcat(β, c, γ, δt)],
-                     [vertcat(S - infection, I + infection - recovery, R + recovery), S + I + R],
+sir = CasadiFunction("sir", [vcat(S, I, R), vcat(β, c, γ, δt)],
+                     [vcat(S - infection, I + infection - recovery, R + recovery), S + I + R],
                      ["u", "p"], ["next", "N"])
 nothing # hide
 ```
@@ -128,7 +128,7 @@ the newer value into the place of the older one:
 
 ```@example discrete
 older, newer = SX.sym("older"), SX.sym("newer")
-fibonacci = CasadiFunction("fibonacci", [vertcat(older, newer)], [vertcat(newer, older + newer)])
+fibonacci = CasadiFunction("fibonacci", [vcat(older, newer)], [vcat(newer, older + newer)])
 series = SciMLBase.solve(SciMLBase.DiscreteProblem(fibonacci, [1.0, 1.0], (0.0, 10.0)), FunctionMap())
 series[:newer]
 ```
@@ -172,8 +172,8 @@ least-squares problem. The states have the names of the symbols of the next stat
 ```@example discrete
 y, e, y_prev, e_prev = SX.sym("y"), SX.sym("e"), SX.sym("y_prev"), SX.sym("e_prev")
 λ, h, t = SX.sym("λ"), SX.sym("h"), SX.sym("t")
-euler = CasadiFunction("backward_euler", [vertcat(y, e), vertcat(y_prev, e_prev), vertcat(λ, h), t],
-                       [vertcat(y - y_prev + h * λ * (y - cos(t)), e - (y - cos(t)))])
+euler = CasadiFunction("backward_euler", [vcat(y, e), vcat(y_prev, e_prev), vcat(λ, h), t],
+                       [vcat(y - y_prev + h * λ * (y - cos(t)), e - (y - cos(t)))])
 implicit = SciMLBase.ImplicitDiscreteProblem(euler, [0.0, -1.0], (0.0, 2.0), [50.0, 0.1])
 nothing # hide
 ```

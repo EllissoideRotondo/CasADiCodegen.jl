@@ -55,8 +55,8 @@ the initial time and ignores its end:
 
 ```@example attractors
 x, y, z, a, b, t = SX.sym("x"), SX.sym("y"), SX.sym("z"), SX.sym("a"), SX.sym("b"), SX.sym("t")
-rhs = CasadiFunction("modlorenz", [vertcat(x, y, z), vertcat(a, b), t],
-                     [vertcat(y - x, -x * z + b * abs(z), x * y - a)])
+rhs = CasadiFunction("modlorenz", [vcat(x, y, z), vcat(a, b), t],
+                     [vcat(y - x, -x * z + b * abs(z), x * y - a)])
 f = SciMLBase.ODEFunction(rhs; inplace = false)
 problem = SciMLBase.ODEProblem(f, SVector(-4.0, 5.0, 0.0), (0.0, 1.0), [5.0, 0.1])
 ds = CoupledODEs(problem)

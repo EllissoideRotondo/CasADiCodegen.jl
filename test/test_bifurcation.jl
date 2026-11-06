@@ -4,7 +4,7 @@ import BifurcationKit as BK
 
 # The normal form of a pitchfork, μ x - x³ + α y = 0, -y = 0, with the observed variable x².
 x, y, μ, α = SX.sym("x"), SX.sym("y"), SX.sym("μ"), SX.sym("α")
-pitchfork = CasadiFunction("pitchfork", [vertcat(x, y), vertcat(μ, α)], [vertcat(μ * x - x^3 + α * y, -y), x^2],
+pitchfork = CasadiFunction("pitchfork", [vcat(x, y), vcat(μ, α)], [vcat(μ * x - x^3 + α * y, -y), x^2],
                            ["u", "p"], ["residual", "square"])
 pitchfork_problem = BK.BifurcationProblem(pitchfork, [:y => 0.5, :x => 1.0], [:μ => -1.0, :α => 1.0], :μ;
                                           record_from_solution = (:x, :μ, :square))
@@ -37,7 +37,7 @@ end
     # The right side f(u, p, t) of an ODE without the time, in MX symbols: a Hopf point at μ = 0.
     u, ν, t = MX.sym("u", 2), MX.sym("ν"), MX.sym("t")
     r2 = u[1]^2 + u[2]^2
-    rhs = CasadiFunction("hopf", [u, ν, t], [vertcat(ν * u[1] - u[2] - u[1] * r2, u[1] + ν * u[2] - u[2] * r2)])
+    rhs = CasadiFunction("hopf", [u, ν, t], [vcat(ν * u[1] - u[2] - u[1] * r2, u[1] + ν * u[2] - u[2] * r2)])
     hopf = BK.BifurcationProblem(rhs, [0.0, 0.0], [-1.0], :ν; record_from_solution = :u_0)
     @test BK.d2F(hopf, [0.1, 0.2], [0.3], [1.0, 0.0], [0.0, 1.0]) ≈ [-2 * 0.2, -2 * 0.1]
     branch = BK.continuation(hopf, BK.PALC(), options)

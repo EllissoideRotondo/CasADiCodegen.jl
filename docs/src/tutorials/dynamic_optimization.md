@@ -70,7 +70,7 @@ which hides its iteration log:
 
 ```@example dynopt
 function collocation_problem(w, J, g, w0; lb, ub)
-    G = vertcat(g...)
+    G = vcat(g...)
     objective = CasadiFunction("J", [w], [J])
     constraints = CasadiFunction("g", [w], [G])
     f = SciMLBase.OptimizationFunction(objective, constraints; sparse = true)
@@ -107,7 +107,7 @@ Tₘ, m_c = 3.5 * g₀ * m₀, 0.6
 function rocket(x, T)
     h, v, m = x[1], x[2], x[3]
     drag = D_c * v^2 * exp(-h_c * (h - h₀) / h₀)
-    return vertcat(v, (T - drag) / m - g₀ * h₀ / h, -T / c)
+    return vcat(v, (T - drag) / m - g₀ * h₀ / h, -T / c)
 end
 nothing # hide
 ```
@@ -128,7 +128,7 @@ for k in 1:N
     collocate!(g, rocket, X[k], Xc[k], T[k], X[k+1], te / N)
 end
 push!(g, X[end][3] - m_c)                                      # empty at the final time
-w = vertcat(X..., reduce(vcat, Xc)..., T...)
+w = vcat(X..., reduce(vcat, Xc)..., T...)
 size(w)
 ```
 
@@ -184,7 +184,7 @@ the objective. The right side refers to it, and the collocation equations do not
 ```@example dynopt
 N = 20
 tf = SX.sym("tf")
-block(x, u) = tf * vertcat(x[2], u)
+block(x, u) = tf * vcat(x[2], u)
 
 X = [SX.sym("x_$k", 2) for k in 0:N]
 Xc = [[SX.sym("xc_$(k)_$j", 2) for j in 1:3] for k in 1:N]
@@ -195,7 +195,7 @@ for k in 1:N
     collocate!(g, block, X[k], Xc[k], U[k], X[k+1], 1 / N)
 end
 push!(g, X[end])                                               # at rest at the origin
-w = vertcat(X..., reduce(vcat, Xc)..., U..., tf)
+w = vcat(X..., reduce(vcat, Xc)..., U..., tf)
 
 x0 = [1.0, 0.0]
 lb = [x0; fill(-Inf, 2N + 6N); fill(-1.0, N); 0.0]
@@ -233,7 +233,7 @@ to OrdinaryDiffEq.jl:
 using OrdinaryDiffEqTsit5: Tsit5
 
 β, γ = 1.0, 3.0
-lotka_volterra(x, p) = vertcat(p[1] * x[1] - β * x[1] * x[2], -γ * x[2] + p[2] * x[1] * x[2])
+lotka_volterra(x, p) = vcat(p[1] * x[1] - β * x[1] * x[2], -γ * x[2] + p[2] * x[1] * x[2])
 
 x, p = SX.sym("x", 2), SX.sym("p", 2)
 rhs = CasadiFunction("lotka_volterra", [x, p], [lotka_volterra(x, p)])
@@ -261,7 +261,7 @@ for k in 1:N
     collocate!(g, (x, _) -> lotka_volterra(x, q), X[k], Xc[k], nothing, X[k+1], 1 / N)
 end
 J = sum((X[k][1] - data[k])^2 for k in 1:N+1)
-w = vertcat(X..., reduce(vcat, Xc)..., q)
+w = vcat(X..., reduce(vcat, Xc)..., q)
 
 x0 = [4.0, 2.0]
 lb = [x0; fill(-Inf, 8N + 2)]

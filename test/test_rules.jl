@@ -6,13 +6,13 @@ using ChainRulesCore: NoTangent, ZeroTangent, Tangent, frule, rrule
 
 @testset "a function with rules" begin
     x, P = MX.sym("x", 3), MX.sym("P", C.Sparsity.lower(2))
-    y1, y2 = vertcat([sin(x[1]) * x[2], x[3]^2 * P[1, 1]]), C.mtimes(P, x[1:2]) * x[3]
+    y1, y2 = vcat(sin(x[1]) * x[2], x[3]^2 * P[1, 1]), C.mtimes(P, x[1:2]) * x[3]
     f = CasADiCodegen.Function("model", [x, P], [y1, y2])
     g = CasADiCodegen.differentiable(f)
     xv, Pv = [0.4, -1.2, 0.7], [1.5 0.0; -0.3 2.0]
     @test g(xv, Pv) == build_function(f; expression = Val{false})[1](xv, Pv)
     # The dense Jacobians: rows of y1 then of y2; columns of x, then of the four places of P.
-    jac = CasADiCodegen.Function("jacobians", [x, P], [jacobian(vertcat([y1, y2]), x), jacobian(vertcat([y1, y2]), P)])
+    jac = CasADiCodegen.Function("jacobians", [x, P], [jacobian(vcat(y1, y2), x), jacobian(vcat(y1, y2), P)])
     J = hcat((reshape(dense_values(block), 4, :) for block in jac(C.DM(xv), C.DM(C.Sparsity.lower(2), C.DM([1.5, -0.3, 2.0]))))...)
 
     dx, dP = [0.3, 0.1, -0.5], [0.2 9.0; 0.7 -0.4]              # the entry above the diagonal has no effect

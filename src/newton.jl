@@ -1,5 +1,5 @@
 # The Newton rootfinder of CasADi (`rootfinder(name, "newton", f)`) as Julia
-# code: the iteration of CasADi 3.8.1 (`Newton::solve`), with the emitted
+# code: the iteration of CasADi 3.8.2 (`Newton::solve`), with the emitted
 # residual and the emitted Jacobian, so that generated code does not call
 # CasADi for it.
 
@@ -32,7 +32,7 @@ in the place of the residual.
 - `rows[k]` and `columns[k]` give the place of nonzero `k` of the Jacobian,
   which has `n` rows and columns.
 
-The iteration ports `Newton::solve` of CasADi 3.8.1. It stops when the largest
+The iteration ports `Newton::solve` of CasADi 3.8.2. It stops when the largest
 residual is at most `abstol`, or when the largest element of the step is at
 most `abstol_step`. With `line_search` the step is halved until the largest
 residual falls by the factor `1 - alpha / 2`.

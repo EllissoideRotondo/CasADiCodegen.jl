@@ -17,7 +17,7 @@ torque about its lowest point:
 using CasADiCodegen
 
 x, u, p = SX.sym("x", 2), SX.sym("u"), SX.sym("p", 2)        # p = [g / L, 1 / (m L^2)]
-f = CasadiFunction("f", [x, u, p], [vertcat(x[2], -p[1] * sin(x[1]) + p[2] * u)])
+f = CasadiFunction("f", [x, u, p], [vcat(x[2], -p[1] * sin(x[1]) + p[2] * u)])
 h = CasadiFunction("h", [x, u, p], [x[1]])                    # the angle is measured
 lin, lin! = CasADiCodegen.linearization(f, h)
 A, B, C, D = lin([0.0, 0.0], [0.0], [9.81, 2.0])
@@ -58,7 +58,7 @@ where `z = 1`, the slope of `z` is `1 / (1 + 3z^2) = 1/4`:
 ```@example linearize
 x, z, u = SX.sym("x", 2), SX.sym("z"), SX.sym("u")
 p = SX.sym("p", 0, 1)                                         # no parameter
-f = CasadiFunction("f", [x, z, u, p], [vertcat(x[2], -z + u)])
+f = CasadiFunction("f", [x, z, u, p], [vcat(x[2], -z + u)])
 g = CasadiFunction("g", [x, z, u, p], [z + z^3 - x[1]])
 h = CasadiFunction("h", [x, z, u, p], [z])
 lin_dae, _ = CasADiCodegen.linearization(f, g, h)
@@ -79,7 +79,7 @@ the equations 2 and 4 hold the unknowns 1 and 3 only, so they form the first blo
 
 ```@example linearize
 y = SX.sym("y", 4)
-equations = vertcat(y[2] - y[4], y[1] + y[3] - 1, y[4] * y[1] - y[3], y[1] - 2y[3])
+equations = vcat(y[2] - y[4], y[1] + y[3] - 1, y[4] * y[1] - y[3], y[1] - 2y[3])
 form = CasADiCodegen.block_triangular_form(CasADiCodegen.C.sparsity(jacobian(equations, y)))
 [form.colperm[form.colblock[k]:form.colblock[k+1]-1] for k in 1:form.blocks]
 ```

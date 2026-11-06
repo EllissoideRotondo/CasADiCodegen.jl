@@ -33,8 +33,8 @@ import SciMLBase
 
 x, y, z = SX.sym("x"), SX.sym("y"), SX.sym("z")
 σ, ρ, β = SX.sym("σ"), SX.sym("ρ"), SX.sym("β")
-equations = vertcat(σ * (y - x), x * (ρ - z) - y, x * y - β * z)
-lorenz = CasadiFunction("lorenz", [vertcat(x, y, z), vertcat(σ, ρ, β)], [equations])
+equations = vcat(σ * (y - x), x * (ρ - z) - y, x * y - β * z)
+lorenz = CasadiFunction("lorenz", [vcat(x, y, z), vcat(σ, ρ, β)], [equations])
 nothing # hide
 ```
 
@@ -106,8 +106,8 @@ point:
 n = 8
 h = 1 / (n + 1)
 u, λ = SX.sym("u", n), SX.sym("λ")
-padded = vertcat(0, u, 0)
-residual = (padded[1:n] - 2 * padded[2:(n + 1)] + padded[3:(n + 2)]) / h^2 + λ * exp(u)
+padded = vcat(0, u, 0)
+residual = (padded[1:n] - 2 * padded[2:(n + 1)] + padded[3:(n + 2)]) / h^2 + λ * exp.(u)
 bratu = CasadiFunction("bratu", [u, λ], [residual])
 nothing # hide
 ```

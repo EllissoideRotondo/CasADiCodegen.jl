@@ -41,7 +41,7 @@ function change_independent_variable(state, rhs, i, t)
     n = size(state, 1)
     @assert size(rhs, 1) == n && 1 <= i <= n
     keep = [j for j in 1:n if j != i]
-    return vertcat(state[keep], t), vertcat(rhs[keep] / rhs[i], 1 / rhs[i])
+    return vcat(state[keep], t), vcat(rhs[keep] / rhs[i], 1 / rhs[i])
 end
 nothing # hide
 ```
@@ -68,8 +68,8 @@ from ``x = y = 0`` and ``v_y(0) = v``. To know the height of the ball at a targe
 ```@example ivar
 x, y, vy, t = SX.sym("x"), SX.sym("y"), SX.sym("vy"), SX.sym("t")
 g, v = SX.sym("g"), SX.sym("v")
-z, dz = change_independent_variable(vertcat(x, y, vy), vertcat(v, vy, -g), 1, t)
-ball = CasadiFunction("ball", [z, vertcat(g, v), x], [dz])
+z, dz = change_independent_variable(vcat(x, y, vy), vcat(v, vy, -g), 1, t)
+ball = CasadiFunction("ball", [z, vcat(g, v), x], [dz])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(ball), [0.0, 8.0, 0.0], (0.0, 10.0), [9.81, 8.0])
 solution = SciMLBase.solve(problem, Tsit5())
 solution[[:y, :t]][end]
@@ -87,7 +87,7 @@ In the time, the same question needs an event that stops the solver where ``x`` 
 `terminate!` does this:
 
 ```@example ivar
-in_time = CasadiFunction("ball_t", [vertcat(x, y, vy), vertcat(g, v), t], [vertcat(v, vy, -g)])
+in_time = CasadiFunction("ball_t", [vcat(x, y, vy), vcat(g, v), t], [vcat(v, vy, -g)])
 stop = SciMLBase.ContinuousCallback((u, t, integrator) -> u[1] - 10, SciMLBase.terminate!)
 problem_t = SciMLBase.ODEProblem(SciMLBase.ODEFunction(in_time), [0.0, 0.0, 8.0], (0.0, 5.0), [9.81, 8.0])
 solution_t = SciMLBase.solve(problem_t, Tsit5(); callback = stop)
@@ -125,8 +125,8 @@ using Logging: with_logger, NullLogger
 Ωs, a = SX.sym("Ω", 3), SX.sym("a")
 w = [1 / 3, 0, -1]
 da = sqrt(sum(Ωs[k] for k in 1:3)) * a^2
-dΩ = vertcat((-3 * (1 + w[k]) * da / a * Ωs[k] for k in 1:3)...)
-friedmann = CasadiFunction("friedmann", [vertcat(Ωs, a)], [vertcat(dΩ, da)])
+dΩ = vcat((-3 * (1 + w[k]) * da / a * Ωs[k] for k in 1:3)...)
+friedmann = CasadiFunction("friedmann", [vcat(Ωs, a)], [vcat(dΩ, da)])
 today = [5e-5, 0.3, 1 - 5e-5 - 0.3, 1.0]                  # Ω_r, Ω_m, Ω_Λ, a
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(friedmann), today, (0.0, -3.3))
 solution = with_logger(() -> SciMLBase.solve(problem, Tsit5(); reltol = 1e-5), NullLogger())
@@ -143,7 +143,7 @@ with ``a`` replaced by ``e^b``, times ``e^b``. `substitute` makes the replacemen
 expression:
 
 ```@example ivar
-z, dz_a = change_independent_variable(vertcat(Ωs, a), vertcat(dΩ, da), 4, SX.sym("t"))
+z, dz_a = change_independent_variable(vcat(Ωs, a), vcat(dΩ, da), 4, SX.sym("t"))
 b = SX.sym("b")
 dz_b = substitute(dz_a, a, exp(b)) * exp(b)
 nothing # hide

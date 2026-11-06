@@ -10,7 +10,7 @@ promotes to `Traced`. `det`, `inv` and `A \\ b` of a square matrix of `Traced` v
 formed by CasADi, since the factorizations of LinearAlgebra choose pivots by comparing
 values. A comparison gives a traced condition, not a `Bool`, so an `if`, `&&` or `? :` on
 traced values throws a `TypeError` instead of following one branch. Use `ifelse`, `min`, `max` or `clamp` for a choice that
-depends on the input, or [`CasADiCodegen.callback`](@ref) for a Julia function with branches.
+depends on the input, or [`CasADiCodegen.callback`](@ref "Call a Julia function from the model") for a Julia function with branches.
 
 See [`CasADiCodegen.traced`](@ref traced) and [`CasADiCodegen.untraced`](@ref untraced).
 """
@@ -67,9 +67,9 @@ Base.cbrt(a::Traced{S}) where {S<:Symbolic} = Traced{S}(C.sign(a.value) * C.powe
 # The factorizations of LinearAlgebra choose pivots by comparing values, which a trace
 # cannot do; CasADi forms the determinant, the inverse and the solution from the graph.
 function casadi_matrix(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic}
-    C.reshape(C.vertcat(S[x.value for x in vec(collect(A))]), size(A, 1), size(A, 2))
+    C.reshape(vertcat(S[x.value for x in vec(collect(A))]), size(A, 1), size(A, 2))
 end
-casadi_column(::Type{S}, b::AbstractVector) where {S<:Symbolic} = C.vertcat(S[convert(Traced{S}, x).value for x in collect(b)])
+casadi_column(::Type{S}, b::AbstractVector) where {S<:Symbolic} = vertcat(S[convert(Traced{S}, x).value for x in collect(b)])
 square_traced(A) = (@requires size(A, 1) == size(A, 2) "the matrix must be square; got the size $(size(A))"; A)
 
 LinearAlgebra.det(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic} = Traced{S}(C.det(casadi_matrix(square_traced(A))))
@@ -130,7 +130,7 @@ untraced(x::Traced) = x.value
 function untraced(v::AbstractVector)
     S = mapreduce(x -> x isa Traced ? typeof(x.value) : Union{}, typejoin, v; init = Union{})
     @requires S === SX || S === MX "untraced needs a vector with traced values of one type, SX or MX; got the element types $(unique(typeof.(v)))"
-    column = C.vertcat(S[convert(Traced{S}, x).value for x in collect(v)])
+    column = vertcat(S[convert(Traced{S}, x).value for x in collect(v)])
     @ensures size(column) == (length(v), 1) "untraced must give one element per element of the vector"
     column
 end
@@ -202,7 +202,7 @@ end
 function named_symbol(::Type{S}, default::String, n::Int, names, kind::String) where {S<:Symbolic}
     names === nothing && return S.sym(default, n)
     @requires length(names) == n "traced_function: $kind needs $n names, one per element; got $(length(names))"
-    n == 0 ? S.sym(default, 0) : C.vertcat(S[S.sym(string(x)) for x in names])
+    n == 0 ? S.sym(default, 0) : vertcat(S[S.sym(string(x)) for x in names])
 end
 
 """

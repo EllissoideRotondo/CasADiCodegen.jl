@@ -16,7 +16,7 @@ import SciMLBase
 
 x, mu = MX.sym("x", 4), MX.sym("mu")
 r3 = (x[1]^2 + x[2]^2)^1.5
-ode = vertcat(x[3], x[4], -mu * x[1] / r3, -mu * x[2] / r3)
+ode = vcat(x[3], x[4], -mu * x[1] / r3, -mu * x[2] / r3)
 cv = CasADiCodegen.C.integrator("cv", "cvodes", Dict("x" => x, "p" => mu, "ode" => ode), 0.0, [1.0, 2.0, 3.0])
 nothing # hide
 ```
@@ -114,7 +114,7 @@ solver of the field `ode`, or of `dae` for algebraic states; an integrator `rk` 
 an event is a change of sign of an element of `"zero"` from positive to negative,
 the transition then sets the state, and a call throws after more than `max_events`
 events, where `max_events` is an option of the integrator of CasADi (20 by default).
-One case differs: CasADi 3.8.1 misses an event that falls exactly on an output time, while
+One case differs: CasADi 3.8.2 misses an event that falls exactly on an output time, while
 the generated code applies it and returns the state after the event at that time
 ([Differences from CasADi](@ref) gives an example).
 The numbers must be `Float64`: this replaced integrator does not take dual numbers,
@@ -125,8 +125,8 @@ As an example, we model a ball that bounces with the restitution `e`:
 
 ```julia
 h, v, e = MX.sym("h"), MX.sym("v"), MX.sym("e")             # height, speed, restitution
-model = Dict("x" => vertcat(h, v), "p" => e, "ode" => vertcat(v, -9.81), "zero" => h)
-bounce = CasadiFunction("transition", Dict("x" => vertcat(h, v), "p" => e, "post_x" => vertcat(h, -e * v)),
+model = Dict("x" => vcat(h, v), "p" => e, "ode" => vcat(v, -9.81), "zero" => h)
+bounce = CasadiFunction("transition", Dict("x" => vcat(h, v), "p" => e, "post_x" => vcat(h, -e * v)),
                         CasADiCodegen.C.event_in(), CasADiCodegen.C.event_out())
 ball = CasADiCodegen.C.integrator("ball", "cvodes", model, 0.0, [0.5, 1.0, 2.0], Dict("transition" => bounce))
 ```
@@ -141,7 +141,7 @@ We take the Jacobian of the final states by the initial state and the restitutio
 ```julia
 s0, q = MX.sym("s0", 2), MX.sym("q")
 final = CasADiCodegen.C.vec(ball(Dict("x0" => s0, "p" => q))["xf"])
-J = jacobian(final, vertcat(s0, q))
+J = jacobian(final, vcat(s0, q))
 f = CasadiFunction("f", [s0, q], [final, CasADiCodegen.C.densify(J)])
 ```
 
