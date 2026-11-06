@@ -219,8 +219,8 @@ Pkg.status() # hide
 
 ## Acknowledgements
 
-CasADi is the work of the CasADi developers, and its Julia front end is the SWIG
-interface of the CasADi project. CasADi is described in J. A. E. Andersson,
+CasADi is the work of the CasADi developers, and its Julia front end is
+[CasADiNative.jl](https://github.com/casadi/CasADiNative.jl) of the CasADi project. CasADi is described in J. A. E. Andersson,
 J. Gillis, G. Horn, J. B. Rawlings and M. Diehl, "CasADi: a software framework for
 nonlinear optimization and optimal control", *Mathematical Programming Computation*
 11 (2019), 1–36. The forms of the generated functions follow `build_function` of

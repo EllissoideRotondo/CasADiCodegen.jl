@@ -88,8 +88,8 @@ CasADi, and the API reference ends the manual.
   CasADi function has.
 - Some CasADi nodes have no generated code, such as cone constraints and Functional
   Mock-up Units.
-- The package is tested on Linux; macOS is not tested. It does not load on Windows,
-  because the Windows build of the CasADi front end lacks functions that it needs.
+- The package is tested on Linux. macOS and Windows, where CasADiNative.jl loads, are
+  not tested.
 
 The page [Scope and differences from CasADi](https://orbitology.github.io/CasADiCodegen.jl/dev/explanation/scope/)
 of the manual lists all limits.
