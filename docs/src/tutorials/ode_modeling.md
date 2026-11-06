@@ -224,6 +224,24 @@ The initial state needs the initial velocity, here ``\dot{x}(0) = 2``, besides t
 values of ``x``, ``y`` and ``z``, and the solution holds the velocity under the name of its
 symbol. An equation of a higher order adds one symbol for each derivative in the same way.
 
+The submodule `CasADiCodegen.Models` makes these symbols itself from the equations as they
+are written (see [Write a model as equations](@ref)): `Differential(t)` stands for the
+derivative, `~` separates the two sides of an equation, and [`System`](@ref
+CasADiCodegen.Models.System) turns the equation of the second order into two of the first:
+
+```@example ode
+using CasADiCodegen.Models
+
+D = Differential(t)
+lorenz2 = System([D(D(x)) ~ σ * (y - x), D(y) ~ x * (ρ - z) - y, D(z) ~ x * y - β * z], t;
+                 parameters = [σ, ρ, β], name = "lorenz2")
+equations(lorenz2)
+```
+
+The velocity is the derivative symbol `dx` of `D(x)`, in place of `vx`, and
+`SciMLBase.ODEProblem(lorenz2, [x => 1.0, D(x) => 2.0, y => 0.0, z => 0.0], (0.0, 100.0), [σ => 28.0, ρ => 10.0, β => 8 / 3])`
+gives the problem above with its initial values by name.
+
 ## Fit the parameters to data
 
 The Lotka-Volterra model describes a prey population ``x`` and a predator population

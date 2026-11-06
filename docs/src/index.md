@@ -12,8 +12,10 @@ Features include:
 
 - Julia functions for the current session with [`build_function`](@ref), or a Julia module
   on disk with [`generate_julia`](@ref), each with an out-of-place and an in-place form.
-- Models that were built in Python, MATLAB or C++ and saved by CasADi, and models
-  written as generic Julia code, which a number type traces into CasADi.
+- Models that were built in Python, MATLAB or C++ and saved by CasADi, models
+  written as generic Julia code, which a number type traces into CasADi, and models
+  written as equations with time derivatives, which `CasADiCodegen.Models` compiles into
+  the form of the CasADi integrators.
 - Calls to Julia functions inside a model, with derivatives from Julia functions or
   from an automatic differentiation backend.
 - Integrators, rootfinders and optimization solvers inside a model, which the
@@ -108,12 +110,13 @@ Depth = 1
 ### Models
 
 These guides show how a model gets into the package and what it can contain:
-a file of another language, generic Julia code traced into CasADi, a call to Julia
+equations with time derivatives, a file of another language, generic Julia code traced into CasADi, a call to Julia
 code, an integrator, an event, a right side that switches on the state, or an implicit
 equation, and how a model is linearized.
 
 ```@contents
 Pages = [
+    "howto/equations.md",
     "howto/load_model.md",
     "howto/traced_models.md",
     "howto/callbacks.md",

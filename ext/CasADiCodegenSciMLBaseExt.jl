@@ -2173,6 +2173,92 @@ function SciMLBase.ODEProblem(dae::CasADiCodegen.C.DaeBuilder, tspan::Union{Noth
 end
 
 """
+    SciMLBase.ODEProblem(sys::CasADiCodegen.Models.System, u0, tspan, p = Pair[]; jac = true,
+                         paramjac = true, sparse = false, specialize = SciMLBase.FullSpecialize,
+                         chunk_size = nothing, split_above = nothing, optlevel = nothing,
+                         cache = false, options...)
+
+Make the SciML problem of the compiled model `sys`, with generated code for its right side
+and for the Jacobians of it.
+
+- `u0` gives the initial values of the states, [`unknowns(sys)`](@ref
+  CasADiCodegen.Models.unknowns): a vector in their order, or pairs from a state to its
+  value, where the state is its symbol, such as `D(x)`, or its name as a `Symbol` or a
+  `String`. Each differential state needs a value. An algebraic state without one starts
+  from 0, which a solver must correct, for example with
+  `initializealg = BrownFullBasicInit()` of OrdinaryDiffEqNonlinearSolve.jl.
+- `p` gives the values of the parameters in the same ways, each one required.
+- With algebraic states the problem has a mass matrix, so it needs a solver for such
+  problems, for example `Rodas5P()` of OrdinaryDiffEqRosenbrock.jl.
+- The problem has the names of the states, the parameters and the time, and the observed
+  variables of `sys` by name, so that `solution[:y]` gives the values of `y`.
+
+The keywords from `jac` to `cache` go to
+[`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function)); the other `options`
+go to the problem.
+
+# Examples
+```julia
+using CasADiCodegen, CasADiCodegen.Models
+t, x, k = SX.sym("t"), SX.sym("x"), SX.sym("k")
+D = Differential(t)
+sys = System([D(D(x)) ~ -k * x], t; parameters = [k])
+problem = SciMLBase.ODEProblem(sys, [x => 1.0, D(x) => 0.0], (0.0, 1.0), [k => 4.0])
+```
+"""
+function SciMLBase.ODEProblem(sys::CasADiCodegen.Models.System, u0, tspan::Tuple{Real,Real}, p = Pair[];
+                              jac::Bool = true, paramjac::Bool = true, sparse::Bool = false,
+                              specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
+                              chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
+    M = CasADiCodegen.Models
+    label = "System \"$(sys.name)\""
+    states, parameters = M.unknowns(sys), M.parameters(sys)
+    nx = length(sys.x)
+    observed = M.observed(sys)
+    x0 = values_of(label, "state", states, u0, [fill(NaN, nx); zeros(length(sys.z))], observed)
+    missing_states = [C.name(states[i]) for i in 1:nx if isnan(x0[i])]
+    @requires isempty(missing_states) "$label: give the initial value of each differential state; $(join(missing_states, ", ")) has none"
+    p0 = values_of(label, "parameter", parameters, p, fill(NaN, length(parameters)), observed)
+    missing_parameters = [C.name(parameters[i]) for i in eachindex(parameters) if isnan(p0[i])]
+    @requires isempty(missing_parameters) "$label: give the value of each parameter; $(join(missing_parameters, ", ")) has none"
+    column(v) = isempty(v) ? CasADiCodegen.SX(0, 1) : vcat(v...)
+    results = append!([column([sys.ode; sys.alg])], last.(observed))
+    rhs = CasADiCodegen.Function(sys.name, [column(states), column(parameters), sys.t], results,
+                                 ["u", "p", "t"], ["du"; [C.name(first(o)) for o in observed]])
+    mass = isempty(sys.z) ? (;) : (; mass_matrix = LinearAlgebra.Diagonal([ones(nx); zeros(length(sys.z))]))
+    f = SciMLBase.ODEFunction(rhs; jac, paramjac, sparse, specialize, chunk_size, split_above, optlevel, cache, mass...)
+    SciMLBase.ODEProblem(f, x0, float.(tspan), p0; options...)
+end
+
+"""
+    values_of(label, kind, symbols, given, defaults, observed) -> Vector{Float64}
+
+Return the values of the scalar `symbols` from `given`: a vector in their order, or pairs
+from a symbol, a `Symbol` or a `String` to a value. A symbol without a value keeps its
+value in `defaults`. `kind` and `observed` serve the messages of errors.
+"""
+function values_of(label, kind, symbols::Vector{CasADiCodegen.SX}, given, defaults::Vector{Float64}, observed)
+    if given isa AbstractVector{<:Real}
+        @requires length(given) == length(symbols) "$label: $(length(given)) values for $(length(symbols)) $(kind)s"
+        return Vector{Float64}(given)
+    end
+    values = copy(defaults)
+    names = [C.name(s) for s in symbols]
+    for (key, value) in given
+        place = key isa CasADiCodegen.SX ? findfirst(s -> C.is_equal(s, key), symbols) :
+                key isa Union{Symbol,AbstractString} ? findfirst(==(String(key)), names) :
+                throw(ArgumentError("$label: a $kind is a symbol, a Symbol or a String, not $(repr(key))"))
+        if place === nothing
+            name = key isa CasADiCodegen.SX ? C.name(key) : String(key)
+            eliminated = any(o -> C.name(first(o)) == name, observed)
+            @requires false "$label: $name is not a $kind of the model$(eliminated ? "; it is an observed variable, which the model computes" : "")"
+        end
+        values[place] = value
+    end
+    values
+end
+
+"""
     control_changes(controls, times, np, callback) -> NamedTuple
 
 Return the options `callback` and `tstops` of a problem whose controls are constant

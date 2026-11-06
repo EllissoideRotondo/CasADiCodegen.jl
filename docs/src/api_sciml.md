@@ -7,11 +7,12 @@ names follow the conventions of the [API reference](@ref).
 ## SciML problems from solvers and models of CasADi
 
 These constructors make a SciML problem from a solver object of CasADi, from a
-`DaeBuilder` or from an `Opti`, with generated code for the model and its derivatives.
+`DaeBuilder`, from a `System` of `CasADiCodegen.Models` or from an `Opti`, with generated code for the model and its derivatives.
 
 ```@docs
 SciMLBase.ODEProblem(::CasADiCodegen.Function, ::AbstractVector{<:Real}, ::AbstractVector{<:Real})
 SciMLBase.ODEProblem(::CasADiCodegen.C.DaeBuilder, ::Union{Nothing,Tuple{Real,Real}})
+SciMLBase.ODEProblem(::CasADiCodegen.Models.System, ::Any, ::Tuple{Real,Real})
 SciMLBase.NonlinearProblem(::CasADiCodegen.Function, ::AbstractVector{<:Real}, ::AbstractVector{<:Real}...)
 SciMLBase.SDEProblem(::CasADiCodegen.Function, ::CasADiCodegen.Function, ::Any, ::Any)
 SciMLBase.DiscreteProblem(::CasADiCodegen.Function, ::Any, ::Any)

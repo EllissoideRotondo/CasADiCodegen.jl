@@ -15,8 +15,10 @@ Features include:
 
 - Julia functions for the current session with `build_function`, or a Julia module
   on disk with `generate_julia`, each with an out-of-place and an in-place form.
-- Models that were built in Python, MATLAB or C++ and saved by CasADi, and models
-  written as generic Julia code, which a number type traces into CasADi.
+- Models that were built in Python, MATLAB or C++ and saved by CasADi, models
+  written as generic Julia code, which a number type traces into CasADi, and models
+  written as equations with time derivatives, which `CasADiCodegen.Models` compiles into
+  the form of the CasADi integrators.
 - Calls to Julia functions inside a model, with derivatives from Julia functions or
   from an automatic differentiation backend.
 - Integrators, rootfinders and optimization solvers inside a model, which the
@@ -75,8 +77,9 @@ with a [tutorial](https://orbitology.github.io/CasADiCodegen.jl/dev/getting_star
 that builds a model, generates Julia functions for it and compares the forms of the
 generated code. Tutorials then solve the problems of the ModelingToolkit.jl
 documentation with CasADi models, from ODE and DAE models to nonlinear systems, static
-and dynamic optimization, events and parameter estimation. Its how-to guides cover models from other languages, Julia
-models traced into CasADi, calls to Julia code, integrators, events and rootfinders,
+and dynamic optimization, events and parameter estimation. Its how-to guides cover
+[models written as equations](https://orbitology.github.io/CasADiCodegen.jl/dev/howto/equations/)
+with time derivatives, models from other languages, Julia models traced into CasADi, calls to Julia code, integrators, events and rootfinders,
 the replacement of the solvers of CasADi by SciML solvers, CasADi functions in SciML
 problems, and large models; the concept pages explain the matrix code, the
 derivatives of integrators, the cost of the generated code and the differences from

@@ -37,6 +37,8 @@ using .Codegen: build_function, generate_julia, instruction_histogram, nan_trace
     initialization_problem, traced_problem, nonsmooth_operations, smooth_step, smooth_sign, smooth_abs, smooth_max, smooth_min,
     smoothed, natural_continuation
 
+include("models.jl")
+
 """
     CasadiFunction(name, inputs, outputs[, options])
 

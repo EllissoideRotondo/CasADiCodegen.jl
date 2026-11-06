@@ -6,7 +6,7 @@ extension(name) = Base.get_extension(CasADiCodegen, name)
 
 makedocs(;
     sitename = "CasADiCodegen.jl",
-    modules = [CasADiCodegen, CasADiCodegen.Codegen, extension(:CasADiCodegenSciMLBaseExt), extension(:CasADiCodegenChainRulesCoreExt), extension(:CasADiCodegenSparseArraysExt), extension(:CasADiCodegenOptimizationBaseExt), extension(:CasADiCodegenBifurcationKitExt)],
+    modules = [CasADiCodegen, CasADiCodegen.Codegen, CasADiCodegen.Models, extension(:CasADiCodegenSciMLBaseExt), extension(:CasADiCodegenChainRulesCoreExt), extension(:CasADiCodegenSparseArraysExt), extension(:CasADiCodegenOptimizationBaseExt), extension(:CasADiCodegenBifurcationKitExt)],
     format = Documenter.HTML(;
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://orbitology.github.io/CasADiCodegen.jl",
@@ -40,6 +40,7 @@ makedocs(;
             "tutorials/large_models.md",
         ],
         "Models" => [
+            "howto/equations.md",
             "howto/load_model.md",
             "howto/symbolics.md",
             "howto/traced_models.md",

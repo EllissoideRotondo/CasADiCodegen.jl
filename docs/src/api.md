@@ -19,6 +19,26 @@ build_function
 generate_julia
 ```
 
+## Models written as equations
+
+The submodule `CasADiCodegen.Models` exports these names, which `using CasADiCodegen.Models`
+gives; `SciMLBase.ODEProblem` of a `System` is on [SciML problems and functions](@ref).
+
+```@docs
+CasADiCodegen.Models
+CasADiCodegen.Models.Differential
+CasADiCodegen.Models.Equation
+CasADiCodegen.Models.System
+CasADiCodegen.Models.unknowns
+CasADiCodegen.Models.algebraic
+CasADiCodegen.Models.parameters
+CasADiCodegen.Models.observed
+CasADiCodegen.Models.equations
+CasADiCodegen.Models.invariants
+CasADiCodegen.Models.differentiation_index
+Base.Dict(::CasADiCodegen.Models.System)
+```
+
 ## Julia models traced into CasADi
 
 ```@docs
