@@ -39,4 +39,5 @@ Symbolics = "0c5d862f-8b57-4792-8d23-62f2024744c7"
 CasADiCodegen = {path = ".."}
 
 [compat]
+BifurcationKit = "0.8.9"
 Documenter = "1"
