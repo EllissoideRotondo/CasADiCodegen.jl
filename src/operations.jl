@@ -2,8 +2,8 @@
 # with the semantics of the C library. Each is kept as source text, because a
 # module written by `generate_julia` holds a copy of the ones it uses.
 const HELPER_SOURCE = Dict{Symbol,String}(
-    # C `fmin`/`fmax`, which CasADi calls: a NaN operand is ignored, and -0.0 is less
-    # than 0.0, as in the GNU C library and IEEE 754-2019.
+    # C `fmin`/`fmax`, which CasADi calls: a NaN operand is ignored. C leaves open which
+    # zero they return for 0.0 and -0.0; here -0.0 is less than 0.0, as in IEEE 754-2019.
     :fmin => "fmin(x, y) = isnan(y) ? x : isnan(x) ? y : x < y ? x : y < x ? y : signbit(x) ? x : y",
     :fmax => "fmax(x, y) = isnan(y) ? x : isnan(x) ? y : x > y ? x : y > x ? y : signbit(x) ? y : x",
     # SpecialFunctions.erfinv throws outside [-1, 1]; the C library gives NaN.

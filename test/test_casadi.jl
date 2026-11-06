@@ -38,6 +38,8 @@ function op_agrees(op, a, b)
     if op in (:OP_POW, :OP_CONSTPOW) && a < 0 && !isinteger(exponent) && (isinf(a) || isinf(exponent))
         return isnan(actual)
     end
+    # Of 0.0 and -0.0, C leaves open which one fmin and fmax return, and C libraries differ.
+    op in (:OP_FMIN, :OP_FMAX) && iszero(a) && iszero(b) && return iszero(actual)
     op in EXACT_OPS ? same_bits(expected, actual) : close_enough(expected, actual)
 end
 
