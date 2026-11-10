@@ -35,7 +35,7 @@ SciMLBase.solve(problem, SimpleNewtonRaphson(); abstol = 1e-12).u
 
 For an optimization problem, give the objective and, optionally, a vector of
 constraints with the same arguments, whose bounds go to `lcons` and `ucons`. The problem
-needs no `adtype`:
+needs no `adtype`, and Ipopt uses the generated gradient, Jacobian and Hessians:
 
 ```@example sciml
 v = SX.sym("v", 2)
@@ -43,21 +43,24 @@ objective = CasadiFunction("J", [v, q], [(v[1] - q)^2 + v[2]^2])     # also f(v)
 constraints = CasadiFunction("c", [v, q], [v[1] + v[2]])
 f = SciMLBase.OptimizationFunction(objective, constraints)
 problem = SciMLBase.OptimizationProblem(f, [0.0, 0.0], [1.0]; lcons = [1.0], ucons = [Inf])
-nothing # hide
+
+using OptimizationIpopt: IpoptOptimizer
+
+ipopt = IpoptOptimizer(additional_options = Dict{String,Any}("print_level" => 0, "sb" => "yes"))
+SciMLBase.solve(problem, ipopt).u
 ```
 
 `OptimizationProblem(opti)` converts a problem of the `Opti` stack of CasADi, with its
 initial values, parameter values and constraint bounds:
 
 ```@example sciml
-C = CasADiCodegen.C
-opti = C.Opti()
+opti = Opti()
 w, a = variable(opti, 2), parameter(opti)
-C.minimize(opti, (w[1] - a)^2 + w[2]^2)
+minimize(opti, (w[1] - a)^2 + w[2]^2)
 subject_to(opti, w[1] + w[2] >= 1)
-C.set_value(opti, a, C.DM(0.25))
+CasADiCodegen.C.set_value(opti, a, 0.25)
 problem = SciMLBase.OptimizationProblem(opti; sparse = true)
-problem.lcons, problem.ucons
+SciMLBase.solve(problem, ipopt).u
 ```
 
 | Constructor | Generated functions |
@@ -134,8 +137,9 @@ serve SymbolicIndexingInterface.jl, as in `observe_state` of DynamicalSystemsBas
 
 For a small system, pass `inplace = false` to `ODEFunction`, `SDEFunction`,
 `NonlinearFunction` or `DiscreteFunction`, whose functions then return an `SVector` and an
-`SMatrix` for each Jacobian. Each array holds at most 1024 elements, which limits a system
-with a Jacobian to 32 states; a larger system throws an `ArgumentError`:
+`SMatrix` for each Jacobian. Each array holds at most 1024 elements, so a system with a
+Jacobian has at most 32 states, and a larger one throws an `ArgumentError` (see
+[Avoid allocation with static arrays](@ref)):
 
 ```@example sciml
 using StaticArrays: SVector

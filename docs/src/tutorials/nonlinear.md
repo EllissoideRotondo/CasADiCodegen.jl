@@ -129,5 +129,5 @@ solution = SciMLBase.solve(problem, SimpleNewtonRaphson())
 solution.u
 ```
 
-Static arrays have at most 1024 elements, so this form allows at most 32 unknowns; for a
-larger system, `inplace = false` throws an `ArgumentError`.
+The Jacobian, as a static array of at most 1024 elements, limits this form to 32 unknowns;
+a larger system throws an `ArgumentError` (see [Avoid allocation with static arrays](@ref)).

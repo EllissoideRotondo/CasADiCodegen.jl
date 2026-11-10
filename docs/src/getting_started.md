@@ -10,9 +10,10 @@ functions to a file.
 the Julia front end of CasADi 3.8.2, whose calls follow the
 [CasADi documentation](https://web.casadi.org/docs/) for Python, with these differences:
 
-- `SX`, `MX`, `DM`, `jacobian`, `gradient`, `hessian`, `substitute` and the `Opti`
-  functions (`variable`, `subject_to`, ...) are exported; every other function is in
-  `CasADiCodegen.C`, such as `CasADiCodegen.C.nlpsol`.
+- `SX`, `MX`, `DM`, `jacobian`, `gradient`, `hessian`, `substitute`, `nlpsol` and the
+  `Opti` functions `Opti`, `variable`, `parameter`, `minimize`, `subject_to`, `bounded`,
+  `set_initial`, `solve` and `value` are exported. Every other function, such as
+  `set_value` and `sumsqr`, is in `CasADiCodegen.C`.
 - `CasadiFunction` makes a CasADi function, since `Function` is a Julia type.
 - Operations have their Julia meaning: `*` is the matrix product, `sin.(x)` and `x .^ 2`
   act on each element, and `[a; b]` concatenates.
@@ -61,9 +62,12 @@ value, J = g(SVector(0.3, 1.7, -0.4))
 typeof(J)
 ```
 
-`force_SA = true` returns static arrays for any input. Above 1024 output elements in
-all, the function returns ordinary arrays with a warning, and `force_SA = true` throws an
-`ArgumentError`.
+`force_SA = true` returns static arrays for any input. Static arrays hold at most 1024
+elements over all outputs of one function, such as the Jacobian of 32 states. Above that
+limit, the function returns ordinary arrays with a warning, and an explicit request for
+static arrays throws an `ArgumentError`: `force_SA = true` here, or `inplace = false` in a
+[SciML constructor](@ref "Give a CasADi function to a SciML problem"), which applies the
+limit to each generated array.
 
 ## Fill a sparse Jacobian
 

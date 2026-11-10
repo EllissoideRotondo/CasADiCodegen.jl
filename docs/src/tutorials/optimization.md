@@ -111,19 +111,19 @@ g
 The `Opti` stack of CasADi keeps the variables, the parameter values, the initial point
 and the constraints with their bounds in one object, and
 `SciMLBase.OptimizationProblem(opti)` makes the SciML problem from it. Its functions are
-those of the Python API, in the module `CasADiCodegen.C`. A chained comparison such as
+those of the Python API, and `set_value` is `C.set_value`. A chained comparison such as
 `-2 <= w[1] <= 2` is not a constraint, because Julia evaluates it with `&&`; write
 `bounded(lb, w, ub)` instead:
 
 ```@example optimization
 C = CasADiCodegen.C
-opti = C.Opti()
+opti = Opti()
 w = variable(opti, 2)
 pa, pb = parameter(opti), parameter(opti)
-C.minimize(opti, (pa - w[1])^2 + pb * (w[2] - w[1]^2)^2)
+minimize(opti, (pa - w[1])^2 + pb * (w[2] - w[1]^2)^2)
 subject_to(opti, w[1]^2 + w[2]^2 <= 1)
 subject_to(opti, bounded([-2.0, -1.0], w, [2.0, 3.0]))
-C.set_initial(opti, w, DM([0.14, 0.14]))
+set_initial(opti, w, DM([0.14, 0.14]))
 C.set_value(opti, pa, DM(1.0))
 C.set_value(opti, pb, DM(100.0))
 
