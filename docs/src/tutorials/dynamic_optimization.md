@@ -1,31 +1,18 @@
 # Solve optimal control problems
 
-In this tutorial, we solve three dynamic optimization problems by direct collocation:
-the climb of a rocket whose thrust is the control, the double integrator that reaches
-the origin in the shortest time, and the estimation of two parameters of a
-Lotka-Volterra model from data. In each of them, we write the differential equation
-and the conditions of the problem as CasADi expressions, replace the trajectory by its
-values on a grid, which turns the problem into a nonlinear program, and give that
-program to Ipopt through Optimization.jl with generated code for all its derivatives.
-The examples need CasADiCodegen.jl, SciMLBase.jl, the standard library SparseArrays,
-which the sparse matrices need, OptimizationIpopt.jl and, for the data of the last problem, OrdinaryDiffEqTsit5.jl.
+In this tutorial, we solve three dynamic optimization problems by direct collocation: the
+climb of a rocket, a minimum-time double integrator, and a parameter estimation for a
+Lotka-Volterra model. Each becomes a nonlinear program that Ipopt solves through
+Optimization.jl with generated code for all its derivatives.
 
 ## Collocation on one interval
 
 Direct collocation divides the time interval into ``N`` intervals of length ``\Delta t``
-and approximates the state on each of them by a polynomial of degree 3. The polynomial
-passes through the state ``x_k`` at the start of the interval and through three
-collocation states ``x_{k,1}, x_{k,2}, x_{k,3}`` at the Radau points
-``0 < \tau_1 < \tau_2 < \tau_3 = 1`` of the interval, and the nonlinear program requires
-its slope at each Radau point to equal the right side ``f`` of the differential
-equation. Its value at the end of the interval is then the state ``x_{k+1}`` at the
-start of the next interval. This is the three-stage Radau IIA method, of order 5, written
-in the states rather than in the stage derivatives.
-
-CasADi gives the Radau points and the coefficients of the polynomial. Of the three
-matrices that `collocation_coeff` returns, the first gives the slopes at the Radau points
-and the second the value at the end of the interval, both as linear combinations of the
-four values that the polynomial passes through:
+and approximates the state on each by a cubic polynomial through the state ``x_k`` and
+three collocation states at the Radau points ``0 < \tau_1 < \tau_2 < \tau_3 = 1``; the
+slope of the polynomial must equal the right side ``f`` at each Radau point, and its value
+at the end of the interval is ``x_{k+1}``. This is the three-stage Radau IIA method.
+`collocation_coeff` gives the matrices of the slopes and of the final value:
 
 ```@example dynopt
 using CasADiCodegen
@@ -39,10 +26,8 @@ slope, final, _ = Matrix.(C.collocation_coeff(τ))
 τ
 ```
 
-The function below appends to the vector `g` the equations of one interval, as
-expressions that the nonlinear program sets to zero. It takes the right side as a Julia
-function `f(x, u)` of a state and a control, which returns a CasADi expression, so that
-the three problems can share it:
+`collocate!` appends to `g` the equations of one interval, for a right side `f(x, u)`
+that returns a CasADi expression:
 
 ```@example dynopt
 function collocate!(g, f, x, xc, u, xnext, Δt)
@@ -56,17 +41,9 @@ end
 nothing # hide
 ```
 
-The control `u` is constant on each interval. A nonlinear program in the vector `w` of
-all unknowns then consists of an objective `J`, the equations `g`, the bounds of `w` and
-a start point `w0`. Each problem below ends with the same steps: two CasADi functions of
-`w`, a SciML function with generated code for the gradient, the Jacobian of the
-constraints and the Hessian of the Lagrange function, and an `OptimizationProblem` in
-which all constraints are equations. With `sparse = true`, the Jacobian of the
-constraints and the Hessian of the Lagrange function are sparse matrices, and the Hessian
-of the Lagrange function is one generated function instead of one per constraint (see
-[Give a CasADi function to a SciML problem](@ref)). The option `sb` of Ipopt hides its
-banner, and `verbose = false` in each call of `solve` below sets its `print_level` to 0,
-which hides its iteration log:
+The control is constant on each interval. `collocation_problem` turns the unknowns `w`,
+the objective `J`, the equations `g`, the bounds and a start point into a sparse
+`OptimizationProblem` (see [Give a CasADi function to a SciML problem](@ref)):
 
 ```@example dynopt
 function collocation_problem(w, J, g, w0; lb, ub)
@@ -84,10 +61,8 @@ nothing # hide
 
 ## Maximize the height of a rocket
 
-A rocket of height ``h``, velocity ``v`` and mass ``m`` climbs against gravity and a
-drag that decreases with height. The thrust ``T`` of its engine, bounded by
-``0 \le T \le T_m``, burns fuel, and the mass cannot fall below the mass ``m_c`` of the
-empty rocket:
+A rocket of height ``h``, velocity ``v`` and mass ``m`` climbs against gravity and drag
+with thrust ``0 \le T \le T_m``, and its mass cannot fall below the empty mass ``m_c``:
 
 ```math
 \dot{h} = v, \qquad
@@ -95,9 +70,7 @@ empty rocket:
 \dot{m} = -\frac{T}{c}.
 ```
 
-All quantities are scaled so that the initial height, the initial mass and the
-gravity at the ground are 1. The right side is a Julia function of the state and the
-thrust:
+The quantities are scaled so that the initial height, mass and gravity are 1:
 
 ```@example dynopt
 h₀, m₀, g₀ = 1.0, 1.0, 1.0
@@ -112,10 +85,8 @@ end
 nothing # hide
 ```
 
-We look for the thrust that maximizes the height at the final time ``t_e = 0.2``, with
-all the fuel spent at that time. On 50 intervals, the unknowns are the states at the 51
-nodes, the three collocation states of each interval and the thrust on each interval.
-Each of them is a symbol of its own, and `w` stacks them in this order:
+We maximize the height at ``t_e = 0.2`` with all the fuel spent. On 50 intervals, `w`
+stacks the states at the nodes, the collocation states and the thrust:
 
 ```@example dynopt
 N, te = 50, 0.2
@@ -132,10 +103,8 @@ w = vcat(X..., reduce(vcat, Xc)..., T...)
 size(w)
 ```
 
-The bounds follow the same order. Equal lower and upper bounds fix the initial state,
-the mass at the nodes stays between ``m_c`` and 1, and the collocation states have no
-bounds. The start point holds the initial state at every node and a thrust of zero. The
-objective is the height at the final time with a minus sign, since Ipopt minimizes:
+Equal bounds fix the initial state, and the objective is the final height with a minus
+sign, since Ipopt minimizes:
 
 ```@example dynopt
 x0 = [h₀, 0.0, m₀]
@@ -148,10 +117,7 @@ solution = SciMLBase.solve(problem, ipopt; verbose = false)
 -solution.objective
 ```
 
-The maximum height is about 1.013, and the first solve compiles the generated code. The
-states at the nodes are the first ``3(N + 1)`` elements of the solution and the thrust
-the last ``N``; the state at the final time holds the maximum height and the mass of the
-empty rocket:
+The final state holds the maximum height and the empty mass:
 
 ```@example dynopt
 states = reshape(solution.u[1:3(N + 1)], 3, N + 1)
@@ -159,8 +125,8 @@ thrust = solution.u[end-N+1:end]
 states[:, end]
 ```
 
-The rocket burns at full thrust at first, then at a lower thrust that limits the losses
-to drag while the air is dense, and coasts with the engine off once the fuel is spent:
+The rocket burns at full thrust, then at a lower thrust while the air is dense, and coasts
+once the fuel is spent:
 
 ```@example dynopt
 round.(thrust; digits = 2)'
@@ -168,18 +134,15 @@ round.(thrust; digits = 2)'
 
 ## Reach a point in the shortest time
 
-A block on a line, of position ``x`` and velocity ``v``, starts at rest at ``x = 1``, and
-its acceleration ``u`` is bounded by ``|u| \le 1``. We look for the acceleration that
-brings it to rest at the origin in the shortest time ``t_f``. Since the final time is an
-unknown, we write the problem on the normalized time ``s = t/t_f \in [0, 1]``, on which
-the right side is multiplied by ``t_f``:
+A block starts at rest at ``x = 1`` with acceleration ``|u| \le 1``, and we bring it to rest
+at the origin in the shortest time ``t_f``. Since ``t_f`` is unknown, we write the problem
+on the normalized time ``s = t/t_f \in [0, 1]``:
 
 ```math
 \frac{dx}{ds} = t_f v, \qquad \frac{dv}{ds} = t_f u.
 ```
 
-The symbol `tf` is an unknown of the nonlinear program, the last element of `w`, and
-the objective. The right side refers to it, and the collocation equations do not change:
+The symbol `tf` is the last unknown in `w` and the objective:
 
 ```@example dynopt
 N = 20
@@ -207,10 +170,9 @@ solution = SciMLBase.solve(problem, ipopt; verbose = false)
 solution.objective
 ```
 
-The shortest time is 2: the block accelerates at the bound towards the origin for half
-of the time and brakes for the other half. The switch falls on a node of the grid, and
-on each interval the collocation polynomial is exact for this motion, so the nonlinear
-program finds this time to the tolerance of Ipopt. The acceleration on each interval is:
+The shortest time is 2, which the program finds to the tolerance of Ipopt because the
+switch falls on a node and the polynomial is exact for this motion. The block accelerates
+for half of the time and brakes for the other half:
 
 ```@example dynopt
 solution.u[end-N:end-1]'
@@ -224,10 +186,8 @@ The Lotka-Volterra model describes a prey ``x`` and a predator ``y``:
 \dot{x} = \alpha x - \beta x y, \qquad \dot{y} = -\gamma y + \delta x y.
 ```
 
-We keep ``\beta = 1`` and ``\gamma = 3`` fixed and estimate ``\alpha`` and ``\delta``
-from 51 samples of the prey. The samples come from a solution with ``\alpha = 2.5``
-and ``\delta = 1.8``, which a CasADi function of the state and the two parameters gives
-to OrdinaryDiffEq.jl:
+We fix ``\beta = 1`` and ``\gamma = 3`` and estimate ``\alpha`` and ``\delta`` from 51
+samples of the prey, simulated with ``\alpha = 2.5`` and ``\delta = 1.8``:
 
 ```@example dynopt
 using OrdinaryDiffEqTsit5: Tsit5
@@ -243,12 +203,9 @@ data = first.(SciMLBase.solve(ode, Tsit5(); saveat = times).u)
 data[1:5]
 ```
 
-The same Julia function gives the right side of the collocation equations, now with
-the parameters as the last two unknowns of the nonlinear program. With one interval
-between two samples, the samples fall on the nodes, and the objective is the sum of the
-squared differences between the prey at the nodes and the data. The problem has no
-control, so `collocate!` gets `nothing` for it, and all states are free except the
-initial ones:
+The parameters become the last two unknowns, the samples fall on the nodes, and the
+objective is the sum of squared errors of the prey; the problem has no control, so
+`collocate!` gets `nothing`:
 
 ```@example dynopt
 N = length(times) - 1
@@ -273,7 +230,5 @@ solution = SciMLBase.solve(problem, ipopt; verbose = false)
 solution.u[end-1:end]
 ```
 
-The estimates differ from 2.5 and 1.8 in the fifth decimal. The data come from
-Tsit5 at its default tolerances and the model from collocation on 50 intervals, so that
-the two trajectories, and with them the best parameters, differ slightly even without
-noise in the data.
+The estimates differ from 2.5 and 1.8 in the fifth decimal, because the data come from
+Tsit5 at its default tolerances and the model from collocation on 50 intervals.

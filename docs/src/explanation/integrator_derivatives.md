@@ -1,89 +1,61 @@
 # How an integrator is differentiated
 
-This page explains what CasADi and the generated code do for the derivatives of a
-function made by [`CasADiCodegen.integrator`](@ref): how forward sensitivities grow
-with the order of the derivative, why each arc is integrated once, what a vector of
-output times and free times cost, and when the adjoint equations are the better
-choice. It is meant for a reader who wants to know where the time of a differentiated
-integrator goes.
+This page explains where the time of a differentiated
+[`CasADiCodegen.integrator`](@ref) goes, and when the adjoint equations are the better
+choice.
 
 ## Forward sensitivities
 
-CasADi differentiates a function `F` made by `integrator` to any order, because its
-Jacobian is a second integrator for the state with its sensitivity matrices, whose
-right side CasADi builds symbolically. Each of these integrators takes the initial state and the parameters
-of the first one, and integrates the derivatives by those only, so the number of
-states grows by the same factor at each order: 4 states and 1 parameter give 24
-states for the Jacobian and 144 for the second derivative. The cost of a call grows
-with the number of states that the solver integrates, so that a second derivative
-costs several times a Jacobian. Each Julia task keeps the state of the solver after its
-first call and uses it again, so that a later call in the same task integrates without
-setting up the solver again.
+The Jacobian of an integrator is a second integrator, of the state with its
+sensitivity matrices by the initial state and the parameters, so CasADi
+differentiates to any order and the number of states grows by the same factor at each
+order: 4 states and 1 parameter give 24 states for the Jacobian and 144 for the second
+derivative. Each Julia task keeps the solver state after its first call and skips the
+setup on later calls.
 
-An arc is one integration between two times. When a generated function needs the
-final state and its Jacobian, the call for the state runs the integration with the
-sensitivities and keeps its result, which the call for the Jacobian then takes, so
-that each arc is integrated once. This holds for any number of arcs in one function,
-and a function that needs the state alone integrates the state alone. The state from
-the integration with the sensitivities agrees with the state of an integration
-without sensitivities to the tolerances of the solver and not to the last digit,
-because the sensitivities take part in the step size control, as the partial
-derivatives of dual numbers do.
+A function that needs the final state and its Jacobian integrates each arc once, with
+sensitivities, and takes both from that run; a function that needs the state alone
+integrates the state alone. The two states agree to the solver tolerances only,
+because the sensitivities take part in the step size control.
 
 ## A vector of output times
 
-An integrator over a vector of output times, `integrator(name, alg, dae, t0, times)`,
-runs the solver once from `t0` and takes the state at each time from a step that ends
-there, as `solve` with `saveat` and `tstops` does in SciML, because the tolerances
-control the error of a step but not that of the interpolant between two steps. Its
-Jacobian is one integration of the state with its sensitivity matrices over the same
-times, so that a gradient, a Hessian or a derivative of higher order costs one run of
-the solver for each order rather than one per output time. With `adjoint = true`, a
-reverse derivative is one backward integration of the adjoint equations: the solver
-stops at each output time, where the multipliers take the seed of that time and the
-state starts again from its value of the forward run. The derivatives of that reverse
-derivative come from the forward sensitivities, so the second order costs the same with
-and without `adjoint`.
-
-For a gradient, the choice between the two depends on the numbers of parameters,
-states and output times. The forward sensitivities add one column of states for each
-initial state and each parameter, whereas the backward run integrates one vector of
-multipliers whatever the number of parameters but must stop at each output time to take
-its seed. With few parameters and many output times, as in the fit of a model to a
-series of samples, the forward sensitivities give the cheaper gradient; the adjoint
-equations give the cheaper gradient when the parameters are many more than the states.
+`integrator(name, alg, dae, t0, times)` runs the solver once from `t0` and ends a step
+at each output time, as `solve` with `saveat` and `tstops` does, because the
+tolerances control the error of a step but not of the interpolant. Its Jacobian is one
+integration with sensitivities over the same times, so each derivative order costs one
+solver run rather than one per output time.
 
 ## Free times
 
 With free times, the derivative by the final time is the right side at the final
-state. For a model without the time in its right side, the derivative by the initial
-time is the opposite of that value, so free times add no state to the integration;
-a model with the time in its right side adds one column of sensitivities for the
-initial time.
+state, and for an autonomous model the derivative by the initial time is its
+opposite, so free times add no state; a model whose right side depends on time adds
+one column of sensitivities for the initial time.
 
 ## Through an event
 
-An integrator with an event is a chain of arcs, and the event time is a node of the graph
-between them, the root of the event function on the trajectory. CasADi differentiates that
-node by the implicit function theorem, so the chain rule through the arc before it, the
-transition and the arc after it gives the jump of the state transition matrix at the
-event, to any order. A switch written in the right side, such as an `if_else`, has no such
-node, and its derivatives lack that jump; [Discontinuous models](@ref discontinuities)
-shows how to find such switches and how to give them the right derivatives.
+The event time is the root of the event function on the trajectory, a node between
+two arcs that CasADi differentiates by the implicit function theorem; the chain rule
+through the arc before, the transition and the arc after then gives the jump of the
+state transition matrix at the event, to any order. A switch in the right side, such
+as an `if_else`, has no such node and its derivatives lack the jump; see
+[Discontinuous models](@ref discontinuities).
 
 ## Adjoint equations
 
-The sensitivity matrices cost one integration of the state for each initial state
-and each parameter, which is more work than the gradient of one number by many
-parameters needs. With `adjoint = true`, a reverse derivative comes instead from an
-integrator of the adjoint equations, which runs from the final time back to the
-initial time and whose number of states does not grow with the number of
-parameters; its accuracy is that of the backward integration of the state, which
-starts again from its value of the forward run at each output time. Forward derivatives
-and the derivatives of higher order use the sensitivities.
+With `adjoint = true`, a reverse derivative comes from one backward integration of the
+adjoint equations, whose number of states does not grow with the number of
+parameters; at each output time it takes the seed of that time and restarts the state
+from the forward run, which sets its accuracy. Forward and higher-order derivatives
+use the sensitivities, so the second order costs the same with and without `adjoint`.
+Forward sensitivities add one column of states per initial state and parameter but
+never stop, so they give the cheaper gradient with few parameters and many output
+times, as in fitting a model to samples; the adjoint equations win when the parameters
+far outnumber the states.
 
-For a model with algebraic states, the adjoint equations have the mass of the model,
-so the multipliers of the algebraic states are algebraic too. A seed is the vector that
-a reverse derivative multiplies with the Jacobian. A seed on a final algebraic state
-first goes, through the algebraic equations at the final time, to the
-other final states, the parameters and the final time, which costs one linear solve.
+For a model with algebraic states, the adjoint equations have the mass matrix of the
+model, so the multipliers of the algebraic states are algebraic too. A seed (the
+vector that a reverse derivative multiplies with the Jacobian) on a final algebraic
+state passes through the algebraic equations to the other final states, the
+parameters and the final time, at the cost of one linear solve.

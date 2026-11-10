@@ -1,17 +1,13 @@
 # Give a CasADi function to a SciML problem
 
-With SciMLBase.jl loaded, a CasADi function becomes the function of a SciML
-problem. The problem holds generated code for the function and for the derivatives
-that the solvers ask for, so no automatic differentiation runs at solve time, and by
-default each generated function works in place and allocates no memory. Each CasADi
-function takes the unknowns first and then, optionally, the parameters, and for
-`ODEFunction` then the time. The examples also need OrdinaryDiffEqVerner.jl,
-SimpleNonlinearSolve.jl, StaticArrays.jl and the standard library SparseArrays.
+With SciMLBase.jl loaded, a CasADi function becomes the function of a SciML problem,
+with generated code for the function and for the derivatives that the solvers ask for.
+The CasADi function takes the unknowns, then optionally the parameters, and for
+`ODEFunction` then the time.
 
 ## Solve an ODE
 
-We write the right side of a harmonic oscillator as a CasADi function of the state,
-the parameter and the time, and give it to `ODEFunction`:
+Give the right side of a harmonic oscillator to `ODEFunction`:
 
 ```@example sciml
 using CasADiCodegen
@@ -26,8 +22,7 @@ SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12).u[end]
 
 ## Other problems
 
-The constructors of nonlinear and optimization problems follow the same pattern.
-We solve two equations in `z` with the parameter `q`:
+Nonlinear problems follow the same pattern:
 
 ```@example sciml
 using SimpleNonlinearSolve: SimpleNewtonRaphson
@@ -38,10 +33,9 @@ problem = SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(residual), [1.0
 SciMLBase.solve(problem, SimpleNewtonRaphson(); abstol = 1e-12).u
 ```
 
-For an optimization problem, the objective is one number and the constraints are one
-vector, with the same arguments. The constraints are optional; with them, the problem
-takes their bounds `lcons` and `ucons`. The function holds its derivatives, so the
-problem needs no `adtype`:
+For an optimization problem, give the objective and, optionally, a vector of
+constraints with the same arguments, whose bounds go to `lcons` and `ucons`. The problem
+needs no `adtype`:
 
 ```@example sciml
 v = SX.sym("v", 2)
@@ -52,10 +46,8 @@ problem = SciMLBase.OptimizationProblem(f, [0.0, 0.0], [1.0]; lcons = [1.0], uco
 nothing # hide
 ```
 
-A solver of Optimization.jl, such as Ipopt through OptimizationMOI.jl, then solves
-`problem`. A problem written with the `Opti` stack of CasADi becomes a SciML problem in
-one call, `OptimizationProblem(opti)`, with its initial values, the values of its
-parameters and the bounds of its constraints:
+`OptimizationProblem(opti)` converts a problem of the `Opti` stack of CasADi, with its
+initial values, parameter values and constraint bounds:
 
 ```@example sciml
 C = CasADiCodegen.C
@@ -77,39 +69,27 @@ problem.lcons, problem.ucons
 | `NonlinearFunction(f; jac = true, sparse = false, inplace = true, specialize = FullSpecialize)` | Residual and `jac` |
 | `OptimizationFunction(objective, constraints; hess = true, sparse = false, lag_h = sparse && hess)` | Objective, `grad`, `hess`, `cons`, `cons_j`, and either `cons_h`, the Hessian of each constraint, or `lag_h`, the Hessian of the Lagrange function |
 
-- The matrices are dense unless `sparse = true`.
 - `hess = false` leaves out `hess`, `cons_h` and `lag_h`, whose code can take long to
-  build, for a solver that uses first derivatives only, such as L-BFGS.
-- The keywords `chunk_size`, `split_above`, `optlevel` and `cache` go to
-  [`build_function`](@ref) for each generated function; see
-  [Large functions and the cache on disk](@ref). With `cache`, the generated functions
-  are defined while the constructor runs, so a Julia function that makes the SciML
-  function and then solves its problem must call `solve` through `Base.invokelatest`.
-- The other keywords go to the SciML constructor.
-- A function that has no parameters ignores the parameters of the problem. A function of
-  the time without parameters takes an empty parameter argument, `f(u, SX(0, 1), t)` (or
-  `MX(0, 1)`), and its problem needs no parameters.
+  build, for a first-order solver such as L-BFGS.
+- `chunk_size`, `split_above`, `optlevel` and `cache` go to [`build_function`](@ref)
+  (see [Large functions and the cache on disk](@ref)), and the other keywords to the SciML
+  constructor. With `cache`, a Julia function that builds and then solves must call
+  `solve` through `Base.invokelatest`.
+- A function of the time without parameters takes an empty argument, `f(u, SX(0, 1), t)`.
 - `ODEFunction(f; initialization = c)` adds conditions `c(u, p, t) = 0` on the initial
-  values, which the solver solves together with the algebraic equations before its first
-  step, and `solved_parameters` makes parameters unknowns of that problem; see
+  values, and `solved_parameters` makes parameters unknowns of them; see
   [Initialize differential-algebraic equations](@ref).
-- The noise `g` of `SDEFunction` has the arguments of the drift `f` and returns a column,
-  for diagonal or scalar noise, or a matrix with a column per Wiener process.
-  `SDEProblem(f, g, u0, tspan, p)` makes the function and gives a matrix noise its
-  `noise_rate_prototype`, sparse with `sparse = true`; see
+- The noise `g` of `SDEFunction` takes the arguments of the drift and returns a column, or
+  a matrix with a column per Wiener process; see
   [Add noise to a differential equation](@ref).
 - The map `f(u, p, t)` of `DiscreteFunction` returns the next state, and the residual
-  `f(u⁺, u, p, t)` of `ImplicitDiscreteFunction` takes the next and the current state;
-  `DiscreteProblem(f, u0, tspan, p)` and `ImplicitDiscreteProblem(f, u0, tspan, p)` make
-  the function and the problem. See [Discrete-time systems](@ref).
-- A residual of `NonlinearFunction` of another size than its unknowns gives the function
-  a `resid_prototype`, for a `NonlinearLeastSquaresProblem`.
+  `f(u⁺, u, p, t)` of `ImplicitDiscreteFunction` takes the next and the current state; see
+  [Discrete-time systems](@ref).
+- A residual of `NonlinearFunction` of another size than its unknowns gets a
+  `resid_prototype`, for a `NonlinearLeastSquaresProblem`.
 
-For a large system whose Jacobian has few nonzeros, `sparse = true` gives the function
-a `jac_prototype`, a `SparseMatrixCSC` with the sparsity pattern of the Jacobian, into
-whose stored values `jac` writes; it needs the standard library SparseArrays loaded. For a chain of
-equations, each of which depends on its unknown and on the one before, the prototype
-has two diagonals:
+For a Jacobian with few nonzeros, load SparseArrays and pass `sparse = true`, which
+gives the function a `jac_prototype` with the sparsity pattern:
 
 ```@example sciml
 using SparseArrays
@@ -119,19 +99,9 @@ chain = CasadiFunction("chain", [y], [vcat([y[i] - (i > 1 ? y[i-1]^2 : 0.0) for 
 SciMLBase.NonlinearFunction(chain; sparse = true).jac_prototype
 ```
 
-The dense form of `OptimizationFunction` writes one n×n matrix per constraint in
-`cons_h`, so that a transcribed optimal control problem of 2604 unknowns and 2402
-constraints needs about 130 GB for these matrices alone. With `sparse = true`, `hess` and
-`cons_j` write the stored values of the prototypes `hess_prototype` and
-`cons_jac_prototype`, and by default the function holds `lag_h(h, x, σ, μ, p)` in place of
-`cons_h`: the upper triangle of the Hessian of the Lagrange function `σ f + μ' g`, whose
-pattern is `lag_hess_prototype`, so that Ipopt gets its second derivatives from one call.
-On a chained Rosenbrock problem of 100 unknowns and 98 constraints, this call took a fifth
-of the time of the Hessian of the objective and those of the constraints. With
-`lag_h = false`, `cons_h` writes one sparse matrix per constraint, whose patterns are the
-`cons_hess_prototype`. The same keywords reach the function of
-`OptimizationProblem(S, x0, p)` for a solver object `S` of `nlpsol` (see
-[Solve the problem in Julia](@ref)):
+Pass `sparse = true` to a large `OptimizationFunction` too, whose dense `cons_h` holds
+an n×n matrix per constraint. `lag_h(h, x, σ, μ, p)` then replaces `cons_h` with the upper
+triangle of the Hessian of the Lagrange function `σ f + μ' g`, unless `lag_h = false`:
 
 ```@example sciml
 f = SciMLBase.OptimizationFunction(objective, constraints; sparse = true)
@@ -140,17 +110,10 @@ f.lag_hess_prototype
 
 ## Names and observed variables
 
-`ODEFunction`, `SDEFunction`, `DiscreteFunction`, `ImplicitDiscreteFunction` and
-`NonlinearFunction` give the SciML function the names of the symbols of the CasADi
-function, so that a solution and a problem can be indexed by name, as in
-`solution[:x]` or `remake(problem; p = [:k => 9.0])`. A state built from scalar symbols has their names; the
-elements of one symbol of several elements, such as `SX.sym("u", 2)`, are `u_0` and
-`u_1`, the names that CasADi gives them. A parameter symbol of several elements, such as
-`MX.sym("w", 2)`, is also one parameter under its own name, the vector of its elements, so
-that `remake(problem; p = [:w => [1.0, 2.0]])` replaces all of them (see
-[Data as parameters](@ref)). Each result of the CasADi function after the
-first one is an observed variable, which the solution computes from the state with
-generated code, under the name of that result:
+All constructors except `OptimizationFunction` take the names of the symbols, so you can
+index a solution and a problem by name; the elements of `SX.sym("u", 2)` are `u_0` and
+`u_1` (for vector parameters see [Data as parameters](@ref)). Each result after the first
+is an observed variable:
 
 ```@example sciml
 x, v = SX.sym("x"), SX.sym("v")
@@ -161,24 +124,18 @@ solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12)
 solution[:x][end], solution[:energy][end], SciMLBase.remake(problem; p = [:k => 9.0]).p
 ```
 
-An argument may join named symbols with `vcat`. A function whose arguments are not made of named symbols, or in which a name of a symbol
-or of a result occurs twice, gets no names, and a second result is then an error. The residual of
-`ImplicitDiscreteFunction` has one result and no observed variables. A `sys` given to the constructor
-replaces the names and the observed variables. Packages that read a problem through
-SymbolicIndexingInterface.jl find the same names: for the name of a state, a parameter or
-an observed variable, `SymbolicIndexingInterface.observed(problem, name)` returns a
-function `(u, p, t) -> value`, which `observe_state` of DynamicalSystemsBase.jl calls for a
-state (see [Attractors and their basins](@ref)).
+A function whose arguments are not `vcat`s of named symbols, or that repeats a name,
+gets no names, and a second result is then an error; `ImplicitDiscreteFunction` takes no
+observed variables, and a `sys` given to the constructor replaces the names. The same names
+serve SymbolicIndexingInterface.jl, as in `observe_state` of DynamicalSystemsBase.jl (see
+[Attractors and their basins](@ref)).
 
 ## Static arrays
 
-For a small system, a state of static arrays keeps the solver off the heap. With
-`inplace = false`, `ODEFunction`, `SDEFunction`, `NonlinearFunction` and `DiscreteFunction`
-hold out-of-place functions that return an `SVector` for the right side or the map and an
-`SMatrix` for each Jacobian, which keeps the shape of a matrix also for one state or one
-parameter, as the implicit solvers need. Each of these arrays holds at most 1024
-elements, so that a Jacobian limits the system to 32 states, a map without Jacobian to
-1024, and a larger system throws an `ArgumentError`:
+For a small system, pass `inplace = false` to `ODEFunction`, `SDEFunction`,
+`NonlinearFunction` or `DiscreteFunction`, whose functions then return an `SVector` and an
+`SMatrix` for each Jacobian. Each array holds at most 1024 elements, which limits a system
+with a Jacobian to 32 states; a larger system throws an `ArgumentError`:
 
 ```@example sciml
 using StaticArrays: SVector
@@ -190,16 +147,11 @@ f.jac(problem.u0, problem.p, 0.0)
 
 ## Compilation for each new model
 
-Each generated function has a type of its own, so with the default
-`specialize = SciMLBase.FullSpecialize` of these constructors, OrdinaryDiffEq.jl compiles its solver again for
-each new model, which takes a few seconds at the first solve. With
-`specialize = SciMLBase.AutoSpecialize`, the solver wraps the in-place functions of a
-`Vector{Float64}` state in function wrappers of one type, so the code that it compiled for
-one model serves the next one at the cost of an indirect call per evaluation. A solver
-that uses the Jacobian, such as `Rodas5P()`, reuses its code with the default `jac = true`;
-an explicit solver, such as `Tsit5()`, reuses it only with `jac = false`. In one session
-on Lotka-Volterra and then the Lorenz system, this specialization changed the first solve
-of the second model as the table shows, and made each later solve 5 to 20 percent slower.
+With the default `specialize = SciMLBase.FullSpecialize`, OrdinaryDiffEq.jl compiles
+its solver again for each new model. Pass `specialize = SciMLBase.AutoSpecialize` to reuse
+it for a `Vector{Float64}` state; an explicit solver such as `Tsit5()` reuses it only with
+`jac = false`. On Lotka-Volterra and then the Lorenz system, the first solve of the second
+model took the times below, and each later solve was 5 to 20 percent slower:
 
 | first solve of the second model | `FullSpecialize` | `AutoSpecialize` |
 |---|---|---|

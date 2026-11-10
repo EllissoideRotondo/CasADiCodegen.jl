@@ -1,17 +1,13 @@
 # Linearize a model and order its equations
 
-A controller design or a stability analysis needs the matrices of a model linearized
-about an operating point, and the solution of large implicit equations starts from the
-order in which they can be solved. This page computes both from CasADi functions: the
-matrices as generated code, and the order from the sparsity pattern of a Jacobian.
+This page generates code for the matrices of a model linearized about an operating
+point, and orders a system of equations by the sparsity pattern of its Jacobian.
 
 ## Linearize a state-space model
 
-[`CasADiCodegen.linearization`](@ref) takes the state-space model `x' = f(x, u, p)`,
-`y = h(x, u, p)` as two CasADi functions of the state `x`, the input `u` and the
-parameters `p`. It returns generated code for the matrices `A = ∂f/∂x`, `B = ∂f/∂u`,
-`C = ∂h/∂x` and `D = ∂h/∂u` at a point. The example linearizes a pendulum driven by a
-torque about its lowest point:
+[`CasADiCodegen.linearization`](@ref) takes `x' = f(x, u, p)` and `y = h(x, u, p)` as
+two CasADi functions and returns generated code for `A = ∂f/∂x`, `B = ∂f/∂u`,
+`C = ∂h/∂x` and `D = ∂h/∂u`. Linearize a torque-driven pendulum about its lowest point:
 
 ```@example linearize
 using CasADiCodegen
@@ -24,14 +20,11 @@ A, B, C, D = lin([0.0, 0.0], [0.0], [9.81, 2.0])
 A
 ```
 
-`lin` returns each of the four matrices as a `Matrix` (an `SMatrix` when `x` is a static array), also `B`, which has one column for
-one input: `linearization` builds the functions with `vector_columns = false`, so that no
-matrix becomes a vector. `lin!(out, (x, u, p))` writes the four matrices into the arrays
-of the tuple `out`, which are dense by default. With `expression = Val{true}`,
-`linearization` returns the code of both functions as one `Expr`, as
-[`build_function`](@ref) does. For a large model
-with a sparse Jacobian, give `sparse = true`, so that `lin!` writes into `SparseMatrixCSC` arrays with the sparsity patterns of the outputs of
-[`CasADiCodegen.linearization_function`](@ref):
+`lin` returns each matrix as a `Matrix` (an `SMatrix` for a static `x`), even a `B`
+with one column, and `lin!(out, (x, u, p))` writes them into the tuple `out`;
+`expression = Val{true}` returns the code as one `Expr`, as in [`build_function`](@ref).
+For a large sparse model, pass `sparse = true` and give `lin!` `SparseMatrixCSC` arrays
+with the patterns of [`CasADiCodegen.linearization_function`](@ref):
 
 ```@example linearize
 using SparseArrays
@@ -45,15 +38,11 @@ out[1]
 
 ## Linearize a model with algebraic states
 
-A model with the algebraic states `z`, `x' = f(x, z, u, p)`, `0 = g(x, z, u, p)` and
-`y = h(x, z, u, p)`, is linearized by `linearization(f, g, h)`, with three CasADi functions
-of `(x, z, u, p)`. The generated code eliminates the deviation of `z` by a solve with the
-Jacobian `∂g/∂z`, which must be invertible, so `lin(x, z, u, p)` returns the matrices of
-the same form as above, in the deviations of `x` and `u` alone. The point must satisfy
-`g = 0`, but need not be a steady state; the generated code neither solves for `z` nor
-checks the condition. In the
-example, the algebraic state `z` follows `x[1]` through `z + z^3 = x[1]`, and at `x[1] = 2`,
-where `z = 1`, the slope of `z` is `1 / (1 + 3z^2) = 1/4`:
+For `x' = f(x, z, u, p)`, `0 = g(x, z, u, p)` and `y = h(x, z, u, p)`, call
+`linearization(f, g, h)`. The code eliminates `z` with `∂g/∂z`, which must be
+invertible, so `lin(x, z, u, p)` returns the same four matrices in `x` and `u` alone.
+The point must satisfy `g = 0`, which the code neither solves for nor checks. Here
+`z + z^3 = x[1]`, so at `x[1] = 2`, where `z = 1`, the slope of `z` is `1/4`:
 
 ```@example linearize
 x, z, u = SX.sym("x", 2), SX.sym("z"), SX.sym("u")
@@ -66,16 +55,14 @@ A, B, C, D = lin_dae([2.0, 0.0], [1.0], [0.0], Float64[])
 A, C
 ```
 
-[Linear analysis of a feedback loop](@ref) linearizes a circuit with an algebraic current at
-several operating points.
+[Linear analysis of a feedback loop](@ref) applies this to a circuit.
 
 ## Order equations by their dependencies
 
-[`CasADiCodegen.block_triangular_form`](@ref) permutes the rows and the columns of a
-sparsity pattern so that the matrix becomes block lower triangular. For the Jacobian of a
-square system of equations, each diagonal block is a set of equations that must
-be solved together, and the blocks come in the order in which they can be solved. Here
-the equations 2 and 4 hold the unknowns 1 and 3 only, so they form the first block:
+[`CasADiCodegen.block_triangular_form`](@ref) permutes a sparsity pattern to block
+lower triangular form; for the Jacobian of a square system, each diagonal block is a
+set of equations to solve together, in order of solution. Equations 2 and 4 hold only
+unknowns 1 and 3, so they form the first block:
 
 ```@example linearize
 y = SX.sym("y", 4)
@@ -84,6 +71,5 @@ form = CasADiCodegen.block_triangular_form(CasADiCodegen.C.sparsity(jacobian(equ
 [form.colperm[form.colblock[k]:form.colblock[k+1]-1] for k in 1:form.blocks]
 ```
 
-Each element of the result holds the unknowns of one block, in the order of solution.
-`colperm` is the permutation of the unknowns, `blocks` the number of blocks, and
-`colblock[k]` the position in `colperm` at which block `k` starts.
+Each element holds the unknowns of one block; `colblock[k]` is the position in
+`colperm` at which block `k` starts.

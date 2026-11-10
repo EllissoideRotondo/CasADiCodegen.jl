@@ -1,56 +1,34 @@
 # [Discontinuous models](@id discontinuities)
 
-A right side that switches on the state, such as a thrust that is on where a switching
-function is positive and off where it is negative, gives an integrator whose values are
-right but whose derivatives can be wrong. CasADi differentiates `if_else`, `sign`, a
-comparison or `abs` branch by branch, and the variational equations then follow the
-branch that is active along the trajectory; they miss the effect of the switching time,
-which moves with the initial state and the parameters. This page shows how the package
-finds such switches, and the two routes that give the right derivatives: the switches as
-modes of the integrator, which are events, and a smooth model whose width falls toward
-zero. [Shoot a bang-off-bang control](@ref) applies both routes to one problem.
+A right side that switches on the state, through `if_else`, `sign`, a comparison or `abs`,
+gives an integrator with right values but wrong derivatives, since CasADi differentiates
+each branch and misses the motion of the switching time. This page finds such switches and
+fixes the derivatives with modes, which are events, or with a smooth model of small width;
+[Shoot a bang-off-bang control](@ref) applies both.
 
 ## The jump of the state transition matrix at the switching time
 
 Let the right side change from ``f^-`` to ``f^+`` where the switching function ``S(y, t)``
-changes its sign, at the time ``t_s`` with ``S(y(t_s), t_s) = 0``, and let the state be
-continuous there. A change ``\delta y^-`` of the state just before the switch moves the
-switching time by ``\delta t_s = -\frac{1}{\dot S} \frac{\partial S}{\partial y} \delta y^-``,
-with the rate ``\dot S = \frac{\partial S}{\partial y} f^- + \frac{\partial S}{\partial t}``,
-and over that time the state moves with ``f^-`` on one side and ``f^+`` on the other. The
-state transition matrix (STM) is therefore multiplied at the switch by
+changes its sign, with the rate ``\dot S = \frac{\partial S}{\partial y} f^- + \frac{\partial S}{\partial t}``.
+The state transition matrix (STM) is then multiplied at the switch by
 
 ```math
 \Psi = I + \left(\dot y^+ - \dot y^-\right) \frac{1}{\dot S} \frac{\partial S}{\partial y},
 \qquad \dot y^\pm = f^\pm(y(t_s), t_s),
 ```
 
-which is the jump of the STM at the switching time. This first-order update goes back to
-the stability analysis of periodic solutions of systems with discontinuous right sides
-(M. A. Aizerman and F. R. Gantmacher, Quarterly Journal of Mechanics and Applied
-Mathematics 11(4):385–398, 1958) and is the base of the trajectory sensitivities of
-hybrid systems (I. A. Hiskens and M. A. Pai, IEEE Transactions on Circuits and Systems I
-47(2):204–220, 2000). The update is singular where ``\dot S = 0``, at a grazing contact,
-where the trajectory touches the surface ``S = 0`` without crossing it.
-
-An integrator with an event function, `"zero"` and `"transition"` (see
-[Stop at an event](@ref events)), contains this update without a formula: CasADi
-differentiates the event time as the root of the event function, by the implicit
-function theorem, and the chain rule through the arcs and the event gives ``\Psi``, and
-with it the derivatives of higher order. A switch written with `if_else` in `"ode"` has no
-event time in the graph, so the derivatives take ``\Psi = I`` at the switch, and the term
-that they omit is of the order of the derivative itself. For a control written as `sign`
-of a costate, each branch is a constant, and the Jacobian of the final state by the
-costates is zero.
+which is singular at a grazing contact, where ``\dot S = 0``. An integrator with an event
+function (see [Stop at an event](@ref events)) contains this jump to any order, while a
+switch written with `if_else` in `"ode"` has no event time, so its derivatives take
+``\Psi = I``.
 
 ## Find the switches of a model
 
-Each integrator scans its model for switches when it is built: [`integrator`](@ref) scans
-`"ode"` and `"quad"`, and an integrator of CasADi also scans `"alg"`. A switch counts when
-its operand depends on the state, or on the time and a parameter together, because its
-surface then moves with the initial state or with the parameters. A switch on the
-parameters alone, or on the time alone, such as `t < 2`, does not move along a
-trajectory, and its derivatives are right. These operations switch:
+[`integrator`](@ref) scans `"ode"` and `"quad"` for switches when it is built, and an
+integrator of CasADi also scans `"alg"`. A switch counts when its operand depends on the
+state, or on the time and a parameter together; a switch on the parameters alone or on the
+time alone, such as `t < 2`, does not move along a trajectory and is not reported. These
+operations switch:
 
 | Operation                                 | Code                                         | Kind                      |
 |:----------------------------------------- |:-------------------------------------------- |:------------------------- |
@@ -66,32 +44,19 @@ trajectory, and its derivatives are right. These operations switch:
 | MX `norm_1`, `norm_inf`, `mmin`, `mmax`   | `:OP_NORM1`, `:OP_NORMINF`, `:OP_MMIN`, `:OP_MMAX` | kink                |
 | a `linear` interpolant, CasADi's `low`    | `:LinearInterpolant`, `:OP_LOW`              | kink                      |
 
-A jump of the value spoils the first derivatives. A kink of the slope leaves the right
-side continuous, so ``\dot y^+ = \dot y^-`` and the STM is right, but it spoils the
-derivatives of order 2 and higher. The equality tests `==` and `!=` switch on a set of
-measure zero, such as the guard of `if_else(r == 0, 0, x / r)`, and do not count. The
-logical operations `!`, `&` and `|` combine comparisons that count already, and an
-`if_else` or a `conditional` whose condition is a comparison counts once, at that
-comparison. The code is CasADi's name of the operation; CasADi stores `a > b` as `b < a`,
-so it counts as `:OP_LT`. An MX function is expanded to scalar code before the scan when
-CasADi can expand it, so the codes of matrix operations, such as `:OP_NORM1`, appear only
-when it cannot.
+A jump spoils the first derivatives, and a kink those of order 2 and higher. The tests
+`==` and `!=` do not count, and the codes of matrix operations appear only when CasADi
+cannot expand an MX function to scalar code.
 
 The keyword `nonsmooth` selects the effect: `:warn` by default, `:error` for an
-`ArgumentError` when the integrator is built, and `:ignore` for no scan. The default warns
-rather than throws, because a model that is only simulated is right.
+`ArgumentError` when the integrator is built, and `:ignore` for no scan. An integrator of
+CasADi, `integrator("F", "cvodes", dae, t0, tf, opts)`, takes no `nonsmooth`; when
+generated code replaces it (see [Replace the solvers of CasADi](@ref)), the keyword
+`nonsmooth` of [`CasADiCodegen.Solvers`](@ref) applies.
 
-The method of `integrator` that takes the name of a plugin of CasADi as a `String`, such
-as `integrator("F", "cvodes", dae, t0, tf, opts)`, makes an integrator of CasADi, which
-misses the jump in its own sensitivities too. That method takes no keyword `nonsmooth`,
-because CasADi does not scan its model; when
-`build_function` replaces such an integrator by generated code (see
-[Replace the solvers of CasADi](@ref)), the package scans the model, with the keyword
-`nonsmooth` of [`CasADiCodegen.Solvers`](@ref), also `:warn` by default.
-
-[`CasADiCodegen.nonsmooth_operations`](@ref) counts the switches in any CasADi function,
-without an integrator, for the inputs that the user chooses. Here a double integrator has
-a thrust that switches on the position, scaled by `min(p, 2)`:
+[`CasADiCodegen.nonsmooth_operations`](@ref) counts the switches of any CasADi function
+in the inputs that you choose. Here the thrust of a double integrator switches on the
+position and is scaled by `min(p, 2)`:
 
 ```@example disc
 using CasADiCodegen
@@ -106,14 +71,13 @@ rhs = CasadiFunction("rhs", [x, p], [ode], ["x", "p"], ["ode"])
 CasADiCodegen.nonsmooth_operations(rhs; inputs = "x"), CasADiCodegen.nonsmooth_operations(rhs; inputs = "p")
 ```
 
-The scan cannot see into the body of a Julia callback or of an external function, so a
-switch there gives no warning. Two kinds of switch warn without need: an `if_else` whose
-branches agree at the surface, which the graph cannot show, and the guard of a removable
-singularity, such as a series near zero beside the closed form away from it.
+The scan cannot see into a Julia callback or an external function, and it warns without
+need for an `if_else` whose branches agree at the surface or for the guard of a removable
+singularity.
 
-A finite difference of the generated code is the quick test of a model, because the
-adaptive step size of the solver resolves the switch. Here the thrust is +1 below
-``x = 1`` and -1 above, written with `if_else`:
+A finite difference of the generated code tests a model, since the adaptive step resolves
+the switch. With the thrust +1 below ``x = 1`` and -1 above, the Jacobian misses the jump by
+a quantity of order 1:
 
 ```@example disc
 written = Dict("x" => x, "ode" => vcat(x[2], C.if_else(x[1] < 1, SX(1.0), SX(-1.0))))
@@ -130,20 +94,13 @@ end
 fd_error(F)
 ```
 
-The Jacobian of the generated code differs from the finite difference by a quantity of
-order 1, which is the missing jump.
-
 ## Give the switches as modes
 
-The keyword `modes = m => S` of `integrator` gives the switches as events. `m` is a column
-of fresh symbols of the type of the state, the modes, which `"ode"` and `"quad"` use in
-place of the sign of the switching functions `S`, a column of the same size: mode ``j`` is
-+1 where ``S_j > 0`` and -1 where ``S_j < 0``. The integrator flips mode ``j`` at each
-change of sign of ``S_j``, and the derivatives get the jump of the STM at the switching
-time to any order. The keyword `switches`, which `modes` requires, is an upper bound on the
-number of switches between the initial and the final time; `integrator` throws
-`ArgumentError` for `modes` without `switches`, and for `switches` or `switch_times`
-without `modes`:
+Pass `modes = m => S` to `integrator`, where `m` is a column of fresh symbols that
+`"ode"` and `"quad"` use in place of the sign of the switching functions `S`; the
+integrator flips mode ``j`` at each change of sign of ``S_j``. Pass also `switches`, an upper bound on the number of switches; `integrator`
+throws `ArgumentError` for `modes` without `switches`, and for `switches` or
+`switch_times` without `modes`. The finite difference now agrees with the Jacobian:
 
 ```@example disc
 m = SX.sym("m")
@@ -152,58 +109,34 @@ G = integrator("G", Vern9(), switched, 0.0, 2.0; modes = m => 1 - x[1], switches
 fd_error(G)
 ```
 
-The function has the inputs and the results of the model without modes, so it replaces
-the smoothed model or the one with `if_else` in the code that calls it; only
-`switch_times = true`, below, adds results. The model without modes is the one above with
-`m` in place of the sign of ``1 - x_1``, and an `if_else` on the mode itself does not warn.
+The function has the inputs and results of the model with `if_else`, which it replaces
+in the calling code. The rules are:
 
-The initial mode ``m_j`` is the sign of ``S_j`` at the initial time. On the surface, where
-``|S_j| \le \sqrt{\epsilon} / (1 - \sqrt{\epsilon}) \approx 1.5 \times 10^{-8}`` with
-``\epsilon`` = `eps()`, the initial mode is the one under which the flow leaves the
-surface: the value ``m_j = \pm 1`` for which the rate ``\dot S_j``, taken with the right
-side of mode ``m_j``, has the sign of ``m_j``, or the opposite sign for an integration
-backward in time. A start at rest on a surface therefore works. When the flow leaves on
-both sides, or on neither, a call throws an error that names the case.
+- The initial mode is the sign of ``S_j``; within ``1.5 \times 10^{-8}`` of the surface it
+  is the mode under which the flow leaves the surface, and a call throws when the flow
+  leaves on both sides or on neither.
+- A call passes up to `switches` switches and throws, with the advice to raise the bound,
+  when more come. With a vector of output times the bound applies to each interval.
+- With fixed or free times, `switch_times = true` adds the differentiable switch times
+  `ts` (`tf` for a missing switch), the index `is` of the switching function of each, and
+  their number `ns`.
+- Event functions of the model in `"zero"` may stand beside the modes; `te`, `ie`, `ne`,
+  `events`, `terminal` and `exact` concern those events only.
 
-The bound `switches` is not the exact number of switches, unlike the keyword `events` of
-the event functions in `"zero"`: a call passes up to `switches` switches and throws, with
-the advice to raise the bound, when more come. With the times `t0, tf` and with free times,
-`switch_times = true` adds three results: the switch times `ts`, with the time `tf` for a
-missing switch, the index `is` of the switching function of each when there are several,
-and their number `ns`; CasADi differentiates the switch times too. A model may have event
-functions of its own in `"zero"` beside the modes; `te`, `ie`, `ne`, `events`, `terminal`
-and `exact` then concern those events only. With a vector of output times, the integrator
-carries the modes from one output time to the next, and the bound applies to each interval.
-
-The integrator finds a switch by its event search: it looks for a change of sign of the
-switching functions at 10 points of each step of the solver, or at `interp_points` points
-with free times, and at the end of the step, and locates the first change by root finding. Each call checks two conditions that the
-result needs, and throws when one fails:
-
-- At each switch, the flow on the far side of the surface must leave it, so that the
-  product of the rates ``\dot S`` before and after the flip is positive. Otherwise the
-  flow slides on the surface, a sliding arc, and the error says so.
-- At the final time and at each output time, each mode must agree with the sign of its
-  switching function. This check catches a sliding arc that the first one misses, a
-  crossing at an output time, and two switching functions that change their sign in one
-  step of the event search, of which only the first flips its mode.
-
-A model with a sliding arc, where the state stays on the surface over an interval, has no
-solution as a sequence of modes, and the smoothed route below is the one to take. A
-grazing contact gives no event and a right result; near it, however, the switching times
-depend on the initial state like a square root, so the derivative is discontinuous where
-the number of switches changes.
+The event search checks the sign at 10 points of each solver step, or at
+`interp_points` points with free times. A call throws for a sliding arc, where the flow
+does not leave the surface, and for two switching functions that change their sign in one
+step of the search; a sliding arc needs the smoothed route below. Near a grazing contact
+the derivative is discontinuous where the number of switches changes.
 
 ## Smooth the switches
 
-The second route replaces each switch by a smooth function of width ``\varepsilon``, a
-parameter of the model, so that CasADi differentiates the smoothed flow exactly. The
-helpers [`CasADiCodegen.smooth_step`](@ref), [`CasADiCodegen.smooth_sign`](@ref),
+Replace each switch by a smooth function of a width ``\varepsilon``, a parameter of the
+model. [`CasADiCodegen.smooth_step`](@ref), [`CasADiCodegen.smooth_sign`](@ref),
 [`CasADiCodegen.smooth_abs`](@ref), [`CasADiCodegen.smooth_max`](@ref) and
-[`CasADiCodegen.smooth_min`](@ref) give the smooth forms of a step, `sign`, `abs`, `max`
-and `min` of a switching value, on numbers, SX and MX. The package does not export them,
-so they are called with the prefix `CasADiCodegen.`; `smooth_sign(s, ε)` is
-``\tanh(s/\varepsilon)``, or ``s/\sqrt{s^2 + \varepsilon^2}`` with `kind = :algebraic`.
+[`CasADiCodegen.smooth_min`](@ref) give the smooth forms on numbers, SX and MX; they are
+not exported. `smooth_sign(s, ε)` is ``\tanh(s/\varepsilon)``, or
+``s/\sqrt{s^2 + \varepsilon^2}`` with `kind = :algebraic`.
 
 ```@example disc
 ε = SX.sym("width")
@@ -211,52 +144,36 @@ model = Dict("x" => x, "p" => ε, "ode" => vcat(x[2], CasADiCodegen.smooth_sign(
 nothing # hide
 ```
 
-[`CasADiCodegen.smoothed`](@ref) applies the same forms to a model that is already
-written with switches, such as comparisons, `if_else`, `sign`, `abs`, `fmin` and `fmax`;
-its docstring lists the operations that it rewrites and those that it keeps. It takes an
-expression, for a model dictionary, or a whole function, which gets the width as one more
-input, and shared subexpressions stay shared. The keyword `inputs` restricts the rewrite to
-the switches on the chosen inputs, such as the state, and keeps a switch on the parameters:
+[`CasADiCodegen.smoothed`](@ref) rewrites an expression or a whole function that is
+already written with switches; its docstring lists the operations it rewrites. The keyword
+`inputs` restricts the rewrite to the switches on the chosen inputs and keeps a switch on
+the parameters:
 
 ```@example disc
 smooth_ode = CasADiCodegen.smoothed(written["ode"], ε; inputs = x)
 nothing # hide
 ```
 
-For a transversal crossing, at which ``S`` changes its sign with a nonzero rate
-``\dot S``, the state and its derivatives converge to those of the switched model as
-``\varepsilon^2`` with `:tanh`, because the odd symmetry of ``\tanh`` cancels the error of
-the first order; the tails of the algebraic kind decay as ``\varepsilon^2/s^2``, and the
-error falls about as ``\varepsilon^2 \log(1/\varepsilon)``. A grazing contact spends a time
-of order ``\sqrt{\varepsilon}`` in the layer and converges as ``\sqrt{\varepsilon}``, and on
-a sliding arc the smoothed state stays within the layer, at a distance of order
-``\varepsilon`` from the surface, and converges as ``\varepsilon``. No rate is claimed here
-for the second derivatives of a smoothed model.
+At a transversal crossing the state and its derivatives converge to those of the switched
+model as ``\varepsilon^2`` with `:tanh`; at a grazing contact they converge as
+``\sqrt{\varepsilon}``, and on a sliding arc as ``\varepsilon``. The limits are:
 
-The smooth form of `if_else(c, a, b)` weights both branches by the smooth condition,
-within about 19 widths of the surface with `:tanh`, so both branches must be finite there: a
-branch that is undefined on the far side of the surface, such as `sqrt` of a negative
-number, or a guard of a removable singularity, does not smooth well. One width serves all
-the switches of a model, so the switching functions should be scaled to comparable
-magnitudes.
-
-On a sliding arc the smoothed model is stiff: the switching function stays within the
-layer, where the Jacobian of the right side grows as ``1/\varepsilon``, and an explicit
-solver takes a number of steps that grows as ``1/\varepsilon`` too. An implicit solver,
-such as `Rodas5P()` of OrdinaryDiffEqRosenbrock.jl, keeps the number of steps nearly
-constant as the width falls. A transversal crossing spends only a time
-``\varepsilon / |\dot S|`` in the layer and does not need an implicit solver.
+- The smooth `if_else(c, a, b)` weights both branches within about 19 widths of the
+  surface, so a branch that is undefined on the far side, such as `sqrt` of a negative
+  number, does not smooth well.
+- One width serves all switches of a model, so scale the switching functions to comparable
+  magnitudes.
+- On a sliding arc the smoothed model is stiff, with a Jacobian that grows as
+  ``1/\varepsilon``; use an implicit solver such as `Rodas5P()` of
+  OrdinaryDiffEqRosenbrock.jl.
 
 ## Follow the width toward zero
 
-A Newton solve of a smoothed model converges from a smaller region of guesses as the width
-falls, since the residual tends to that of the discontinuous model, whose Jacobian is
-singular where an iterate has lost a switch.
-[`CasADiCodegen.natural_continuation`](@ref), a method of the extension for SciMLBase.jl,
-solves a `NonlinearProblem` for a sequence of values of one parameter, each solve starting
-from the root of the one before, and tries intermediate values when a solve fails. Here the
-smoothed model above is shot from the position 0 to the position 1.2 at the time 2, with
-the initial velocity as the unknown:
+A Newton solve of a smoothed model converges from fewer guesses as the width falls, so
+lower the width step by step. [`CasADiCodegen.natural_continuation`](@ref), from the
+extension for SciMLBase.jl, solves a `NonlinearProblem` for a sequence of values of one
+parameter and tries intermediate values when a solve fails. Shoot the smoothed model from
+the position 0 to 1.2 at the time 2, with the initial velocity as the unknown:
 
 ```@example disc
 H = integrator("H", Vern9(), model, 0.0, 2.0; abstol = 1e-10, reltol = 1e-10)
@@ -268,21 +185,14 @@ path = CasADiCodegen.natural_continuation(problem, SimpleNewtonRaphson(), [1.0, 
 [(value, solution.retcode, only(solution.u)) for (value, solution) in path]
 ```
 
-`NonlinearFunction` makes the second input of `residual` the parameters `problem.p`, and
-each scalar symbol in it a parameter named after the symbol, here `:width`. `parameter` is
-such a name, as a `Symbol`, or the place of the parameter in `problem.p`, here 1. For a
-path with turning points in the parameter, the extension for BifurcationKit.jl gives
-pseudo-arclength continuation (see [Bifurcation diagrams](@ref)).
+`parameter` is the name of a scalar symbol of `problem.p`, here `:width`, or its place in
+`problem.p`. For a path with turning points, use the extension for BifurcationKit.jl (see
+[Bifurcation diagrams](@ref)).
 
 ## Choose a route
 
-Modes give the derivatives of the discontinuous model itself, with no error from a width,
-and their cost is that of an integration with events; they need a guess with the right
-sequence of switches and an upper bound on their number, and they fail on a sliding arc. A
-smoothed model accepts any switch that [`CasADiCodegen.smoothed`](@ref) can rewrite,
-including sliding arcs, and with continuation it converges from rougher guesses; its
-results carry an error of order ``\varepsilon^2`` at a transversal crossing and more
-elsewhere, and a sliding arc needs an implicit solver. The two combine well: the root of
-the smoothed model at a moderate width is a guess for the switched model, as
-[Shoot a bang-off-bang control](@ref) shows. In both routes, a finite difference of the
-generated code, as above, confirms that the derivatives are right.
+Modes give the exact derivatives of the discontinuous model, but they need a guess with
+the right sequence of switches and fail on a sliding arc; a smoothed model accepts both,
+at an error of order ``\varepsilon^2`` or more. Use the root of the smoothed model at a
+moderate width as the guess for the switched model, as
+[Shoot a bang-off-bang control](@ref) shows.

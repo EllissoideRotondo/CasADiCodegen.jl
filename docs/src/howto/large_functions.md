@@ -1,40 +1,27 @@
 # Large functions and the cache on disk
 
-A model with tens of thousands of instructions compiles slowly, and Julia compiles
-it again in each session. This page shows the remedies of the package, which are a
-split of the code into sub-functions, a lower optimization level and a cache of
-compiled code on disk, and the setting of the tests that keeps the compilation short.
+A model with tens of thousands of instructions compiles slowly, and Julia compiles it
+again in each session; this page shows the remedies.
 
 ## Split a large function
 
-Julia compiles one large function slowly, because the time grows faster than the
-number of instructions, so above a limit the code is split into sub-functions that
-share one work vector, which holds the intermediate values. The work vector belongs
-to the Julia task, so a call does not allocate it, and each form of the generated
-function (see [Choose a form](@ref)) calls the same sub-functions. Two keywords of
-`build_function` and `generate_julia` control the split:
+Above a limit, the generated code is split into sub-functions that share one work
+vector. Two keywords of `build_function` and `generate_julia` control the split:
 
 | Keyword | Meaning | Default |
 |---|---|---|
 | `split_above` | A function with more instructions is split | 50,000 for scalar code; 1,000 for matrix code |
 | `chunk_size` | Largest number of instructions in one sub-function | 1,000 |
 
-In matrix code, an instruction is one operation of the MX graph, such as a matrix
-product or a call. When only `chunk_size` is given, each function with more
-instructions than `chunk_size` is split; `split_above = typemax(Int)` keeps any function in one piece.
-
-The split can shorten the first call of a large model by a factor of six, but it
-makes the later calls 15 to 40 percent slower. Raise `split_above` when the speed of
-the later calls matters more than the first call; [Split of a large function](@ref)
-gives the measurements behind the defaults.
+In matrix code, an instruction is one operation of the MX graph;
+`split_above = typemax(Int)` keeps any function in one piece. The split can shorten
+the first call by a factor of six but makes later calls 15 to 40 percent slower (see
+[Split of a large function](@ref)).
 
 ## Compile at a lower optimization level
 
-For a function that is built in the session, compiling the generated body at the first
-call takes most of the time, while CasADi and the emission of the code take
-milliseconds. The keyword `optlevel` of `build_function` makes Julia compile the
-returned functions at a lower optimization level, as `Base.Experimental.@optlevel`
-sets it for a module, which suits a model that changes often:
+For a model that changes often, pass `optlevel` to compile the returned functions
+faster:
 
 ```julia
 g, g! = build_function(f; expression = Val{false}, optlevel = 1)
@@ -46,19 +33,13 @@ g, g! = build_function(f; expression = Val{false}, optlevel = 1)
 | 1 | 0.27 s | 1.60 µs |
 | 0 | 0.21 s | 2.07 µs |
 
-The times are those of the right-hand side of a second-order state transition
-tensor of the two-body problem with the J2 term, 258 states, called with static arrays
-on Julia 1.13. `generate_julia` takes the same keyword and writes the level into the
-module, and with `cache` the cached package is compiled at that level.
+The times are those of a two-body model with 258 states on Julia 1.13.
+`generate_julia` and `cache` honor the same keyword.
 
 ## Keep the compiled code between sessions
 
-`build_function` with `expression = Val{false}` returns functions made with
-[RuntimeGeneratedFunctions.jl](https://github.com/SciML/RuntimeGeneratedFunctions.jl),
-which Julia compiles again in each session. With
-`cache = true`, `build_function` writes the generated module into a small package,
-which Julia compiles once and whose machine code it stores, so that a later session
-with the same model loads the functions and compiles nothing.
+With `cache`, `build_function` stores the generated code as a precompiled package,
+so that a later session with the same model compiles nothing:
 
 ```julia
 g, g! = build_function(f; expression = Val{false}, cache = true)
@@ -71,32 +52,21 @@ g, g! = build_function(f; expression = Val{false}, cache = "/path/to/cache")   #
 | Chain of maps, 67,236 instructions | 16.4 s | 19.7 s | 1.3 s |
 | Two-body integrator, final state and its Jacobian | 4.1 s | 12.8 s | 2.0 s |
 
-Each time is that of `build_function` together with the first call, and the speed of
-the later calls does not change. The name of the package comes from the generated
-code, so a changed model or other options give a new package, and an old one is
-never used by mistake. The packages are in the directory `scratchspaces` of the first
-Julia depot (`~/.julia` by default), or in the directory that `cache` gives, and they
-can be deleted at any time. Four rules apply.
+Each time includes `build_function` and the first call. A changed model gets a new
+package; the packages live in `scratchspaces` of the first Julia depot and can be
+deleted at any time.
 
-- The package is compiled for `Float64` on ordinary arrays; `force_SA = true` compiles
-  the out-of-place function for static arrays, and `nonzeros = true` the function on
-  vectors of nonzeros. Other argument types compile at their first call, as before.
-- The functions belong to a module that is loaded during the call of `build_function`.
-  Code that runs already, such as the function that called `build_function`, must
-  call them with `Base.invokelatest`; code that starts later calls them directly.
-- A Julia function in the graph must be a named function of a package, as for
-  `generate_julia`. An integrator or a rootfinder goes into the package with its
-  algorithm and its options, and the package also holds the machine code of the
-  solver for `Float64`, so that a later session does not compile the solver again.
-- An input or an output with structural zeros makes the module import SparseArrays,
-  which must then be in the environment.
+- The package is compiled for `Float64` on ordinary arrays, plus static arrays with
+  `force_SA = true` and vectors of nonzeros with `nonzeros = true`; other argument
+  types compile at their first call.
+- The caller of `build_function` must call the functions with `Base.invokelatest`.
+- A Julia function in the graph must be a named function of a package.
+- Structural zeros in an input or output require SparseArrays in the environment.
 
 ## Keep bounds checks off in tests
 
-With `--check-bounds=yes`, Julia checks each array access of the generated code, so
-the first call of a large function compiles much longer. `Pkg.test` sets this option on
-Julia 1.12; on Julia 1.13 it keeps the setting of the session. For integrators of
-CasADi with a fixed step, measured once:
+`--check-bounds=yes` makes the first call of a large function compile much longer;
+`Pkg.test` sets it on Julia 1.12 but not on 1.13. For fixed-step integrators of CasADi:
 
 | First call of | Julia 1.12 | Julia 1.12, `--check-bounds=yes` | Julia 1.13 | Julia 1.13, `--check-bounds=yes` |
 |---|---|---|---|---|

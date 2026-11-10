@@ -1,13 +1,9 @@
 # Replace the solvers of CasADi
 
-A model that exists already often holds solver objects of CasADi itself: an
-integrator made with `CasADiCodegen.C.integrator(name, "cvodes", ...)`, a rootfinder,
-or a solver of `nlpsol`. Generated code never calls CasADi, so we give each such
-object a solver of the SciML ecosystem, which needs SciMLBase.jl and the package of
-the algorithm.
-
-In the examples of this page, we use an integrator `cvodes` for the planar two-body
-problem:
+Generated code never calls CasADi, so each solver object of CasADi in a model, such as
+an integrator `cvodes` or a solver of `nlpsol`, needs a SciML solver in its place;
+[What is refused](@ref) lists the objects without one. The examples use an integrator
+`cvodes` for the planar two-body problem:
 
 ```@example solvers
 using CasADiCodegen
@@ -23,12 +19,9 @@ nothing # hide
 
 ## Replace a solver in generated code
 
-Give `build_function` or `generate_julia` the keyword `solvers` with a
-[`CasADiCodegen.Solvers`](@ref). Each field holds an algorithm, or a
-[`CasADiCodegen.Solver`](@ref) when the algorithm has options.
-
-Here we ask for the states at the three output times and the Jacobian of the final
-state by the initial state, with `Vern9` at tight tolerances:
+Pass the keyword `solvers`, a [`CasADiCodegen.Solvers`](@ref), to `build_function` or
+`generate_julia`. Each field holds an algorithm, or a [`CasADiCodegen.Solver`](@ref) for an
+algorithm with options:
 
 ```@example solvers
 using CasADiCodegen: Solvers, Solver
@@ -43,25 +36,21 @@ states, stm = g([1.0, 0.0, 0.0, 1.0], [1.0])
 states
 ```
 
-Without `solvers`, `build_function` throws an `ArgumentError`. The message names the
-function and the field of `Solvers` to set.
+Without `solvers`, `build_function` throws an `ArgumentError` that names the field to
+set.
 
 | Field of `Solvers` | Replaces | With |
 |---|---|---|
-| `ode` | Integrator `cvodes` | An ODE algorithm. Supported: quadratures, controls (the input `u` of a CasADi integrator, constant between two output times), several output times, forward and adjoint sensitivities, derivatives of any order, event functions with forward derivatives only (see [Integrators with events](@ref)) |
+| `ode` | Integrator `cvodes` | An ODE algorithm; supports quadratures, controls `u`, several output times, forward and adjoint sensitivities of any order, and events with forward derivatives only |
 | `dae` | Integrator `idas` with algebraic states | An algorithm that accepts a mass matrix, such as `Rodas5P()`; the same derivatives |
 | `nonlinear` | Rootfinders `kinsol` and `fast_newton` | A nonlinear algorithm, as for `rootfinder` |
 | `optimization` | Solvers of `nlpsol` and of `conic` (quadratic problems; no cone constraints) | An algorithm of Optimization.jl, such as `Ipopt.Optimizer()` with OptimizationMOI.jl |
-| `overrides` | One solver object each | A tuple of `Solver(object, alg; options...)`. An override has priority over the other fields |
+| `overrides` | One solver object each | A tuple of `Solver(object, alg; options...)`, which has priority over the other fields |
 
-The integrators `rk` and `collocation` and the rootfinder `newton` need no field:
-the package generates Julia code for them. An override replaces them by a SciML
-solver.
-
-In `Solver(object, alg; options...)`, `object` is the solver object of CasADi itself.
-The generated code finds the object, and the functions that CasADi derives from it,
-by its name and its class. The two examples below replace one integrator `R` and a
-solver of `nlpsol`:
+The integrators `rk` and `collocation` and the rootfinder `newton` need no field, since
+the package generates code for them; an override replaces them by a SciML solver. In
+`Solver(object, alg; options...)`, `object` is the solver object of CasADi, found by its
+name and class:
 
 ```julia
 R = CasADiCodegen.C.integrator("R", "rk", Dict("x" => x, "p" => mu, "ode" => ode), 0.0, 1.0)
@@ -74,54 +63,31 @@ solvers = Solvers(optimization = ipopt)
 
 ## What a replaced solver does
 
-The code uses the tolerances of the integrator of CasADi, unless the `Solver(...)`
-gives `abstol` or `reltol`. An integrator or a rootfinder becomes an `integrator` or a
-`rootfinder` of this package, so the code takes dual numbers, and CasADi gets its
-derivatives as for those functions; an integrator with an event function is the
-exception (see [Integrators with events](@ref)).
-
-For a solver of `nlpsol`, the generated code solves the problem with the bounds of
-the call and then computes the multipliers in the form that CasADi expects: the
-multiplier of a bound that is not active is exactly zero, and the others solve the
-stationarity condition by least squares. CasADi makes the derivatives of the
-solution from these results, since it reads the active bounds from the signs of the
-multipliers, so derivatives of any order need no other code. A bound counts as active
-when ``|x - \mathrm{bound}| \le 10^{-6} \max(1, |\mathrm{bound}|)``. The problem is solved with `Float64` only and with dense matrices, and the first
-guesses of the multipliers are not used. The code holds the Hessians of the objective and
-of the constraints only for an algorithm that declares them as needed through the traits
-`SciMLBase.requireshessian`, `requiresconshess` or `requireslagh`; for an algorithm of the
-first order, such as Ipopt with `hessian_approximation = "limited-memory"`, they are not
-built. The options of the solver of CasADi, such as those of `ipopt`, are not read, so
-they must go with the algorithm.
-
-`generate_julia` writes a replaced solver to the module under the rule for
-integrators (see [Write the model to a file](@ref)): the algorithm and its options
-must be values that a source file can hold.
-
-Reverse mode works through an integrator that a solver replaces, because CasADi gets
-the adjoint sensitivities as the reverse derivative of the chain of calls between
-the output times. Each call integrates the adjoint equations backward, as
-`integrator` does with `adjoint = true`, also for a model with algebraic states. An
-integrator with events is the exception: it has forward derivatives only.
+- The code uses the tolerances of the integrator of CasADi unless `Solver` gives
+  `abstol` or `reltol`.
+- A replaced integrator or rootfinder is an `integrator` or `rootfinder` of this package,
+  so it takes dual numbers and has derivatives of any order, in forward and reverse mode;
+  an integrator with events is the exception (see [Integrators with events](@ref)).
+- A replaced solver of `nlpsol` has derivatives of any order, and treats a bound as active
+  when ``|x - \mathrm{bound}| \le 10^{-6} \max(1, |\mathrm{bound}|)``. It solves in
+  `Float64` with dense matrices and ignores the initial guesses of the multipliers and the
+  options of the solver of CasADi, such as those of `ipopt`; give these with the algorithm.
+- Hessians are built only for an algorithm that needs them by the traits
+  `SciMLBase.requireshessian`, `requiresconshess` or `requireslagh`.
+- `generate_julia` writes the algorithm and its options to a source file, so they must be
+  values that a file can hold (see [Write the model to a file](@ref)).
 
 ## Integrators with events
 
-An integrator of CasADi whose model has the entry `"zero"` has event functions, and
-its option `"transition"` gives the state after an event. The generated code
-replaces it by one Julia function that integrates to all the output times with the
-solver of the field `ode`, or of `dae` for algebraic states; an integrator `rk` or
-`collocation` with events needs an override. The events follow the rules of CasADi:
-an event is a change of sign of an element of `"zero"` from positive to negative,
-the transition then sets the state, and a call throws after more than `max_events`
-events, where `max_events` is an option of the integrator of CasADi (20 by default).
-One case differs: CasADi 3.8.2 misses an event that falls exactly on an output time, while
-the generated code applies it and returns the state after the event at that time
-([Differences from CasADi](@ref) gives an example).
-The numbers must be `Float64`: this replaced integrator does not take dual numbers,
-unlike the `integrator` with an event function of this package
-(see [Stop at an event](@ref events)).
+An integrator of CasADi with event functions in `"zero"` and the option `"transition"`
+is replaced by the solver of `ode`, or `dae` for algebraic states, and with `rk` or
+`collocation` by an override. Events follow the rules of CasADi, with an error after more
+than `max_events` events (20 by default). An event
+that falls on an output time is applied there, which CasADi 3.8.2 misses (see
+[Differences from CasADi](@ref)). The replaced integrator takes `Float64` only, unlike the
+`integrator` of this package with events (see [Stop at an event](@ref events)).
 
-As an example, we model a ball that bounces with the restitution `e`:
+For a ball that bounces with the restitution `e`:
 
 ```julia
 h, v, e = MX.sym("h"), MX.sym("v"), MX.sym("e")             # height, speed, restitution
@@ -131,12 +97,9 @@ bounce = CasadiFunction("transition", Dict("x" => vcat(h, v), "p" => e, "post_x"
 ball = CasADiCodegen.C.integrator("ball", "cvodes", model, 0.0, [0.5, 1.0, 2.0], Dict("transition" => bounce))
 ```
 
-CasADi differentiates such an integrator by forward directions only. `jacobian` of an
-expression that calls it gives a dense Jacobian, and `CasADiCodegen.C.jacobian(F)` of a
-function `F` that holds it throws an error; [Differences from CasADi](@ref) gives the
-reason.
-
-We take the Jacobian of the final states by the initial state and the restitution:
+CasADi differentiates such an integrator by forward directions only, so take `jacobian`
+of an expression, which is dense, since `CasADiCodegen.C.jacobian(F)` of a function that
+holds it throws:
 
 ```julia
 s0, q = MX.sym("s0", 2), MX.sym("q")
@@ -145,15 +108,11 @@ J = jacobian(final, vcat(s0, q))
 f = CasadiFunction("f", [s0, q], [final, CasADiCodegen.C.densify(J)])
 ```
 
-With algebraic states, the event function can depend on them, and CasADi differentiates
-the event time and the states after it by forward directions; after the transition,
-the package solves the algebraic equations again for the algebraic states and for their
-derivatives.
+With algebraic states, the algebraic equations are solved again after each transition.
 
 ## Solve the problem in Julia
 
-To call a SciML solver directly, we make a SciML problem from the solver object of
-CasADi. The problem holds generated code for its functions and their derivatives:
+To call a SciML solver directly, make a SciML problem from the solver object of CasADi:
 
 ```@example solvers
 problem = SciMLBase.ODEProblem(cv, [1.0, 0.0, 0.0, 1.0], [1.0])    # the output times of cv are `saveat`
@@ -163,19 +122,15 @@ solution.u[end]
 
 | Constructor | Object of CasADi | Problem |
 |---|---|---|
-| `ODEProblem(I, x0, p; z0, u)` | Integrator `cvodes`, `idas`, `rk` or `collocation` | The state has the differential states, the algebraic states from `z0`, which must satisfy the algebraic equations, and the quadratures; algebraic states give a mass matrix; event functions give a callback with the transition; the problem takes `abstol` and `reltol` from the options of `cvodes` and `idas` |
-| `ODEProblem(dae, tspan)` | Model of a `DaeBuilder` | The state has the differential and then the algebraic states, from their start values; the parameters are `p` and then the inputs `u`; algebraic states give a mass matrix; the time span is that of `dae` when `tspan` is not given |
+| `ODEProblem(I, x0, p; z0, u)` | Integrator `cvodes`, `idas`, `rk` or `collocation` | State of differential states, algebraic states from a consistent `z0`, and quadratures; a mass matrix for algebraic states; a callback for events; `abstol` and `reltol` from `cvodes` and `idas` |
+| `ODEProblem(dae, tspan)` | Model of a `DaeBuilder` | Differential then algebraic states from their start values; parameters `p` then inputs `u`; a mass matrix for algebraic states; the time span of `dae` by default |
 | `NonlinearProblem(R, z0, others...)` | Rootfinder `newton`, `fast_newton` or `kinsol` | The residual and its Jacobian; the other arguments of `R` are the parameters |
-| `OptimizationProblem(opti; sparse = false)` | `Opti` stack | The objective and the constraints of `opti`, with its initial values, the values of its parameters and the bounds of its constraints at the time of the call; a bound on a variable stays a constraint |
-| `OptimizationProblem(S, x0, p; lbx, ubx, lbg, ubg, sparse = false)` | Solver of `nlpsol` or of `conic` | The objective and the constraints with their derivatives, sparse with `lag_h` for `sparse = true` (see [Give a CasADi function to a SciML problem](@ref)); the bounds have the names and the default values of CasADi. For `conic`, `p` has the nonzeros of `h`, then `g`, then the nonzeros of `a`, where CasADi writes the quadratic problem as minimizing ``\tfrac12 x^T h x + g^T x`` subject to ``\mathrm{lba} \le a x \le \mathrm{uba}`` |
+| `OptimizationProblem(opti; sparse = false)` | `Opti` stack | Objective, constraints, initial values, parameter values and bounds at the time of the call; a bound on a variable stays a constraint |
+| `OptimizationProblem(S, x0, p; lbx, ubx, lbg, ubg, sparse = false)` | Solver of `nlpsol` or of `conic` | Objective and constraints with derivatives, sparse with `lag_h` for `sparse = true` (see [Give a CasADi function to a SciML problem](@ref)); bounds with the names and defaults of CasADi. For `conic`, `p` has the nonzeros of `h`, then `g`, then the nonzeros of `a`, for the problem: minimize ``\tfrac12 x^T h x + g^T x`` subject to ``\mathrm{lba} \le a x \le \mathrm{uba}`` |
 
-For an integrator with controls and several output times, `u` has one block of
-controls per output time, and the problem has a callback that changes the controls
-at each output time.
-
-A model built in a `DaeBuilder` of CasADi becomes a SciML problem in the same way, with
-the start values of its variables. When each variable is a scalar, the solution gives
-each variable by its name:
+For an integrator with controls and several output times, `u` has one block of controls
+per output time. A model of a `DaeBuilder` whose variables are scalars gives a solution
+indexed by name:
 
 ```@example solvers
 dae = CasADiCodegen.C.DaeBuilder("decay")
@@ -187,7 +142,3 @@ CasADiCodegen.C.set_start(dae, "k", 0.5)
 solution = SciMLBase.solve(SciMLBase.ODEProblem(dae, (0.0, 2.0)), Vern9(); abstol = 1e-12, reltol = 1e-12)
 solution[:y][end] ≈ exp(-1.0)
 ```
-
-## Limits
-
-[What is refused](@ref) lists each object that has no replacement, with what to do.

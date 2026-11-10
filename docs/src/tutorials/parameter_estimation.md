@@ -1,32 +1,20 @@
 # Estimate parameters through an integrator
 
 In this tutorial, we fit the four parameters of a Lotka-Volterra model to samples of
-its solution by three routes. In the first, the integrator is a node of the CasADi graph,
-so that CasADi differentiates the loss through the solver and the integration, the
-gradient and the Hessian of the loss are all generated code, with no automatic
-differentiation in Julia. We fit with this loss first by a quasi-Newton method and then
-with the exact Hessian. In the second route, SciMLSensitivity.jl computes the same
-gradient from the generated Jacobians of the right side. In the third, the loss is a Julia
-function that makes a SciML problem with the trial parameters by `remake` and solves it,
-ForwardDiff.jl differentiates it through the solver, and the parameters to fit can be
-chosen by name. The examples need CasADiCodegen.jl, SciMLBase.jl,
-OrdinaryDiffEqVerner.jl, OptimizationIpopt.jl, SciMLSensitivity.jl, ForwardDiff.jl,
-Optimization.jl, SymbolicIndexingInterface.jl, SciMLStructures.jl and the standard
-library Random.
+its solution by three routes: a loss whose gradient and Hessian CasADi generates through
+the integrator, the adjoint method of SciMLSensitivity.jl with generated Jacobians, and a
+Julia loss around `remake` that ForwardDiff.jl differentiates.
 
 ## Write the model
 
-The Lotka-Volterra model describes a prey population ``x_1`` and a predator population
-``x_2``:
+The model of prey ``x_1`` and predators ``x_2`` is
 
 ```math
 \dot{x}_1 = (\alpha - \beta x_2)\, x_1, \qquad \dot{x}_2 = (\delta x_1 - \gamma)\, x_2.
 ```
 
-An integrator of CasADiCodegen.jl takes the model as a dictionary of `MX` expressions:
-the state under `"x"`, the parameters under `"p"` and the right side under `"ode"`
-(see [Integrate a differential equation](@ref)). We join the four parameters in one
-vector, since the fit will treat them as one unknown:
+An integrator takes the model as a dictionary of `MX` expressions (see
+[Integrate a differential equation](@ref)), with the four parameters in one vector:
 
 ```@example estimation
 using CasADiCodegen
@@ -40,11 +28,8 @@ nothing # hide
 
 ## Make the data
 
-The samples are taken at the 101 times 0, 0.1, ..., 10. When `integrator` receives a
-vector of times instead of a final time, the function that it returns, `F(x0, p)`,
-gives a matrix with the state at each time in one column; the solver runs once from
-the first time and stops at each of the others, as `solve` with `saveat` and `tstops`
-does in SciML:
+Given a vector of times, `integrator` returns `F(x0, p)`, whose result holds the state at
+each time in one column; the solver runs once and stops at each time:
 
 ```@example estimation
 times = collect(0.0:0.1:10.0)
@@ -54,9 +39,8 @@ X = simulate([1.0, 1.0], [1.5, 1.0, 3.0, 1.0])
 size(X)
 ```
 
-The data are this solution, for the parameters ``\alpha = 1.5``, ``\beta = 1``,
-``\gamma = 3`` and ``\delta = 1`` and the initial state ``(1, 1)``, with noise of
-standard deviation 0.01 added to each sample:
+The data are this solution for ``(\alpha, \beta, \gamma, \delta) = (1.5, 1, 3, 1)`` with noise
+of standard deviation 0.01:
 
 ```@example estimation
 using Random: Xoshiro
@@ -67,12 +51,9 @@ nothing # hide
 
 ## Write the loss
 
-The loss is the mean squared difference between the solution for the parameters
-``\theta`` and the data. We make it a CasADi function of two inputs, ``\theta`` and a
-2 by 101 symbol `d` for the data, so that the data enter the generated code as an
-argument; a fit to other data then reuses the same code, whereas data written into the
-graph as a `DM` would need a new function. Calling `F` on symbols places the
-integration in the graph of the loss, and its initial state is then a constant `MX`:
+The loss is the mean squared error of the solution for ``\theta``. The data are a second
+argument `d`, so a fit to other data reuses the generated code. Calling `F` on symbols
+places the integration in the graph of the loss:
 
 ```@example estimation
 θ = MX.sym("θ", 4)
@@ -82,11 +63,9 @@ objective = CasadiFunction("loss", [θ, d], [loss])
 nothing # hide
 ```
 
-`gradient(loss, θ)` differentiates the loss through the integrator. By default, CasADi
-does so with forward sensitivities: the generated code integrates the state together
-with its derivatives by the four parameters in one run of the solver, over the same
-times. We generate the loss with its gradient and evaluate both at a point away from
-the solution:
+`gradient(loss, θ)` differentiates through the integrator, by default with forward
+sensitivities integrated with the state. We evaluate the loss and its gradient away from
+the optimum:
 
 ```@example estimation
 loss_and_gradient = build_function(CasadiFunction("loss_and_gradient", [θ, d], [loss, gradient(loss, θ)]);
@@ -95,21 +74,15 @@ value, ∇loss = loss_and_gradient([1.3, 0.8, 2.7, 1.1], data)
 ∇loss
 ```
 
-With many more parameters than states, `adjoint = true` in the call of `integrator`
-makes the reverse derivatives integrate the adjoint equations backward instead, once
-over all the times; for four parameters and two states, the forward sensitivities are
-the cheaper choice (see [How an integrator is differentiated](@ref)).
+With many more parameters than states, `adjoint = true` in `integrator` integrates the
+adjoint equations backward instead (see [How an integrator is differentiated](@ref)).
 
 ## Fit with a quasi-Newton method
 
-`SciMLBase.OptimizationFunction` turns the loss into the function of a SciML
-optimization problem, whose first input is the unknown and whose second input is the
-parameter of the problem, here the data (see
-[Give a CasADi function to a SciML problem](@ref)). It generates the gradient and, by
-default, the Hessian. A quasi-Newton method builds its own approximation of the
-Hessian from the gradients, so we leave the Hessian out with `hess = false`, which
-saves the compilation of its code. The problem holds the start point and the bounds
-0.1 and 3 on each parameter:
+`SciMLBase.OptimizationFunction` takes the unknown first and the data as the problem
+parameter (see [Give a CasADi function to a SciML problem](@ref)). It generates the
+gradient and, by default, the Hessian; a quasi-Newton method needs no Hessian, so
+`hess = false` skips its compilation:
 
 ```@example estimation
 import SciMLBase
@@ -119,8 +92,7 @@ problem = SciMLBase.OptimizationProblem(f, [1.2, 0.8, 2.5, 0.8], data; lb = fill
 nothing # hide
 ```
 
-We solve it with Ipopt and its limited-memory approximation of the Hessian (L-BFGS), and
-silence the output of Ipopt with the options `print_level` and `sb`:
+We solve with the L-BFGS approximation of Ipopt and silence its output:
 
 ```@example estimation
 using OptimizationIpopt: IpoptOptimizer
@@ -131,7 +103,8 @@ solution = SciMLBase.solve(problem, lbfgs)
 solution.u
 ```
 
-The fit is close to the true parameters ``(1.5, 1, 3, 1)``, and the statistics of the solution give the number of iterations of Ipopt:
+The fit is close to the true parameters ``(1.5, 1, 3, 1)``, and the statistics give the
+number of iterations:
 
 ```@example estimation
 solution.stats.iterations
@@ -139,11 +112,9 @@ solution.stats.iterations
 
 ## Fit with the exact Hessian
 
-Without `hess = false`, the function also holds the Hessian of the loss, which CasADi
-computes from second-order sensitivities of the integration; its code takes longer to
-compile than that of the gradient, but Newton steps with the exact Hessian converge in
-fewer iterations. We solve the same problem with this function and with the default
-options of Ipopt, which use the Hessian:
+By default, the function also holds the Hessian, which CasADi computes from
+second-order sensitivities; its code takes longer to compile, but Newton steps need fewer
+iterations:
 
 ```@example estimation
 f_exact = SciMLBase.OptimizationFunction(objective)
@@ -152,21 +123,15 @@ solution_exact = SciMLBase.solve(problem_exact, IpoptOptimizer(; additional_opti
 solution_exact.u, solution_exact.stats.iterations
 ```
 
-In this run, the parameters agreed with those of the L-BFGS fit to about five digits,
-the accuracy that the default tolerance of Ipopt gives at this optimum, and Ipopt took
-about half of the iterations of L-BFGS.
+In this run, the fit agreed with L-BFGS to about five digits in about half of the
+iterations.
 
 ## Compute the gradient with SciMLSensitivity
 
-The second route keeps the integration in Julia and generates only the right side and
-its derivatives. A CasADi function of the state, the parameters and, optionally, the
-time becomes an `ODEFunction` with generated code for the Jacobian by the state
-(`jac = true`) and by the parameters (`paramjac = true`). These two Jacobians are what
-the adjoint methods of SciMLSensitivity.jl need when they are told not to compute
-vector-Jacobian products themselves (`autojacvec = false`). The parameters are four scalar
-symbols joined by `vcat`, so that the problem knows them by the names α, β, γ and δ,
-which the last sections use; `SX` and `MX` symbols serve alike. The problem holds the
-point ``(1.3, 0.8, 2.7, 1.1)`` of the gradient above as its parameters:
+The second route integrates in Julia and generates only the right side, with its
+Jacobians by the state (`jac = true`) and by the parameters (`paramjac = true`), which
+SciMLSensitivity.jl uses with `autojacvec = false`. The parameters are named scalar
+symbols, which the later sections use:
 
 ```@example estimation
 u, t = SX.sym("u", 2), SX.sym("t")
@@ -177,10 +142,8 @@ ode = SciMLBase.ODEProblem(SciMLBase.ODEFunction(right_side; jac = true, paramja
 nothing # hide
 ```
 
-`adjoint_sensitivities` integrates the adjoint equations backward along a solution.
-The loss is a sum over the samples, so its derivative by the state at the sample `i`,
-the index of the time in `times`, enters as a jump of the adjoint at that time, which the
-function `dgdu!` writes:
+The loss is a sum over the samples, so its derivative by the state at sample `i` is a
+jump of the adjoint, which `dgdu!` writes:
 
 ```@example estimation
 using SciMLSensitivity: adjoint_sensitivities, InterpolatingAdjoint
@@ -200,18 +163,9 @@ The two gradients agree to the tolerance of the solvers.
 
 ## Differentiate through `remake` and the solver
 
-The third route keeps the loss in Julia: for each trial ``\theta``, it makes a problem
-with these parameters from `ode` and solves it at the sample times. `SciMLBase.remake`
-copies a problem with the fields that it is given replaced and shares the others with
-the original, among them the `ODEFunction` with its generated code, so that the loss
-compiles nothing after its first call with each element type of ``\theta``. The
-parameters of `ode` are the `Vector{Float64}` given to `ODEProblem`, which
-`remake(ode; p = θ)` replaces by ``\theta`` of any element type. When ``\theta`` holds the
-dual numbers of ForwardDiff.jl, the solver promotes the initial state to the same type,
-and the generated right side, which is generic Julia code, computes with them, so that
-forward-mode differentiation runs through every step of the solver. The problem and the
-data enter the loss as its second argument, a tuple, so that one loss serves other
-problems and other data at the same sample times:
+The third route remakes `ode` with each trial ``\theta`` and solves it. `remake` shares
+the `ODEFunction` with the original, so nothing is compiled again, and the generated right
+side computes with the dual numbers of ForwardDiff.jl:
 
 ```@example estimation
 import ForwardDiff
@@ -225,27 +179,18 @@ end
 maximum(abs, ∇forward - ∇loss) / maximum(abs, ∇loss)
 ```
 
-The gradient agrees with that of the generated code to the tolerance of the solvers. The
-explicit method Vern9 calls the right side alone, so that this route needs neither `jac`
-nor `paramjac`, which `ODEFunction` generates by default and `jac = false` and
-`paramjac = false` leave out; an implicit method also calls `jac`, which takes dual
-numbers as well.
+The explicit method `Vern9` needs neither `jac` nor `paramjac`, which `jac = false` and
+`paramjac = false` leave out; an implicit method also calls `jac`, which accepts dual
+numbers.
 
 ## Set the parameters by name
 
-The problem has the names of the symbols of `right_side` as its symbolic system, the
-object through which SciMLBase.jl looks up a name: the names of scalar symbols, such as
-α, and for a symbol of several elements, such as `u`, the names `u_0` and `u_1` of its
-elements, counted from 0, so that `u_0` is ``x_1``. A parameter symbol of several
-elements also has its own name for all of them (see
-[`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function))). The functions of
-SymbolicIndexingInterface.jl read and write a state or a parameter by these names.
-`getp` returns a function that reads parameters from a problem, and `setp` one that writes
-them in place into its vector of `Float64`, which cannot hold dual numbers. `setsym_oop`
-returns a function that gives a new initial state and a new parameter vector, of which
-the one that receives the values takes their element type, and is therefore the setter
-for a loss that ForwardDiff.jl differentiates; `remake` then promotes the other. We set two parameters of a copy of `ode`, with a
-parameter vector of its own, and read one back:
+The problem knows the names of the scalar symbols, and the elements `u_0`, `u_1` of a
+vector symbol, counted from 0 (see
+[`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function))).
+SymbolicIndexingInterface.jl reads and writes by these names: `setp` writes in place into
+the `Float64` vector, which cannot hold dual numbers, and `setsym_oop` returns new vectors
+of the element type of the values, which suits a loss under ForwardDiff.jl:
 
 ```@example estimation
 using SymbolicIndexingInterface: getp, setp, setsym_oop
@@ -255,10 +200,8 @@ setp(trial, [:α, :δ])(trial, [1.4, 0.9])
 trial.p, getp(trial, :δ)(trial)
 ```
 
-`setsym_oop` suits a fit of some of the parameters, with the others kept at their values
-in the problem. The loss below fits α and δ alone, and its gradient at the values of
-`ode` agrees with the first and the last element of the gradient above to the tolerance
-of the solver:
+A loss that fits α and δ alone, with the others kept, gives the corresponding elements of
+the gradient above:
 
 ```@example estimation
 function partial_loss(θ, (problem, set, data))
@@ -271,15 +214,12 @@ set_αδ = setsym_oop(ode, [:α, :δ])
 ForwardDiff.gradient(θ -> partial_loss(θ, (ode, set_αδ, data)), [1.3, 1.1]) - ∇forward[[1, 4]]
 ```
 
-`setsym_oop` looks the names up once, when it is called on them, whereas
-`remake(ode; p = [:α => 1.4])` looks them up at each call, which costs more (see the
-table at the end).
+`setsym_oop` looks the names up once, whereas `remake(ode; p = [:α => 1.4])` looks them up
+at each call (see the table at the end).
 
-Code written for SciML problems whose parameter object has several portions reaches the
-parameters to tune through the interface of SciMLStructures.jl. For a plain vector,
-`canonicalize` with the portion `Tunable()` returns the vector itself, and `replace`
-returns a copy with other values, of their element type, so that such code runs on
-these problems unchanged:
+For a plain parameter vector, `canonicalize` of SciMLStructures.jl with `Tunable()`
+returns the vector itself, and `replace` returns a copy with the element type of the new
+values:
 
 ```@example estimation
 import SciMLStructures
@@ -289,25 +229,20 @@ tunables, _, _ = SciMLStructures.canonicalize(Tunable(), ode.p)
 tunables === ode.p, eltype(SciMLStructures.replace(Tunable(), ode.p, ForwardDiff.Dual.([1.5, 1.0, 3.0, 1.0], 1.0)))
 ```
 
-SciMLStructures.jl does not define `replace!` for a vector; `copyto!(trial.p, θ)` or
-a setter of `setp` writes in place instead.
+SciMLStructures.jl does not define `replace!` for a vector; use `copyto!(trial.p, θ)` or
+`setp`.
 
-Reverse-mode packages such as Zygote.jl differentiate `remake(problem; p = θ)` and the
-solve through the adjoint method that the keyword `sensealg` of `solve` names, such as
-`InterpolatingAdjoint(autojacvec = false)`, which uses the generated Jacobians.
-`setsym_oop` and `remake` with names write into a copy of the parameter vector, and
-`setp` into the vector itself; for each of them Zygote.jl throws "Mutating arrays is not
-supported". A loss for Zygote.jl that fits
-α and δ alone therefore builds the whole vector without mutation, as in
-`p = [θ[1]; problem.p[2:3]; θ[2]]`, and passes it to `remake`.
+Zygote.jl differentiates `remake(problem; p = θ)` and the solve through the adjoint method
+of the keyword `sensealg`, such as `InterpolatingAdjoint(autojacvec = false)`. It throws
+"Mutating arrays is not supported" for `setsym_oop`, `setp` and `remake` with names, so a
+Zygote loss that fits α and δ builds the vector without mutation, as
+`p = [θ[1]; problem.p[2:3]; θ[2]]`.
 
 ## Fit with the ForwardDiff gradient
 
-`SciMLBase.OptimizationFunction` with `Optimization.AutoForwardDiff()` turns the Julia
-loss into the function of an optimization problem whose gradient ForwardDiff.jl computes.
-The second argument of the loss is the parameter of the optimization problem, here the
-tuple of the ODE problem and the data. We solve it from the same start point and with the
-same bounds and the same L-BFGS method of Ipopt as the first fit:
+With `Optimization.AutoForwardDiff()`, the Julia loss becomes an optimization problem
+with the ODE problem and the data as its parameter. We use the start point, bounds and
+method of the first fit:
 
 ```@example estimation
 import Optimization
@@ -318,22 +253,14 @@ solution_forward = SciMLBase.solve(problem_forward, lbfgs)
 maximum(abs, solution_forward.u - solution.u), solution_forward.stats.iterations
 ```
 
-The fit agrees with the first one to the accuracy of the default tolerance of Ipopt, in
-a similar number of iterations. A fit of α and δ alone takes `partial_loss` in the same
-way, with the tuple `(ode, set_αδ, data)` as the parameter and a start point and bounds
-of two elements.
+The fit agrees with the first one, in a similar number of iterations; `partial_loss`
+fits α and δ alone in the same way.
 
-The three routes give one gradient and one fit to the tolerance of the solvers, and they
-differ in what they suit. The first gives the loss, its gradient and its Hessian as one
-generated function each, ready for an optimizer, with no automatic differentiation in
-Julia. The second suits a problem whose loss and solver options are already written for
-SciMLSensitivity.jl and needs the derivatives of the right side only. The third keeps the
-loss as Julia code around a SciML problem, which may change other fields of the problem
-by `remake` or fit some parameters by name, at the cost of differentiating the solver with
-dual numbers, whose work grows with the number of parameters. For many more parameters
-than states, the adjoint equations, of the first route with `adjoint = true` or of the
-second route, grow with the number of states instead. The costs of one call, measured
-once with the settings of this page, were as follows:
+The first route gives the loss, gradient and Hessian as generated code with no automatic
+differentiation in Julia; the second fits a loss written for SciMLSensitivity.jl; the
+third keeps a Julia loss that can change any field by `remake`, at a cost that grows with
+the number of parameters. The cost of one call, measured once with the settings of this
+page, was:
 
 | Call | Time |
 |:-----|-----:|
@@ -345,7 +272,5 @@ once with the settings of this page, were as follows:
 | Gradient by `adjoint_sensitivities`, second route | 937 µs |
 | Gradient by ForwardDiff.jl through `sciml_loss`, third route | 102 µs |
 
-For four parameters, the generated loss and gradient of the first route, which integrate
-the state and its sensitivities in one run of the solver, cost about as much as the
-ForwardDiff.jl gradient of the third, and the adjoint of the second route costs ten times
-as much.
+For four parameters, the first and third routes cost about the same, and the adjoint of
+the second costs ten times as much.

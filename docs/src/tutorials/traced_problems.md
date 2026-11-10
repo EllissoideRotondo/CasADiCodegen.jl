@@ -1,23 +1,10 @@
 # From a Julia problem to generated code
 
-Many models exist already as SciML problems written in plain Julia: a function
-`f!(du, u, p, t)` with loops, views and broadcasting, and an `ODEProblem` around it. An
-implicit solver needs the Jacobian of `f!` at each factorization, and without one it
-computes it by automatic differentiation or by finite differences, which evaluate `f!`
-once per chunk of states or per color of the sparsity pattern and do not know which entries are
-zero unless the user supplies a pattern. Tracing calls `f!` once on numbers that record
-each operation, which turns the function into a CasADi expression graph. CasADi forms the
-analytic Jacobian and its sparsity pattern from that graph, and CasADiCodegen.jl generates
-Julia code for both. In this tutorial, we turn the Robertson problem, as written for
-OrdinaryDiffEq.jl, into a problem of generated code with an analytic Jacobian, name its
-variables, and then trace a reaction-diffusion model with a matrix state and a sparse
-Jacobian, a differential-algebraic equation with a mass matrix, and a nonlinear system.
-The number type that records the operations, and the rules for branches, are described in
-[Trace a model written in Julia](@ref); this tutorial does not repeat them.
-
-The examples need CasADiCodegen.jl, SciMLBase.jl, OrdinaryDiffEqRosenbrock.jl,
-OrdinaryDiffEqBDF.jl, NonlinearSolve.jl and the standard libraries LinearAlgebra and
-SparseArrays.
+Tracing calls a plain-Julia SciML function once on numbers that record each operation,
+which turns it into a CasADi graph; CasADiCodegen.jl then generates code for the function
+and its analytic, sparse Jacobian. In this tutorial, we trace the Robertson problem, a
+reaction-diffusion model, a pendulum with a mass matrix and a nonlinear system. The rules
+for the traced number type and for branches are in [Trace a model written in Julia](@ref).
 
 ```@example traced_problems
 using CasADiCodegen, LinearAlgebra, SparseArrays
@@ -29,8 +16,7 @@ nothing # hide
 
 ## A problem written for OrdinaryDiffEq.jl
 
-The Robertson equations describe three species of a chemical reaction whose rates
-differ by nine orders of magnitude, which makes them a standard stiff test problem:
+The Robertson equations are a standard stiff test problem:
 
 ```math
 \begin{aligned}
@@ -40,8 +26,7 @@ y_3' &= k_2 y_2^2.
 \end{aligned}
 ```
 
-We write the right side as an in-place Julia function, with the parameters as a tuple,
-as for OrdinaryDiffEq.jl alone; nothing in it refers to CasADi:
+We write the right side for OrdinaryDiffEq.jl, with no reference to CasADi:
 
 ```@example traced_problems
 function rober!(du, u, p, t)
@@ -59,41 +44,31 @@ nothing # hide
 ## The traced problem
 
 [`CasADiCodegen.traced_problem`](@ref CasADiCodegen.traced_problem(::AbstractString, ::SciMLBase.ODEProblem))
-takes an `ODEProblem` or a `NonlinearProblem`. It calls `rober!` on arrays of traced
-numbers with the shapes of the initial state and of the parameters, which gives the CasADi
-function `rober(u, p, t)`, and passes that function to
-[`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function)), which holds
-generated code for the right side and for its Jacobian by the state, and then to a new
-`ODEProblem`. [`CasADiCodegen.traced_function`](@ref CasADiCodegen.traced_function(::AbstractString, ::Union{SciMLBase.ODEProblem,SciMLBase.NonlinearProblem}))
-returns the CasADi function alone, for other uses such as an integrator inside a larger
-CasADi graph.
+traces `rober!` and returns an `ODEProblem` whose
+[`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function)) holds generated code
+for the right side and its Jacobian;
+[`CasADiCodegen.traced_function`](@ref CasADiCodegen.traced_function(::AbstractString, ::Union{SciMLBase.ODEProblem,SciMLBase.NonlinearProblem}))
+returns the CasADi function alone.
 
-The new problem keeps the initial state, the time span, the mass matrix and the keywords
-of the original problem, such as `saveat` or `callback`; the other fields of the original
-`ODEFunction`, such as a hand-written `jac`, are not kept. The parameters become a vector
-of the values of the tuple, in their order, since the generated code takes them as one
-vector, so that a kept callback that reads `p` by field must read it by place, `p[1]`, or by
-name, `integrator.ps[:k₁]`, with the names of the next section. A
-tuple or a named tuple of parameters must hold numbers; one that holds arrays is not
-taken:
+The traced problem keeps the initial state, the time span, the mass matrix and the keywords
+of the original, such as `saveat` or `callback`, but not other fields of its `ODEFunction`,
+such as a hand-written `jac`. The parameters become a vector in the order of the tuple, so
+a kept callback must read them by place, `p[1]`, or by name; a tuple of parameters must hold
+numbers, not arrays:
 
 ```@example traced_problems
 problem = CasADiCodegen.traced_problem("rober", original)
 problem.p
 ```
 
-The function has this analytic Jacobian, which the solvers use instead of automatic
-differentiation; at the initial state, where ``y_2 = y_3 = 0``, only its column of the
-derivatives by ``y_1`` is nonzero:
+The solvers use this analytic Jacobian instead of automatic differentiation:
 
 ```@example traced_problems
 problem.f.jac(problem.u0, problem.p, 0.0)
 ```
 
-The new problem is solved as any other, here with Rodas5P, a Rosenbrock method that uses
-the Jacobian at each step. The original problem, solved by the same method with a
-Jacobian from automatic differentiation of `rober!`, gives the same final state; the two
-Jacobians are both exact, so the two solutions differ by rounding at most, and here not at all:
+Rodas5P gives the same final state for the traced and the original problem, since both
+Jacobians are exact:
 
 ```@example traced_problems
 solution = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-10, reltol = 1e-10)
@@ -101,20 +76,15 @@ reference = SciMLBase.solve(original, Rodas5P(); abstol = 1e-10, reltol = 1e-10)
 solution.u[end], maximum(abs, solution.u[end] - reference.u[end])
 ```
 
-The trace runs `rober!` once, so the cost of the conversion does not grow with the time
-span, and a later change of a parameter value needs no new trace, because the values
-enter the generated code as arguments. A value that fixes the structure of the
-computation, such as a size or the number of steps of a loop, cannot be a parameter for
-the same reason: it is read once during the trace, and a change of it needs a new trace.
+A change of a parameter value needs no new trace, because the values enter the generated
+code as arguments; a value that fixes the structure, such as a size or the number of steps
+of a loop, is read once during the trace and needs a new trace when it changes.
 
 ## Names of the states and of the parameters
 
-The generated problem has a symbolic system, so that a solution and a problem can be
-indexed by name. Without names in the original problem, the states are `u_0`, `u_1` and
-`u_2`, and the parameters `p_0`, `p_1` and `p_2`, counted from 0 as CasADi names the
-elements of a vector symbol. The keywords `states` and `parameters` give names of our own,
-one per element in the order of `vec(u0)` and of the parameters, which then serve
-everywhere that SciMLBase.jl takes a name:
+The traced problem can be indexed by name. By default the states are `u_0`, `u_1`, `u_2`
+and the parameters `p_0`, `p_1`, `p_2`; the keywords `states` and `parameters` give one name
+per element, in the order of `vec(u0)` and of the parameters:
 
 ```@example traced_problems
 named = CasADiCodegen.traced_problem("rober", original; states = [:y₁, :y₂, :y₃], parameters = [:k₁, :k₂, :k₃])
@@ -122,19 +92,15 @@ solution = SciMLBase.solve(named, Rodas5P(); abstol = 1e-10, reltol = 1e-10)
 solution[:y₂][end], SciMLBase.remake(named; p = [:k₁ => 0.08]).p
 ```
 
-Without these keywords, the names come from the symbolic system of the original
-function, such as a `SciMLBase.SymbolCache` with one name per element, and the names of
-the parameters also from the keys of a named tuple, such as `(k₁ = 0.04, k₂ = 3e7, k₃ = 1e4)`.
+Without these keywords, the names come from the symbolic system of the original function,
+such as a `SciMLBase.SymbolCache`, and the parameter names also from the keys of a named
+tuple.
 
 ## A model with loops, views and a sparse Jacobian
 
-A discretized partial differential equation is where the analytic Jacobian matters most,
-since each equation depends on a few states only and the Jacobian is large and sparse.
-As an example, we take the Gray-Scott reaction-diffusion equations in one dimension, two
-species ``U`` and ``V`` on ``n`` points with reflecting ends, written in the style of much
-plain Julia code: the state is an ``n \times 2`` matrix with one species per column, the
-function takes views of its columns, and a loop over the points adds the diffusion before
-`@.` broadcasts the reaction:
+A discretized partial differential equation has a large, sparse Jacobian. We take the
+Gray-Scott equations in one dimension, written with a matrix state, views of its columns,
+a loop for the diffusion and `@.` for the reaction:
 
 ```@example traced_problems
 function grayscott!(du, u, p, t)
@@ -160,51 +126,36 @@ original = SciMLBase.ODEProblem(grayscott!, u0, (0.0, 100.0), (1e-3, 5e-4, 0.04,
 nothing # hide
 ```
 
-The loop has a fixed number of steps and is unrolled into the graph during the trace.
-The branches that choose the neighbors `l` and `r` compare integer indices, not traced
-values, so each is taken once at the trace and leaves no condition in the graph. A branch
-on a state, a parameter or the time throws a `TypeError` and is written with `ifelse`
-instead (see [Choices that depend on the input](@ref)). With `sparse = true`, which needs
-SparseArrays loaded, the `ODEFunction` also holds a `jac_prototype`: a `SparseMatrixCSC`
-with the sparsity pattern that CasADi derives from the graph, into whose stored values the
-generated Jacobian writes. Each equation depends on its own point, on
-its two neighbors and on the other species at the same point, so that a row has at most
-four nonzeros:
+The loop is unrolled during the trace, and the branches on integer indices are taken once.
+A branch on a state, a parameter or the time throws a `TypeError` and must use `ifelse`
+(see [Choices that depend on the input](@ref)). With `sparse = true`, which needs
+SparseArrays loaded, the `ODEFunction` holds a `jac_prototype` with the pattern that CasADi
+derives; each row has at most four nonzeros:
 
 ```@example traced_problems
 problem = CasADiCodegen.traced_problem("grayscott", original; sparse = true)
 size(problem.f.jac_prototype), nnz(problem.f.jac_prototype)
 ```
 
-FBDF, a variable-order implicit method, factorizes this sparse matrix of the ``2n = 512``
-states rather than a dense one. The generated code takes the state in the order of
-`vec(u0)`, here all of ``U`` and then all of ``V``, but it reads and writes a matrix as
-well, so that the traced problem keeps the shape of the original state and the solution
-is a matrix with one species per column at each saved time:
+FBDF factorizes this sparse matrix. The traced problem keeps the matrix shape of the state:
 
 ```@example traced_problems
 solution = SciMLBase.solve(problem, FBDF(); abstol = 1e-8, reltol = 1e-8, save_everystep = false)
 solution.retcode, size(solution.u[end])
 ```
 
-The graph of a loop over many points holds one instruction per operation of each step,
-here a few thousand, and the generated Julia code compiles at its first call, so that a
-model of tens of thousands of instructions takes several seconds to compile. The keywords
-of [`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function)), which
-`traced_problem` passes on, include `chunk_size`, which splits the generated code into
-functions of at most that many instructions, `optlevel`, the optimization level of the
-compiler, and `cache`, which keeps the compiled code on disk between sessions (see
+A graph of tens of thousands of instructions takes several seconds to compile at the first
+call. The keywords `chunk_size`, `optlevel` and `cache` of
+[`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function)), which
+`traced_problem` passes on, control that cost (see
 [Large functions and the cache on disk](@ref)).
 
 ## A mass matrix
 
-A differential-algebraic equation written for OrdinaryDiffEq.jl carries its mass matrix in
-the `ODEFunction` of the problem, and the traced problem keeps it. As an example, we take
-a pendulum of unit mass and length ``L`` in Cartesian coordinates, whose tension ``T`` is
-an algebraic state. The constraint ``x^2 + y^2 = L^2``, differentiated twice, gives the
-last equation below, which determines ``T``, so that the system has index 1 and the last
-row of the mass matrix is zero. Tracing records the equations as they are written, so a
-reduction of the index stays the task of the model:
+The traced problem keeps the mass matrix of a differential-algebraic equation. We take a
+pendulum in Cartesian coordinates whose tension ``T`` is an algebraic state; the last
+equation is the length constraint differentiated twice, since tracing records the equations
+as written and does not reduce the index:
 
 ```@example traced_problems
 function pendulum!(du, u, p, t)
@@ -224,17 +175,13 @@ solution = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-8, reltol = 1e-8)
 problem.f.mass_matrix == f.mass_matrix, solution[:x][end]^2 + solution[:y][end]^2
 ```
 
-The pendulum starts at rest at ``x = L``, where the last equation gives ``T = 0``, so the
-initial state is consistent.
+The initial state is consistent, since the last equation gives ``T = 0`` at rest at ``x = L``.
 
 ## Nonlinear problems
 
-A `NonlinearProblem` traces in the same way, into a function of the state and of the
-parameters without the time, and `traced_problem` makes a `NonlinearProblem` of generated
-code with the analytic Jacobian of the residual, which Newton's method of NonlinearSolve.jl
-then uses. As an example, we take the intersection of a circle of radius ``\sqrt{p_1}``
-with the line ``u_1 = u_2``, written out of place, where `traced_problem` calls `f(u, p)`
-on the traced state and takes its result:
+A `NonlinearProblem` traces in the same way and gets the analytic Jacobian of its residual.
+Here the residual, the intersection of a circle with the line ``u_1 = u_2``, is written out
+of place:
 
 ```@example traced_problems
 using NonlinearSolve: NewtonRaphson
@@ -245,5 +192,5 @@ problem = CasADiCodegen.traced_problem("circle", original)
 SciMLBase.solve(problem, NewtonRaphson()).u
 ```
 
-The generated functions are in place whatever the form of the original function, unless
-the initial state is a static vector, which gives functions that return static arrays.
+The generated functions are in place whatever the form of the original, unless the initial
+state is a static vector, which gives functions that return static arrays.

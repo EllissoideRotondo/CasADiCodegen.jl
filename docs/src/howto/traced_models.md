@@ -1,13 +1,9 @@
 # Trace a model written in Julia
 
-A model that exists as generic Julia code, written for any subtype of `Real`, can
-enter a CasADi graph without being rewritten. [`CasADiCodegen.Traced`](@ref) is a
-real number that records each operation on it as a CasADi expression, as the `Num`
-of Symbolics.jl does, so that calling the Julia function on traced values gives the
-graph of the function, which CasADi then differentiates and CasADiCodegen.jl emits.
-
-We trace the two-body acceleration, written with a static vector and `norm`, and
-generate its value and its Jacobian:
+[`CasADiCodegen.Traced`](@ref) is a real number that records each operation on it as a
+CasADi expression, as the `Num` of Symbolics.jl does, so generic Julia code called on
+traced values gives a CasADi graph. Trace the two-body acceleration and generate its
+value and Jacobian:
 
 ```@example traced
 using CasADiCodegen, LinearAlgebra, StaticArrays
@@ -22,20 +18,15 @@ value, J = g([7000.0, -1200.0, 300.0])
 J
 ```
 
-[`CasADiCodegen.traced`](@ref) turns a symbolic column vector into a vector of traced
-values, and [`CasADiCodegen.untraced`](@ref) turns the result back into a column
-vector of CasADi, on which `jacobian`, `hessian` and the other functions of CasADi
-work. A plain number in the code becomes a constant of the graph, and a loop with a
-fixed number of steps is unrolled into it.
+[`CasADiCodegen.traced`](@ref) turns a symbolic column vector into traced values, and
+[`CasADiCodegen.untraced`](@ref) turns the result back into a CasADi column vector. A
+plain number becomes a constant of the graph, and a loop is unrolled.
 
 ## The function of a SciML problem
 
-The function `f(du, u, p, t)` of a SciML problem, written in place for any number
-type, becomes a CasADi function in one call. [`CasADiCodegen.traced_function`](@ref)
-calls `f` on traced arrays with the shapes of the initial state and of the parameters,
-so a state stored as a matrix keeps its shape inside `f`. The CasADi function
-`rhs(u, p, t)` takes the state as the column vector `vec(u0)`, and its generated code
-reads and writes a matrix in that order, so the problem may keep the matrix `u0`:
+[`CasADiCodegen.traced_function`](@ref) traces `f(du, u, p, t)` of a SciML problem on
+arrays with the shapes of `u0` and `p`; the CasADi function `rhs(u, p, t)` takes the
+state as `vec(u0)`, so the problem may keep a matrix `u0`:
 
 ```@example traced
 import SciMLBase
@@ -54,26 +45,18 @@ problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), u0, (0.0, 1.0), [0.5,
 nothing # hide
 ```
 
-The problem then has the generated right side and its Jacobian, or with
-`ODEFunction(rhs; sparse = true)` a sparse Jacobian (see
-[Give a CasADi function to a SciML problem](@ref)). A `NonlinearProblem` gives a
-function without the time, and a function out of place works as well. The parameters may
-also be a tuple or a named tuple of numbers, and the keywords `states` and `parameters`
-name the elements. [`CasADiCodegen.traced_problem`](@ref CasADiCodegen.traced_problem(::AbstractString, ::SciMLBase.ODEProblem))
-makes the new problem in one call, with the initial state, the time span, the mass matrix
-and the keywords of the original one; [From a Julia problem to generated code](@ref)
-walks through it. In `diffusion!`,
-`max` and `min` act on integer indices, not on traced values, so they need no
-`ifelse` (see the next section).
+The problem has the generated right side and its Jacobian, sparse with
+`ODEFunction(rhs; sparse = true)` (see [Give a CasADi function to a SciML problem](@ref)).
+A `NonlinearProblem` and an out-of-place function work as well; the parameters may be
+a tuple or a named tuple, and the keywords `states` and `parameters` name the elements.
+[`CasADiCodegen.traced_problem`](@ref CasADiCodegen.traced_problem(::AbstractString, ::SciMLBase.ODEProblem))
+makes the new problem in one call (see [From a Julia problem to generated code](@ref)).
 
 ## Choices that depend on the input
 
-A comparison of traced values gives a traced condition, not a `Bool`. An `if`, a
-`&&` or a `? :` on such a condition therefore throws a `TypeError`, instead of
-following the branch that the values at the time of the trace select and
-differentiating only that branch. A choice that depends on the input is written
-with `ifelse`, `min`, `max` or `clamp`, which become the operations `if_else`,
-`fmin` and `fmax` of CasADi and keep both branches in the graph:
+A comparison of traced values gives a traced condition, so an `if`, `&&` or `? :` on
+it throws a `TypeError`. Write the choice with `ifelse`, `min`, `max` or `clamp`, which
+keep both branches in the graph:
 
 ```@example traced
 x = SX.sym("x")
@@ -83,12 +66,10 @@ h, _ = build_function(CasadiFunction("thrust", [x], [thrust]); expression = Val{
 h([0.2]), h([0.8]), h([-1.0])
 ```
 
-A Julia function with branches that cannot be written this way, or one that calls
-code that accepts only `Float64`, enters the graph through
-[`CasADiCodegen.callback`](@ref CasADiCodegen.callback(::Any, ::AbstractString, ::Tuple, ::Tuple)) instead (see [Call a Julia function from the model](@ref)).
+Code that cannot be written this way, or that accepts only `Float64`, enters the graph
+through a callback (see [Call a Julia function from the model](@ref)).
 
 ## Matrix graphs
 
-`traced` also takes a column vector of a matrix (MX) graph. The traced values are
-then `Traced{MX}`, and the generic code can work on the results of a callback or of
-any other MX expression, while the graph stays a matrix graph.
+`traced` also takes an MX column vector and gives `Traced{MX}` values, so the generic
+code can work on the result of a callback and the graph stays a matrix graph.
