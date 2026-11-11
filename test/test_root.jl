@@ -17,7 +17,7 @@ end
     E, M, e = SX.sym("E"), SX.sym("M"), SX.sym("e")
     residual = CasADiCodegen.Function("kepler", [E, M, e], [E - e * sin(E) - M])
     R = rootfinder("anomaly", SimpleNewtonRaphson(), residual; abstol = 1e-14)
-    @test (C.n_in(R), C.n_out(R)) == (3, 1)
+    @test (casadi.n_in(R), casadi.n_out(R)) == (3, 1)
     guess, m, ec = MX.sym("guess"), MX.sym("m"), MX.sym("ec")
     root = R(guess, m, ec)
     first_order = [jacobian(root, v) for v in (guess, m, ec)]
@@ -27,7 +27,7 @@ end
     d = 1 - ev * cos(Ev)
     expected = [[Ev], [0.0], [1 / d], [sin(Ev) / d], [-ev * sin(Ev) / d^3], [(cos(Ev) - ev) / d^3]]
     g = build_function(f; nonzeros = true, expression = Val{false})
-    blank() = [zeros(C.nnz_out(f, j)) for j in 0:5]
+    blank() = [zeros(casadi.nnz_out(f, j)) for j in 0:5]
     ours = g(blank(), ([Mv], [Mv], [ev]))
     @test all(length(a) == length(b) && all(isapprox.(a, b; atol = 1e-11)) for (a, b) in zip(ours, expected))
     @test all(all(isapprox.(a, b; atol = 1e-11)) for (a, b) in zip(casadi_eval(f, Mv, Mv, ev), expected))
@@ -48,7 +48,7 @@ end
     small!(small_out, arguments)
     @test (@allocated small!(small_out, arguments)) == 0
     # Dual numbers pass through the solver.
-    value(m) = (r = [zeros(typeof(m), C.nnz_out(f, j)) for j in 0:5]; g(r, ([m], [m], [ev])); r[1][1])
+    value(m) = (r = [zeros(typeof(m), casadi.nnz_out(f, j)) for j in 0:5]; g(r, ([m], [m], [ev])); r[1][1])
     @test isapprox(ForwardDiff.derivative(value, Mv), 1 / d; atol = 1e-10)
 end
 
@@ -75,7 +75,7 @@ end
     at(i) = 1 <= i <= n ? z[i] : SX(0.0)
     residual = CasADiCodegen.Function("bratu", [z, q], [vcat([at(i - 1) - 2 * z[i] + at(i + 1) + q * exp(z[i]) / (n + 1)^2 for i in 1:n]...)])
     R = rootfinder("bratu", SimpleNewtonRaphson(), residual; abstol = 1e-12)
-    newton = C.rootfinder("bratu_newton", "newton", residual)
+    newton = casadi.rootfinder("bratu_newton", "newton", residual)
     x, λ = MX.sym("x", n), MX.sym("λ")
     ours = CasADiCodegen.Function("ours", [x, λ], [R(x, λ), jacobian(R(x, λ), λ)])
     theirs = CasADiCodegen.Function("theirs", [x, λ], [newton(x, λ), jacobian(newton(x, λ), λ)])

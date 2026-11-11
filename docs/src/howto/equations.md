@@ -103,8 +103,8 @@ also satisfy the [`invariants`](@ref CasADiCodegen.Models.invariants).
 `"t"`, `"ode"` and `"alg"`, without the entries that the model lacks:
 
 ```@example equations
-F = CasADiCodegen.C.integrator("F", "cvodes", Dict(second_order), 0.0, 10.0)
-result = F(Dict("x0" => CasADiCodegen.C.DM([1.0, 0.0]), "p" => CasADiCodegen.C.DM([1.0, 4.0, 0.5])))
+F = casadi.integrator("F", "cvodes", Dict(second_order), 0.0, 10.0)
+result = F(Dict("x0" => casadi.DM([1.0, 0.0]), "p" => casadi.DM([1.0, 4.0, 0.5])))
 result["xf"]
 ```
 

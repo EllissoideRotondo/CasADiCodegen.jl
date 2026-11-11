@@ -63,10 +63,9 @@ using CasADiCodegen
 using OrdinaryDiffEqVerner: Vern9
 using SimpleNonlinearSolve: SimpleNewtonRaphson
 import SciMLBase
-const C = CasADiCodegen.C
 
 x, p = SX.sym("x", 2), SX.sym("p")
-ode = vcat(x[2], C.if_else(x[1] < 1, SX(1.0), SX(-1.0)) * min(p, 2))
+ode = vcat(x[2], casadi.if_else(x[1] < 1, SX(1.0), SX(-1.0)) * min(p, 2))
 rhs = CasadiFunction("rhs", [x, p], [ode], ["x", "p"], ["ode"])
 CasADiCodegen.nonsmooth_operations(rhs; inputs = "x"), CasADiCodegen.nonsmooth_operations(rhs; inputs = "p")
 ```
@@ -80,7 +79,7 @@ the switch. With the thrust +1 below ``x = 1`` and -1 above, the Jacobian misses
 a quantity of order 1:
 
 ```@example disc
-written = Dict("x" => x, "ode" => vcat(x[2], C.if_else(x[1] < 1, SX(1.0), SX(-1.0))))
+written = Dict("x" => x, "ode" => vcat(x[2], casadi.if_else(x[1] < 1, SX(1.0), SX(-1.0))))
 F = integrator("F", Vern9(), written, 0.0, 2.0; nonsmooth = :ignore, abstol = 1e-12, reltol = 1e-12)
 
 function fd_error(F)

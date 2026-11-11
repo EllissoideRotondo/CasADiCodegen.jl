@@ -354,11 +354,11 @@ struct SymbolicCallback <: RecordedCallback
 end
 SymbolicCallback(call, evaluate, jacobian) = SymbolicCallback(call, evaluate, jacobian, nothing)
 
-C.has_jacobian(cb::SymbolicCallback) = true
-C.get_jacobian(cb::SymbolicCallback, name, names_in, names_out, options) = cb.jacobian(String(name))
-C.has_reverse(cb::SymbolicCallback, nadj) = cb.reverse !== nothing
+casadi.has_jacobian(cb::SymbolicCallback) = true
+casadi.get_jacobian(cb::SymbolicCallback, name, names_in, names_out, options) = cb.jacobian(String(name))
+casadi.has_reverse(cb::SymbolicCallback, nadj) = cb.reverse !== nothing
 
-column(v) = size(v, 2) == 1 && C.is_dense(v)
+column(v) = size(v, 2) == 1 && casadi.is_dense(v)
 flat(M) = reshape(M, length(M), 1)
 
 """
@@ -519,14 +519,14 @@ function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::
     x0, t0, tf, z = Front.MX.sym("x0", n), Front.MX.sym("t0"), Front.MX.sym("tf"), Front.MX.sym("z", 2)
     q = has_p ? [Front.MX.sym("p", m)] : Front.MX[]
     # The place `i` of the element that changed its sign selects it: one_hot(i) has a 1 in row i, and zeros for i = 0.
-    one_hot(i) = vertcat([C.eq(i, Front.MX(Float64(j))) for j in 1:k])
+    one_hot(i) = vertcat([casadi.eq(i, Front.MX(Float64(j))) for j in 1:k])
     te, place = z[1], z[2]
     at_time = arc(x0, q..., t0, te)
     value = surface(has_quad ? at_time[1] : at_time, has_p ? q[1] : Front.MX(0, 1), te)
     chosen = k == 1 ? value : Front.dot(one_hot(place), value)
     # The unknowns are the time and the place. The place is the root of i - round(i), which no
     # input moves, so CasADi gives it no derivatives; a missing event is the root of te - tf.
-    residual = vertcat([exact && switching == 0 ? chosen : C.if_else(C.eq(place, Front.MX(0.0)), te - tf, chosen), place - C.floor(place + Front.MX(0.5))])
+    residual = vertcat([exact && switching == 0 ? chosen : casadi.if_else(casadi.eq(place, Front.MX(0.0)), te - tf, chosen), place - casadi.floor(place + Front.MX(0.5))])
     # Inline, so that the calls of the integrator are at the top level of the graph of the user.
     residual_function = Front.Function(name * "_zero", [z, x0, q..., t0, tf], [residual], Dict("always_inline" => true))
     event_time = implicit_function(name * "_time", residual_function, find)
@@ -554,7 +554,7 @@ function ode_event(name::AbstractString, dae, make_solver, make_event; adjoint::
         if (length(times) < events || !terminal) && jump !== nothing
             after = jump(state, has_p ? q[1] : Front.MX(0, 1), start)
             size(after, 2) > 1 && (after = Front.mtimes(after, one_hot(places[end])))
-            state = exact ? after : C.if_else(places[end] > 0, after, state)
+            state = exact ? after : casadi.if_else(places[end] > 0, after, state)
         end
     end
     terminal || advance(tf)
@@ -651,13 +651,13 @@ function ode_grid(name::AbstractString, dae, t0::Real, times::AbstractVector{<:R
         stops = sort!(unique(Float64[time for time in times if side(time, t0)]); by = time -> abs(time - t0))
         isempty(stops) && continue
         core = integration(name * suffix, joined, false, make_solver, start; adjoint, grid = (Float64(t0), stops))
-        X = C.transpose(reshape(core(x0, p...), length(stops), n))
+        X = casadi.transpose(reshape(core(x0, p...), length(stops), n))
         stops == times && (whole = X)
         for (k, time) in enumerate(times)
             side(time, t0) && (columns[k] = X[:, searchsortedfirst(stops, time; by = s -> abs(s - t0))])
         end
     end
-    initial = isempty(start) ? x0 : vertcat([x0, Front.MX(C.DM(start))])
+    initial = isempty(start) ? x0 : vertcat([x0, Front.MX(casadi.DM(start))])
     for k in eachindex(times)
         times[k] == t0 && (columns[k] = initial)
     end
@@ -695,15 +695,15 @@ Jacobian `A` of `ode` by `x`, and `d` the differential states.
 function state_rate(ode, x, p, t, mass::Vector{Float64})
     (isempty(mass) || all(!iszero, mass)) && return Front.Function("rate", [x, p, t], [ode])
     n = length(mass)
-    select(rows) = Front.MX(C.DM([Float64(i == r) for r in rows, i in 1:n]))
+    select(rows) = Front.MX(casadi.DM([Float64(i == r) for r in rows, i in 1:n]))
     Pa, Pd = select(findall(iszero, mass)), select(findall(!iszero, mass))
     X, P, T = Front.MX.sym("x", n), Front.MX.sym("p", size(p, 1)), Front.MX.sym("t")
     at(value) = Front.Function("at", [x, p, t], [Front.densify(value)])(X, P, T)
     f, A, by_time = at(ode), at(Front.jacobian(ode, x)), at(Front.jacobian(ode, t))
-    differential = Front.mtimes(C.transpose(Pd), Front.mtimes(Pd, f))
+    differential = Front.mtimes(casadi.transpose(Pd), Front.mtimes(Pd, f))
     coupling = Front.mtimes(Pa, Front.mtimes(A, differential)) + Front.mtimes(Pa, by_time)
-    algebraic = -C.solve(Front.mtimes(Pa, Front.mtimes(A, C.transpose(Pa))), coupling)
-    Front.Function("rate", [X, P, T], [differential + Front.mtimes(C.transpose(Pa), algebraic)])
+    algebraic = -casadi.solve(Front.mtimes(Pa, Front.mtimes(A, casadi.transpose(Pa))), coupling)
+    Front.Function("rate", [X, P, T], [differential + Front.mtimes(casadi.transpose(Pa), algebraic)])
 end
 
 """
@@ -749,7 +749,7 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
     # The parameters whose sensitivities are integrated: those of the model and,
     # when the right side has the time in it, the initial time, which follows them.
     # An element of a matrix (MX) symbol is not a symbol, so the sparsity pattern of the Jacobian answers for it.
-    by_start() = p isa MX ? C.nnz(C.sparsity(C.jacobian(ode, p)[:, own+1])) > 0 : C.depends_on(ode, p[own+1])
+    by_start() = p isa MX ? casadi.nnz(casadi.sparsity(casadi.jacobian(ode, p)[:, own+1])) > 0 : casadi.depends_on(ode, p[own+1])
     columns = free && by_start() ? own + 1 : own
 
     model = Front.Function("rhs", [x, p, t], [ode])
@@ -768,7 +768,7 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
     function sensitivities(x0, q)
         if sensitivity === nothing
             sensitivity = sensitivity_integration()
-            run.sensitivity[] = JULIA_CALLS[C.__hash__(sensitivity)][1].f
+            run.sensitivity[] = JULIA_CALLS[casadi.__hash__(sensitivity)][1].f
         end
         zf = has_p ? sensitivity(x0, q) : sensitivity(x0)
         reshape(zf[nN+1:nN+nN*given], nN, given), reshape(zf[nN+nN*given+1:nN+nN*given+nN*columns], nN, columns)
@@ -834,19 +834,19 @@ function integration(name::AbstractString, dae, free::Bool, make_solver, tail::V
             # time through the algebraic equations, so a seed on them goes to those: with the rows `a` of the
             # algebraic equations and states and the rows `d` of the others, and c = -inv(A_aa') seed_a, the seed
             # of the states `d` grows by A_ad' c, and the direct derivatives by the parameters are B_a' c.
-            select(rows) = Front.MX(C.DM([Float64(i == r) for r in rows, i in 1:n]))
+            select(rows) = Front.MX(casadi.DM([Float64(i == r) for r in rows, i in 1:n]))
             Pa, Pd = select(findall(iszero, mass)), select(findall(!iszero, mass))
             A = at_end(Front.jacobian(ode, x))
-            c = -C.solve(C.transpose(Front.mtimes(Pa, Front.mtimes(A, C.transpose(Pa)))), Front.mtimes(Pa, seed))
-            by_states = Front.mtimes(Pd, seed) + Front.mtimes(Pd, Front.mtimes(C.transpose(A), Front.mtimes(C.transpose(Pa), c)))
-            pulled(value) = Front.mtimes(C.transpose(at_end(value)), Front.mtimes(C.transpose(Pa), c))
+            c = -casadi.solve(casadi.transpose(Front.mtimes(Pa, Front.mtimes(A, casadi.transpose(Pa)))), Front.mtimes(Pa, seed))
+            by_states = Front.mtimes(Pd, seed) + Front.mtimes(Pd, Front.mtimes(casadi.transpose(A), Front.mtimes(casadi.transpose(Pa), c)))
+            pulled(value) = Front.mtimes(casadi.transpose(at_end(value)), Front.mtimes(casadi.transpose(Pa), c))
             # The multipliers of the algebraic states start from a guess, as those states do.
-            zf = backward(vertcat([xf, Front.mtimes(C.transpose(Pd), by_states)]), returned)
+            zf = backward(vertcat([xf, Front.mtimes(casadi.transpose(Pd), by_states)]), returned)
             direct = columns > 0 ? pulled(Front.jacobian(ode, p)[:, 1:columns]) : nothing
             by_initial = columns > own ? zf[2n+own+1] + direct[own+1] - by_final : -by_final
             by_parameters = own > 0 ? [zf[2n+1:2n+own] + direct[1:own]] : []
             # An initial value of an algebraic state is a guess, on which no result depends.
-            results = [C.times(Front.MX(C.DM(mass[1:given])), zf[n+1:n+given]), vertcat([by_parameters..., by_initial, by_final])]
+            results = [casadi.times(Front.MX(casadi.DM(mass[1:given])), zf[n+1:n+given]), vertcat([by_parameters..., by_initial, by_final])]
         end
         reverse = Front.Function("adj1_" * name, [x0, q, xf, seed], results, Dict("always_inline" => true))
     end
@@ -892,10 +892,10 @@ function grid_reverse(name::AbstractString, x, p, t, ode, has_p::Bool, n::Int, g
         x0, q, X, seed = symbols()
         Sf, Qf = sensitivities(x0, q)
         J = columns > 0 ? horzcat([Sf, Qf]) : Sf
-        result = Front.mtimes(C.transpose(J), seed)
+        result = Front.mtimes(casadi.transpose(J), seed)
         blocks = [Front.jacobian(result, x0)]
         has_p && push!(blocks, Front.jacobian(result, q))
-        push!(blocks, Front.MX(nout, nN), C.transpose(J))        # the result does not depend on the states X
+        push!(blocks, Front.MX(nout, nN), casadi.transpose(J))        # the result does not depend on the states X
         made[] = ([arguments(x0, q, X, seed)..., Front.MX.sym("r", nout)], blocks)
         Front.Function(jacobian_name, made[]..., Dict("always_inline" => true))
     end

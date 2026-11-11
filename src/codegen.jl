@@ -42,9 +42,9 @@ const OPTLEVEL_CONTEXTS = (OptLevel0, OptLevel1, OptLevel2, OptLevel3)
 
 # The front end, CasADiNative.jl, whose convenience layer the package extends.
 import CasADiNative as Front
-const C = Front.C
-const SX = C.SX
-const MX = C.MX
+const casadi = Front.casadi
+const SX = casadi.SX
+const MX = casadi.MX
 
 include("contracts.jl")
 include("operations.jl")

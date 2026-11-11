@@ -1,4 +1,4 @@
-sparsity_tuple(sp::C.Sparsity) = (C.size1(sp), C.size2(sp), C.colind(sp) .+ 1, C.row(sp) .+ 1)
+sparsity_tuple(sp::casadi.Sparsity) = (casadi.size1(sp), casadi.size2(sp), casadi.colind(sp) .+ 1, casadi.row(sp) .+ 1)
 
 # Print one function definition with a stable, readable layout.
 function print_function(io::IO, definition::Expr)
@@ -41,7 +41,7 @@ A source file gets the code of `model` again, under a name of its own.
 """
 struct Emitted{F}
     f::F
-    model::C.Function
+    model::casadi.Function
     form::Symbol
 end
 (e::Emitted)(arguments...) = e.f(arguments...)

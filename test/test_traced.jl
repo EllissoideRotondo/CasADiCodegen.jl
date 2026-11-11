@@ -95,9 +95,9 @@ end
     du = zeros(3)
     rober!(du, u0, p, 0.0)
     @test build_function(f; expression = Val{false})[1](u0, collect(p), 0.0) ≈ du
-    @test [C.name(e) for e in C.symvar(C.sx_in(f, 0))] == ["y₁", "y₂", "y₃"]
+    @test [casadi.name(e) for e in casadi.symvar(casadi.sx_in(f, 0))] == ["y₁", "y₂", "y₃"]
     # A named tuple gives the names of the parameters, as `p.k` gives the value.
     g = CasADiCodegen.traced_function("decay", (u, p) -> -p.k * u, [1.0], (k = 0.5,); inplace = false, time = false)
-    @test C.name(C.sx_in(g, 1)) == "k" && build_function(g; expression = Val{false})[1]([2.0], [0.5]) ≈ [-1.0]
+    @test casadi.name(casadi.sx_in(g, 1)) == "k" && build_function(g; expression = Val{false})[1]([2.0], [0.5]) ≈ [-1.0]
     @test_throws ArgumentError CasADiCodegen.traced_function("rober", rober!, u0, p; states = [:a, :b])
 end

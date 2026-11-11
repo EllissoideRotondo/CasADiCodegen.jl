@@ -12,8 +12,8 @@ the Julia front end of CasADi 3.8.2, whose calls follow the
 
 - `SX`, `MX`, `DM`, `jacobian`, `gradient`, `hessian`, `substitute`, `nlpsol` and the
   `Opti` functions `Opti`, `variable`, `parameter`, `minimize`, `subject_to`, `bounded`,
-  `set_initial`, `solve` and `value` are exported. Every other function, such as
-  `set_value` and `sumsqr`, is in `CasADiCodegen.C`.
+  `set_initial`, `solve` and `value` are exported. Every other function is in the
+  exported module `casadi`, as in Python: `casadi.set_value`, `casadi.sumsqr`.
 - `CasadiFunction` makes a CasADi function, since `Function` is a Julia type.
 - Operations have their Julia meaning: `*` is the matrix product, `sin.(x)` and `x .^ 2`
   act on each element, and `[a; b]` concatenates.
@@ -77,7 +77,7 @@ output, and rejects one with another pattern:
 ```@example start
 using SparseArrays
 
-Js = SparseMatrixCSC(CasADiCodegen.C.sparsity_out(f, 1))   # pattern of the second output: CasADi counts from 0
+Js = SparseMatrixCSC(casadi.sparsity_out(f, 1))   # pattern of the second output: CasADi counts from 0
 g!((zeros(2), Js), ([0.3, 1.7, -0.4],))
 Js
 ```

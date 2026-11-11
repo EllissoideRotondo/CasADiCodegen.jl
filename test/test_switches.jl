@@ -13,14 +13,14 @@ function switched(law; quad = nothing)
 end
 
 @testset "an integrator warns about a switch on the state" begin
-    on_state = switched((x, b, t) -> C.if_else(x[1] < 1, SX(1.0), b * x[1]))
+    on_state = switched((x, b, t) -> casadi.if_else(x[1] < 1, SX(1.0), b * x[1]))
     @test_logs (:warn, r"integrator \"F\".*OP_LT: 1 jump") integrator("F", Vern9(), on_state, 0.0, 2.0; TIGHT...)
     @test_throws ArgumentError integrator("F", Vern9(), on_state, 0.0, 2.0; nonsmooth = :error, TIGHT...)
     @test_throws ArgumentError integrator("F", Vern9(), on_state; nonsmooth = :sometimes, TIGHT...)
     # A switch at a fixed time, one on the parameters only, and a guard of an equality do not move with the state.
-    @test_logs integrator("F", Vern9(), switched((x, b, t) -> C.if_else(t < 1, SX(1.0), b)), 0.0, 2.0; TIGHT...)
-    @test_logs integrator("F", Vern9(), switched((x, b, t) -> C.if_else(b < 1, SX(1.0), b)), 0.0, 2.0; TIGHT...)
-    @test_logs integrator("F", Vern9(), switched((x, b, t) -> C.if_else(x[1] == 0, SX(0.0), 1 / x[1])), 0.0, [1.0, 2.0]; TIGHT...)
+    @test_logs integrator("F", Vern9(), switched((x, b, t) -> casadi.if_else(t < 1, SX(1.0), b)), 0.0, 2.0; TIGHT...)
+    @test_logs integrator("F", Vern9(), switched((x, b, t) -> casadi.if_else(b < 1, SX(1.0), b)), 0.0, 2.0; TIGHT...)
+    @test_logs integrator("F", Vern9(), switched((x, b, t) -> casadi.if_else(x[1] == 0, SX(0.0), 1 / x[1])), 0.0, [1.0, 2.0]; TIGHT...)
     # A kink leaves the first derivatives right.
     kinked = switched((x, b, t) -> b; quad = x -> abs(x[1]))
     @test_logs (:warn, r"\"quad\".*OP_FABS: 1 kink.*order 2") integrator("F", Vern9(), kinked; TIGHT...)
@@ -28,7 +28,7 @@ end
 
 @testset "a replaced integrator of CasADi warns in generated code" begin
     x, b = MX.sym("x", 2), MX.sym("b")
-    model = Dict("x" => x, "p" => b, "ode" => vcat(x[2], C.if_else(x[1] < 1, MX(1.0), b)))
+    model = Dict("x" => x, "p" => b, "ode" => vcat(x[2], casadi.if_else(x[1] < 1, MX(1.0), b)))
     native = integrator("bounce", "cvodes", model, 0.0, 2.0)
     f = CasADiCodegen.Function("f", [x, b], [native(x, MX(0, 1), b, MX(), MX(), MX(), MX())[1]])
     ode = Solver(Vern9(); TIGHT...)
@@ -39,7 +39,7 @@ end
 
 @testset "nonsmooth_operations finds the switches on chosen inputs" begin
     x, p = SX.sym("x", 2), SX.sym("p")
-    inner = CasADiCodegen.Function("inner", [x, p], [C.sign(x[1]) + C.fmin(p, SX(2.0)) * x[2]], ["x", "p"], ["r"])
+    inner = CasADiCodegen.Function("inner", [x, p], [casadi.sign(x[1]) + casadi.fmin(p, SX(2.0)) * x[2]], ["x", "p"], ["r"])
     X, P = MX.sym("x", 2), MX.sym("p")
     outer = CasADiCodegen.Function("outer", [X, P], [inner(X, P)], ["x", "p"], ["r"])
     @test CasADiCodegen.nonsmooth_operations(outer; inputs = ["x"]) == [:OP_SIGN => 1]
@@ -50,9 +50,9 @@ end
     @test_throws ArgumentError CasADiCodegen.nonsmooth_operations(outer; inputs = ["y"])
     # Regression: a short-circuit if_else counted twice in the matrix scan, at its comparison and at its Switch.
     a = MX.sym("a")
-    ff = CasADiCodegen.Function("ff", [a], [C.if_else(a[1] > 0, 2a, 3a, true)])
+    ff = CasADiCodegen.Function("ff", [a], [casadi.if_else(a[1] > 0, 2a, 3a, true)])
     A = MX.sym("A", 1, 3)
-    mapped = CasADiCodegen.Function("g", [A], [C.map(ff, 3)(A)])
+    mapped = CasADiCodegen.Function("g", [A], [casadi.map(ff, 3)(A)])
     @test CasADiCodegen.nonsmooth_operations(mapped; expand = false) == [:OP_LT => 1]
 end
 
@@ -98,7 +98,7 @@ end
 @testset "modes: fixed times, the jump of the STM, the initial mode" begin
     model, modes = thrust_model()
     F = @test_logs integrator("F", Vern9(), model, 0.0, 2.0; modes, switches = 2, TIGHT...)
-    @test [C.name_out(F, j) for j in 0:C.n_out(F)-1] == ["xf"]
+    @test [casadi.name_out(F, j) for j in 0:casadi.n_out(F)-1] == ["xf"]
     x0 = MX.sym("x0", 2)
     xf = F(x0)
     f = build_function(CasADiCodegen.Function("f", [x0], [xf, jacobian(xf, x0)]); nonzeros = true, expression = Val{false})
@@ -122,9 +122,9 @@ end
 end
 
 @testset "modes: free times, switch times, the bound and a vector of times" begin
-    model, modes = thrust_model(written = m -> C.if_else(m > 0, SX(1.0), SX(-1.0)))   # a test of the mode does not warn
+    model, modes = thrust_model(written = m -> casadi.if_else(m > 0, SX(1.0), SX(-1.0)))   # a test of the mode does not warn
     G = @test_logs integrator("G", Vern9(), model; modes, switches = 1, switch_times = true, TIGHT...)
-    @test [C.name_out(G, j) for j in 0:C.n_out(G)-1] == ["xf", "ts", "ns"]
+    @test [casadi.name_out(G, j) for j in 0:casadi.n_out(G)-1] == ["xf", "ts", "ns"]
     x0, tf = MX.sym("x0", 2), MX.sym("tf")
     out = G(x0, MX(0.0), tf)
     g = CasADiCodegen.Function("g", [x0, tf], [out[1], out[2], out[3], jacobian(out[2], x0)])
@@ -157,7 +157,7 @@ end
     x = model["x"]
     model["zero"], model["transition"] = x[2] + 0.5, vcat(x[1], -x[2])
     E = integrator("E", Vern9(), model; modes, switches = 2, TIGHT...)
-    @test [C.name_out(E, j) for j in 0:C.n_out(E)-1] == ["xf", "te"]
+    @test [casadi.name_out(E, j) for j in 0:casadi.n_out(E)-1] == ["xf", "te"]
     x0 = MX.sym("x0", 2)
     out = E(x0, MX(0.0), MX(10.0))
     τ = sqrt(2) + 0.5
@@ -167,7 +167,7 @@ end
     # through a second switch, at 3√2 + 1 with v = -√2. The next crossing of v = -1/2, after
     # the event that `events` counts, has no effect.
     W = integrator("W", Vern9(), model; modes, switches = 3, terminal = false, switch_times = true, TIGHT...)
-    @test [C.name_out(W, j) for j in 0:C.n_out(W)-1] == ["xf", "te", "ts", "ns"]
+    @test [casadi.name_out(W, j) for j in 0:casadi.n_out(W)-1] == ["xf", "te", "ts", "ns"]
     rest = 5 - 3 * sqrt(2)                                  # from the second switch to tf = 6
     @test closeto(ode_emitted(CasADiCodegen.Function("w", [x0], collect(W(x0, MX(0.0), MX(6.0)))), ([0.0, 0.0],)),
                   [[1 - sqrt(2) * rest + rest^2 / 2, rest - sqrt(2)], [2 * sqrt(2) + 0.5], [sqrt(2), 3 * sqrt(2) + 1, 6.0], [2.0]], 1e-9)
@@ -205,7 +205,7 @@ end
     n, M = X[1:2], X[3:4]
     S = vcat(0.1 * τ - n[1], n[2] - 0.5)
     hand = Dict{String,Any}("x" => X, "p" => b, "t" => τ, "ode" => vcat(n[2] + 0.1 * M[2], b * M[1], SX(0.0), SX(0.0)),
-                            "zero" => C.times(M, S), "transition" => hcat(vcat(n, -M[1], M[2]), vcat(n, M[1], -M[2])))
+                            "zero" => casadi.times(M, S), "transition" => hcat(vcat(n, -M[1], M[2]), vcat(n, M[1], -M[2])))
     H = integrator("H", Vern9(), hand; direction = -1, events = 9, exact = false, TIGHT...)
     events(v) = only(last(casadi_eval(H, [v[1:2]; sign(-v[1]); sign(v[2] - 0.5)], v[3], 0.0, 3.0)))
     @test [events(v) for v in (base, base + [1e-4, 0, 0], base + [1e-4, 0, 0], base, base + [0, 1e-4, 0], base)] == fill(8.0, 6)
@@ -221,21 +221,21 @@ evaluated(symbols, values, point...) = reduce(vcat, casadi_eval(CasADiCodegen.Fu
 @testset "smoothed replaces switches by smooth forms" begin
     x, q, w = SX.sym("x"), SX.sym("q"), SX.sym("w")
     S = x^2 - 0.5
-    signs = [smoothed(C.if_else(S > 0, SX(1.0), SX(-1.0)), w), smoothed(sign(S), w), smoothed(sign(S), w; kind = :algebraic)]
+    signs = [smoothed(casadi.if_else(S > 0, SX(1.0), SX(-1.0)), w), smoothed(sign(S), w), smoothed(sign(S), w; kind = :algebraic)]
     s = 0.7^2 - 0.5
     @test evaluated([x, w], signs, 0.7, 0.03) ≈ [tanh(s / 0.03), tanh(s / 0.03), s / hypot(s, 0.03)] rtol = 1e-14
     # Nested switches converge to the original away from their surfaces.
-    nested = C.if_else(C.logic_and(q > 0, S > 0), C.fmin(C.fmax(2 * S, SX(0.0)), SX(1.0)), SX(0.0))
+    nested = casadi.if_else(casadi.logic_and(q > 0, S > 0), casadi.fmin(casadi.fmax(2 * S, SX(0.0)), SX(1.0)), SX(0.0))
     @test abs(evaluated([x, q, w], [smoothed(nested, w)], 0.8, 0.3, 1e-6)[1] - 2 * (0.8^2 - 0.5)) < 1e-6
     # The soft condition is exactly 0 far from the surface, so a branch that is NaN there stays out.
-    @test isfinite(evaluated([x, w], [smoothed(C.if_else(x > 0, sqrt(x), SX(0.0)), w)], -1.0, 1e-3)[1])
+    @test isfinite(evaluated([x, w], [smoothed(casadi.if_else(x > 0, sqrt(x), SX(0.0)), w)], -1.0, 1e-3)[1])
 end
 
 # Regression, issue #4: MX folds a product with an `if_else_zero` node into a new node, so
 # the inner `if_else` of a nested one stayed a switch on a soft condition.
 @testset "smoothed of a nested if_else, $T" for T in (SX, MX)
     l, w = T.sym("l"), T.sym("w")
-    e = C.if_else(l > 1, T(-1.0), C.if_else(l < -1, T(1.0), T(0.0)))
+    e = casadi.if_else(l > 1, T(-1.0), casadi.if_else(l < -1, T(1.0), T(0.0)))
     f = CasADiCodegen.Function("f", [l], [e])
     # The table of `smoothed`: if_else(c, a, b) becomes c a + (1 - c) b.
     function by_hand(lv, wv)
@@ -251,17 +251,17 @@ end
     x, p = SX.sym("x", 2), SX.sym("p")
     e = sign(x[1] - p)
     f = CasADiCodegen.Function("f", [x, p], [e * (x[2] + k) for k in 1:50])
-    @test C.n_instructions(smoothed(f)) < 2 * C.n_instructions(f)
+    @test casadi.n_instructions(smoothed(f)) < 2 * casadi.n_instructions(f)
 end
 
 @testset "smoothed keeps switches off the chosen inputs, and refuses a test of a soft value" begin
     x, y, p, w = SX.sym("x", 2), SX.sym("y"), SX.sym("p"), SX.sym("w")
     r = sqrt(x[1]^2 + x[2]^2)
-    guarded = C.if_else(r == 0, SX(0.0), x[1] / r) + sign(p)       # an equality, and a switch on p only
+    guarded = casadi.if_else(r == 0, SX(0.0), x[1] / r) + sign(p)       # an equality, and a switch on p only
     @test evaluated([x, p, w], [smoothed(guarded, w; inputs = x)], [0.0, 0.0], 0.5, 1.0) == [1.0]
     floored = CasADiCodegen.Function("g", [x], [floor(x[1]) + abs(x[2])])
     @test CasADiCodegen.nonsmooth_operations(smoothed(floored)) == [:OP_FLOOR => 1]
-    @test_throws ArgumentError smoothed(C.if_else((x[1] > 0) + (y > 0), SX(1.0), SX(-1.0)), w)
+    @test_throws ArgumentError smoothed(casadi.if_else((x[1] > 0) + (y > 0), SX(1.0), SX(-1.0)), w)
     @test_throws ArgumentError smoothed((x[1] > 0) * (y > 0) == 1, w)
     @test_throws ArgumentError smoothed(sign(x[1]), MX.sym("w"))
     @test_throws ArgumentError smoothed(CasADiCodegen.Function("g", [x, w], [sign(x[1])], ["x", "width"], ["r"]))
@@ -271,10 +271,10 @@ end
     xs, ps = SX.sym("x", 2), SX.sym("p")
     inner = CasADiCodegen.Function("inner", [xs, ps], [sign(xs[1]) * ps + xs[2]])
     x, p = MX.sym("x", 2), MX.sym("p")
-    f = CasADiCodegen.Function("f", [x, p], [C.if_else(x[2] < p, inner(x, p), MX(0.0)), abs(x[1])], ["x", "p"], ["a", "b"])
+    f = CasADiCodegen.Function("f", [x, p], [casadi.if_else(x[2] < p, inner(x, p), MX(0.0)), abs(x[1])], ["x", "p"], ["a", "b"])
     g = smoothed(f)
-    @test C.name(g) == "f_smoothed" && [C.name_in(g, i) for i in 0:2] == ["x", "p", "width"] && [C.name_out(g, j) for j in 0:1] == ["a", "b"]
-    expanded = smoothed(C.expand(f))
+    @test casadi.name(g) == "f_smoothed" && [casadi.name_in(g, i) for i in 0:2] == ["x", "p", "width"] && [casadi.name_out(g, j) for j in 0:1] == ["a", "b"]
+    expanded = smoothed(casadi.expand(f))
     point = ([0.2, -0.1], 0.3, 0.1)
     @test reduce(vcat, casadi_eval(g, point...)) ≈ reduce(vcat, casadi_eval(expanded, point...)) rtol = 1e-14
     @test isempty(CasADiCodegen.nonsmooth_operations(g))

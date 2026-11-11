@@ -95,8 +95,8 @@ CasADi interface does not expose it, so it is read from the serial form of
 Throws `ArgumentError` when no such file exists. CasADi can also compile a
 library in memory, which has no path.
 """
-function external_library(f::C.Function)
-    code = codeunits(C.serialize(f))
+function external_library(f::casadi.Function)
+    code = codeunits(casadi.serialize(f))
     for shift in 0:1
         bytes = UInt8[(code[k+1] - 0x61) << 4 | (code[k] - 0x61) & 0x0f for k in 1+shift:2:length(code)-1]
         printable = [0x20 <= b <= 0x7e for b in bytes]
@@ -106,11 +106,11 @@ function external_library(f::C.Function)
             isfile(path) && return abspath(path)
         end
     end
-    throw(ArgumentError("the library of the external function \"$(C.name(f))\" is not a file that this package can find"))
+    throw(ArgumentError("the library of the external function \"$(casadi.name(f))\" is not a file that this package can find"))
 end
 
-function external_call(f::C.Function)
-    nnz_in, nnz_out = [C.nnz_in(f, i) for i in 0:C.n_in(f)-1], [C.nnz_out(f, o) for o in 0:C.n_out(f)-1]
-    call = ExternalCall(C.name(f), external_library(f), nnz_in, nnz_out)
-    JuliaCall(C.name(f), call, length(nnz_in), Tuple{Vararg{Int}}[(n,) for n in nnz_in], Tuple{Vararg{Int}}[(n,) for n in nnz_out], nnz_in, nnz_out)
+function external_call(f::casadi.Function)
+    nnz_in, nnz_out = [casadi.nnz_in(f, i) for i in 0:casadi.n_in(f)-1], [casadi.nnz_out(f, o) for o in 0:casadi.n_out(f)-1]
+    call = ExternalCall(casadi.name(f), external_library(f), nnz_in, nnz_out)
+    JuliaCall(casadi.name(f), call, length(nnz_in), Tuple{Vararg{Int}}[(n,) for n in nnz_in], Tuple{Vararg{Int}}[(n,) for n in nnz_out], nnz_in, nnz_out)
 end

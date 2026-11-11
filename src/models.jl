@@ -8,7 +8,7 @@ with `using CasADiCodegen.Models`.
 """
 module Models
 
-using ..CasADiCodegen: CasADiCodegen, SX, C, jacobian
+using ..CasADiCodegen: CasADiCodegen, SX, casadi, jacobian
 using ..Codegen: @requires, @ensures, reduce_index
 
 export Differential, Equation, System, unknowns, algebraic, parameters, observed, equations, invariants,
@@ -26,15 +26,15 @@ end
 SymbolMap{V}() where {V} = SymbolMap{V}(Dict{Int,Vector{Pair{SX,V}}}())
 
 function Base.get(m::SymbolMap, s::SX, default)
-    for (key, value) in get(m.table, C.element_hash(s), ())
-        C.is_equal(key, s) && return value
+    for (key, value) in get(m.table, casadi.element_hash(s), ())
+        casadi.is_equal(key, s) && return value
     end
     default
 end
-Base.haskey(m::SymbolMap, s::SX) = any(e -> C.is_equal(first(e), s), get(m.table, C.element_hash(s), ()))
+Base.haskey(m::SymbolMap, s::SX) = any(e -> casadi.is_equal(first(e), s), get(m.table, casadi.element_hash(s), ()))
 function Base.setindex!(m::SymbolMap{V}, value, s::SX) where {V}
-    entries = get!(Vector{Pair{SX,V}}, m.table, C.element_hash(s))
-    k = findfirst(e -> C.is_equal(first(e), s), entries)
+    entries = get!(Vector{Pair{SX,V}}, m.table, casadi.element_hash(s))
+    k = findfirst(e -> casadi.is_equal(first(e), s), entries)
     k === nothing ? push!(entries, s => value) : (entries[k] = s => value)
     value
 end
@@ -58,7 +58,7 @@ function derivative_symbol(s::SX)
         found = get(DERIVATIVES, s, nothing)
         found === nothing || return found
         base, order = get(ORIGINS, s, (s, 0))
-        ds = SX.sym("d" * C.name(s))
+        ds = SX.sym("d" * casadi.name(s))
         DERIVATIVES[s] = ds
         ORIGINS[ds] = (base, order + 1)
         ds
@@ -66,12 +66,12 @@ function derivative_symbol(s::SX)
 end
 
 "The scalar elements of `e` in the order of the elements, by columns."
-elements(e::SX) = SX[e[i] for i in 1:C.numel(e)]
+elements(e::SX) = SX[e[i] for i in 1:casadi.numel(e)]
 
 "The SX column of the scalars `v`, with no element when `v` is empty."
 column(v::AbstractVector{SX}) = isempty(v) ? SX(0, 1) : vcat(v...)
 
-symbols(e::SX) = SX[s for s in C.symvar(e)]
+symbols(e::SX) = SX[s for s in casadi.symvar(e)]
 
 """
     Differential(t::SX)
@@ -92,18 +92,18 @@ D(x^2 + t)    # 2 x dx + 1
 struct Differential
     t::SX
     function Differential(t::SX)
-        @requires size(t) == (1, 1) && C.is_symbolic(t) "Differential: the time must be a scalar symbol, not $t"
+        @requires size(t) == (1, 1) && casadi.is_symbolic(t) "Differential: the time must be a scalar symbol, not $t"
         new(t)
     end
 end
 
 function (D::Differential)(e::SX)
-    if C.is_valid_input(e)
-        result = [C.is_equal(s, D.t) ? SX(1) : derivative_symbol(s) for s in elements(e)]
+    if casadi.is_valid_input(e)
+        result = [casadi.is_equal(s, D.t) ? SX(1) : derivative_symbol(s) for s in elements(e)]
         return reshape(column(result), size(e)...)
     end
-    s = filter(v -> !C.is_equal(v, D.t), symbols(e))
-    reshape(C.jtimes(C.vec(e), column(SX[s; D.t]), column(SX[derivative_symbol.(s); SX(1)])), size(e)...)
+    s = filter(v -> !casadi.is_equal(v, D.t), symbols(e))
+    reshape(casadi.jtimes(casadi.vec(e), column(SX[s; D.t]), column(SX[derivative_symbol.(s); SX(1)])), size(e)...)
 end
 (D::Differential)(::Real) = SX(0)
 
@@ -161,7 +161,7 @@ The compilation takes four steps:
    satisfy.
 
 [`unknowns`](@ref) gives the states of the result, [`observed`](@ref) the eliminated
-variables, `Dict(sys)` the model for `CasADiCodegen.C.integrator`, and
+variables, `Dict(sys)` the model for `casadi.integrator`, and
 `SciMLBase.ODEProblem(sys, u0, tspan, p)` the SciML problem. Only SX is supported.
 
 Throw an `ArgumentError` when the number of scalar equations differs from that of the
@@ -193,10 +193,10 @@ end
 function System(equations::AbstractVector, t::SX; parameters::AbstractVector = SX[], name::AbstractString = "system",
                 baumgarte_pole::Real = 0.0)
     @requires all(e -> e isa Equation, equations) "System: each equation must be an Equation, made with ~"
-    @requires all(p -> p isa SX && C.is_valid_input(p), parameters) "System: each parameter must be an SX symbol"
+    @requires all(p -> p isa SX && casadi.is_valid_input(p), parameters) "System: each parameter must be an SX symbol"
     time = Differential(t).t
     p = reduce(vcat, (elements(q) for q in parameters); init = SX[])
-    @requires !any(q -> C.is_equal(q, time), p) "System: the time is not a parameter"
+    @requires !any(q -> casadi.is_equal(q, time), p) "System: the time is not a parameter"
     numbers = Int[]
     r = SX[]
     for (i, e) in enumerate(equations)
@@ -212,7 +212,7 @@ function System(equations::AbstractVector, t::SX; parameters::AbstractVector = S
     place = SymbolMap{Int}()
     zeroed = SX[]
     for s in symbols(column(r))
-        C.is_equal(s, time) && continue
+        casadi.is_equal(s, time) && continue
         base, order = origin(s)
         if haskey(isparameter, base)
             order > 0 && push!(zeroed, s)
@@ -222,11 +222,11 @@ function System(equations::AbstractVector, t::SX; parameters::AbstractVector = S
         k == 0 ? (push!(bases, base); push!(orders, order); place[base] = length(bases)) : (orders[k] = max(orders[k], order))
     end
     if !isempty(zeroed)
-        r = elements(C.substitute(column(r), column(zeroed), SX.zeros(length(zeroed))))
+        r = elements(casadi.substitute(column(r), column(zeroed), SX.zeros(length(zeroed))))
     end
     unknown_count = length(bases)
     @requires length(r) == unknown_count "System: the model has $(length(r)) equation$(length(r) == 1 ? "" : "s") and $unknown_count variable$(unknown_count == 1 ? "" : "s"); it needs one equation per variable, where a variable and its derivatives count once"
-    check_names(String[C.name.(bases); C.name.(p)])
+    check_names(String[casadi.name.(bases); casadi.name.(p)])
 
     candidates = SymbolMap{Bool}()
     foreach(b -> candidates[b] = true, bases[orders .== 0])
@@ -250,18 +250,18 @@ function System(equations::AbstractVector, t::SX; parameters::AbstractVector = S
 
     observed = copy(eliminated)
     W = column(tops)
-    differential = [i for i in eachindex(r) if !isempty(tops) && C.depends_on(r[i], W)]
+    differential = [i for i in eachindex(r) if !isempty(tops) && casadi.depends_on(r[i], W)]
     alg = SX[]
     explicit = length(differential) == length(tops) && !isempty(tops)
     if explicit
         Ed = column(r[differential])
         A = jacobian(Ed, W)
-        explicit = !C.depends_on(A, W) && C.sprank(C.sparsity(A)) == length(tops)
+        explicit = !casadi.depends_on(A, W) && casadi.sprank(casadi.sparsity(A)) == length(tops)
     end
     if explicit
-        b = C.substitute(Ed, W, SX.zeros(length(tops)))
-        solved = elements(C.solve(A, -b))
-        ode = elements(C.substitute(column(ode), W, column(solved)))
+        b = casadi.substitute(Ed, W, SX.zeros(length(tops)))
+        solved = elements(casadi.solve(A, -b))
+        ode = elements(casadi.substitute(column(ode), W, column(solved)))
         append!(observed, [w => s for (w, s) in zip(tops, solved)])
         alg = r[setdiff(eachindex(r), differential)]
     else
@@ -278,7 +278,7 @@ function System(equations::AbstractVector, t::SX; parameters::AbstractVector = S
         ode, alg = elements(reduced.dae["ode"]), elements(reduced.dae["alg"])
         invariants, index = reduced.invariants, max(reduced.index, 1)
     end
-    check_names(String[C.name.(x); C.name.(z); C.name.(p); C.name.(first.(observed))])
+    check_names(String[casadi.name.(x); casadi.name.(z); casadi.name.(p); casadi.name.(first.(observed))])
     @ensures length(ode) == length(x) && length(alg) == length(z) "System: the compiled model is not square"
     System(String(name), time, x, z, p, ode, alg, observed, invariants, index)
 end
@@ -331,10 +331,10 @@ function eliminate(r::Vector{SX}, numbers::Vector{Int}, candidates::SymbolMap{Bo
         found === nothing && break
         i, y, a = found
         alive[i] = false
-        push!(order, y => -C.substitute(r[i], y, SX(0)) / a)
+        push!(order, y => -casadi.substitute(r[i], y, SX(0)) / a)
         affected = unique!([k for k in get(holders, y, Int[]) if alive[k]])
         isempty(affected) && continue
-        for (k, e) in zip(affected, elements(C.substitute(column(r[affected]), y, last(order[end]))))
+        for (k, e) in zip(affected, elements(casadi.substitute(column(r[affected]), y, last(order[end]))))
             r[k], present[k] = e, symbols(e)
             foreach(s -> push!(get!(Vector{Int}, holders, s), k), present[k])
             queued[k] || (push!(queue, k); queued[k] = true)
@@ -358,7 +358,7 @@ function resolve(order::Vector{Pair{SX,SX}})
     for k in reverse(eachindex(order))
         g = last(order[k])
         later = [s for s in symbols(g) if get(position, s, 0) > k]
-        resolved[k] = isempty(later) ? g : C.substitute(g, column(later), column([resolved[get(position, s, 0)] for s in later]))
+        resolved[k] = isempty(later) ? g : casadi.substitute(g, column(later), column([resolved[get(position, s, 0)] for s in later]))
         @ensures all(s -> get(position, s, 0) == 0, symbols(resolved[k])) "System: an eliminated unknown remains in the solution of another"
     end
     [first(e) => v for (e, v) in zip(order, resolved)]
@@ -378,8 +378,8 @@ function solvable(residual::SX, present::Vector{SX}, candidates::SymbolMap{Bool}
     for y in present
         haskey(candidates, y) || continue
         a = jacobian(residual, y)
-        if C.is_constant(a)
-            Float64(C.DM(a)) != 0 && return (:number, y, a)
+        if casadi.is_constant(a)
+            Float64(casadi.DM(a)) != 0 && return (:number, y, a)
         elseif fallback[1] === :none && all(s -> haskey(isparameter, s), symbols(a))
             fallback = (:parameters, y, a)
         end
@@ -388,8 +388,8 @@ function solvable(residual::SX, present::Vector{SX}, candidates::SymbolMap{Bool}
 end
 
 function check_constant(residual::SX, number::Int)
-    C.is_constant(residual) || return
-    value = Float64(C.DM(residual))
+    casadi.is_constant(residual) || return
+    value = Float64(casadi.DM(residual))
     @requires value != 0 "System: equation $number reduces to the contradiction $value = 0 after the elimination of the other equations"
     @requires false "System: equation $number holds identically after the elimination of the other equations, so the model lacks an equation"
 end

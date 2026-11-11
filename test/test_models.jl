@@ -4,21 +4,21 @@ import SciMLBase
 using OrdinaryDiffEqRosenbrock: Rodas5P
 using OrdinaryDiffEqVerner: Vern9
 
-names_of(v) = [C.name(s) for s in v]
+names_of(v) = [casadi.name(s) for s in v]
 solve(problem) = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-10, reltol = 1e-10)
 
 @testset "derivatives of symbols and expressions" begin
     t, x, y = SX.sym("t"), SX.sym("x"), SX.sym("y")
     D = Differential(t)
     # One derivative symbol per symbol, whichever Differential of t makes it.
-    @test C.is_equal(D(x), Differential(t)(x)) && C.name(D(D(x))) == "ddx"
+    @test casadi.is_equal(D(x), Differential(t)(x)) && casadi.name(D(D(x))) == "ddx"
     # The chain rule, with the explicit time: d/dt (x y + sin t) = dx y + x dy + cos t.
     expected = D(x) * y + x * D(y) + cos(t)
     f = CasadiFunction("f", [vcat(x, y, D(x), D(y), t)], [D(x * y + sin(t)) - expected])
     @test only(casadi_eval(f, [0.3, -1.2, 0.7, 2.1, 0.4])[1]) ≈ 0 atol = 1e-14
     # A vector symbol gives the vector of the derivatives of its elements.
     q = SX.sym("q", 2)
-    @test names_of(C.vertsplit(D(q))) == ["dq_0", "dq_1"]
+    @test names_of(casadi.vertsplit(D(q))) == ["dq_0", "dq_1"]
 end
 
 @testset "a second-order equation becomes two states" begin
@@ -86,16 +86,16 @@ end
     u0 = [x => sin(θ0), y => -cos(θ0), D(x) => 0.0, D(y) => 0.0, T => -9.81 * cos(θ0)]
     solution = solve(SciMLBase.ODEProblem(sys, u0, (0.0, tf), [g => 9.81, L => 1.0]))
     θ, ω = SX.sym("θ"), SX.sym("ω")
-    angle = C.integrator("A", "cvodes", Dict("x" => vcat(θ, ω), "ode" => vcat(ω, -9.81 * sin(θ))), 0.0, tf,
+    angle = casadi.integrator("A", "cvodes", Dict("x" => vcat(θ, ω), "ode" => vcat(ω, -9.81 * sin(θ))), 0.0, tf,
                          Dict("abstol" => 1e-12, "reltol" => 1e-12))
-    θf = Float64(angle(Dict("x0" => C.DM([θ0, 0.0])))["xf"][1])
+    θf = Float64(angle(Dict("x0" => casadi.DM([θ0, 0.0])))["xf"][1])
     @test [solution[:x][end], solution[:y][end]] ≈ [sin(θf), -cos(θf)] atol = 1e-6
     # The dictionary of the model goes to the integrators of CasADi.
     dae = Dict(sys)
-    F = C.integrator("F", "idas", dae, 0.0, tf, Dict("abstol" => 1e-10, "reltol" => 1e-10))
-    start = Dict(C.name(s) => v for (s, v) in u0)
+    F = casadi.integrator("F", "idas", dae, 0.0, tf, Dict("abstol" => 1e-10, "reltol" => 1e-10))
+    start = Dict(casadi.name(s) => v for (s, v) in u0)
     @test names_of(unknowns(sys)) == ["x", "dx", "y", "dy", "T"]
-    xf = F(Dict("x0" => C.DM([start[n] for n in ("x", "dx", "y", "dy")]), "z0" => C.DM([start["T"]]), "p" => C.DM([9.81, 1.0])))["xf"]
+    xf = F(Dict("x0" => casadi.DM([start[n] for n in ("x", "dx", "y", "dy")]), "z0" => casadi.DM([start["T"]]), "p" => casadi.DM([9.81, 1.0])))["xf"]
     @test Matrix(xf)[[1, 3]] ≈ [sin(θf), -cos(θf)] atol = 1e-6
 end
 

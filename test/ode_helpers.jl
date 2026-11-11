@@ -21,7 +21,7 @@ two_body_cvodes() = integrator("R", "cvodes", two_body(), 0.0, 3.0, Dict("abstol
 
 "Run the generated code of `f`; one vector of nonzeros per output."
 function ode_emitted(f, arg; T = Float64, kwargs...)
-    res = [zeros(T, C.nnz_out(f, i - 1)) for i in 1:C.n_out(f)]
+    res = [zeros(T, casadi.nnz_out(f, i - 1)) for i in 1:casadi.n_out(f)]
     build_function(f; nonzeros = true, expression = Val{false}, kwargs...)(res, arg)
     res
 end

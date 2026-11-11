@@ -9,7 +9,6 @@ the index of the pendulum, with derivatives from CasADi;
 ```@example dae
 using CasADiCodegen, CasADiCodegen.Models, LinearAlgebra
 import SciMLBase
-C = CasADiCodegen.C    # the module of the CasADi front end
 using OrdinaryDiffEqRosenbrock: Rodas5P
 ```
 
@@ -86,7 +85,7 @@ The eliminated variables are observed variables; [`observed`](@ref
 CasADiCodegen.Models.observed) gives each with its expression:
 
 ```@example dae
-filter(o -> C.name(first(o)) == "resistor_i", observed(rc))
+filter(o -> casadi.name(first(o)) == "resistor_i", observed(rc))
 ```
 
 `SciMLBase.ODEProblem` takes the initial values and the parameters as pairs from a

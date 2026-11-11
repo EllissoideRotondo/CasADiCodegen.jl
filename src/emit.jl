@@ -317,7 +317,7 @@ runtime_function(alg, chunk_size::ChunkSize, ref) =
         entry_function(alg, :((res, arg)), runtime_frame(alg, chunk_size, ref), ref, unique_key(alg.name))))
 
 function_name(alg) = alg.name
-function_name(f::C.Function) = C.name(f)
+function_name(f::casadi.Function) = casadi.name(f)
 default_name(f) = Symbol(function_name(f), "!")
 
 """
@@ -334,14 +334,14 @@ A function of another class, such as an interpolant, is read as a matrix functio
 calls it.
 """
 algorithm(alg; expand::Bool = true, solvers::Union{Nothing,Solvers} = nothing) = alg
-function algorithm(f::C.Function; expand::Bool = true, solvers::Union{Nothing,Solvers} = nothing)
-    C.is_a(f, "SXFunction") && return Algorithm(f)
+function algorithm(f::casadi.Function; expand::Bool = true, solvers::Union{Nothing,Solvers} = nothing)
+    casadi.is_a(f, "SXFunction") && return Algorithm(f)
     # The barrier keeps the readers of matrix functions out of the inferred code of this method,
     # so that another package that invalidates them does not invalidate the path of scalar functions.
     Base.inferencebarrier(matrix_algorithm)(f, expand, solvers)
 end
 
-function matrix_algorithm(f::C.Function, expand::Bool, solvers::Union{Nothing,Solvers})
+function matrix_algorithm(f::casadi.Function, expand::Bool, solvers::Union{Nothing,Solvers})
     f = matrix_function(f)
     # The readers of the called functions find the solvers of the user in `SOLVERS`.
     Base.ScopedValues.with(SOLVERS => solvers) do
@@ -354,19 +354,19 @@ function matrix_algorithm(f::C.Function, expand::Bool, solvers::Union{Nothing,So
 end
 
 "The function `f` when it is a matrix (MX) function, and else a matrix function with its inputs and results that calls it."
-function matrix_function(f::C.Function)
-    C.is_a(f, "MXFunction") && return f
-    inputs = MX[MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
-    C.Function(C.name(f), inputs, as_list(C.call(f, inputs, false, true)),
-               [C.name_in(f, i) for i in 0:C.n_in(f)-1], [C.name_out(f, j) for j in 0:C.n_out(f)-1])
+function matrix_function(f::casadi.Function)
+    casadi.is_a(f, "MXFunction") && return f
+    inputs = MX[MX.sym(casadi.name_in(f, i), casadi.sparsity_in(f, i)) for i in 0:casadi.n_in(f)-1]
+    casadi.Function(casadi.name(f), inputs, as_list(casadi.call(f, inputs, false, true)),
+               [casadi.name_in(f, i) for i in 0:casadi.n_in(f)-1], [casadi.name_out(f, j) for j in 0:casadi.n_out(f)-1])
 end
 
 "The scalar algorithm of the expanded matrix function `f`, or `nothing` when there is none."
-function expanded_algorithm(f::C.Function)
+function expanded_algorithm(f::casadi.Function)
     try
-        Algorithm(C.expand(f))
+        Algorithm(casadi.expand(f))
     catch err
-        err isa Union{ArgumentError,C.SwigError} || rethrow()
+        err isa Union{ArgumentError,casadi.SwigError} || rethrow()
         nothing
     end
 end

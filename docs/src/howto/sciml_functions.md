@@ -58,7 +58,7 @@ opti = Opti()
 w, a = variable(opti, 2), parameter(opti)
 minimize(opti, (w[1] - a)^2 + w[2]^2)
 subject_to(opti, w[1] + w[2] >= 1)
-CasADiCodegen.C.set_value(opti, a, 0.25)
+casadi.set_value(opti, a, 0.25)
 problem = SciMLBase.OptimizationProblem(opti; sparse = true)
 SciMLBase.solve(problem, ipopt).u
 ```

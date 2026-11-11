@@ -68,8 +68,8 @@ struct StagedAlgorithm
     matrix::MXAlgorithm
     nnz_in::Vector{Int}
     nnz_out::Vector{Int}
-    sparsity_in::Vector{C.Sparsity}
-    sparsity_out::Vector{C.Sparsity}
+    sparsity_in::Vector{casadi.Sparsity}
+    sparsity_out::Vector{casadi.Sparsity}
     names_in::Vector{String}
     names_out::Vector{String}
 end
@@ -86,64 +86,64 @@ Return the staged form of the MX function `f`. Return `nothing` when `f` has no
 call of a Julia function at its top level, or when CasADi cannot expand what
 lies between the calls.
 """
-function staged_algorithm(f::C.Function)
-    (C.is_a(f, "MXFunction") && !C.has_free(f)) || return nothing
+function staged_algorithm(f::casadi.Function)
+    (casadi.is_a(f, "MXFunction") && !casadi.has_free(f)) || return nothing
     names = op_names()
-    n_in, n_out = C.n_in(f), C.n_out(f)
-    inputs = MX[MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:n_in-1]
-    outputs = as_list(C.call(f, inputs, true, false))        # the graph of `f` on new symbols
-    g = C.Function(C.name(f), inputs, outputs)
+    n_in, n_out = casadi.n_in(f), casadi.n_out(f)
+    inputs = MX[MX.sym(casadi.name_in(f, i), casadi.sparsity_in(f, i)) for i in 0:n_in-1]
+    outputs = as_list(casadi.call(f, inputs, true, false))        # the graph of `f` on new symbols
+    g = casadi.Function(casadi.name(f), inputs, outputs)
     # The nodes that carry the results of the calls: (call node, result) => node.
     carriers = Dict{Tuple{Int,Int},MX}()
-    note(x) = C.is_output(x) && (carriers[(C.__hash__(C.dep(x, 0)), C.which_output(x))] = x)
+    note(x) = casadi.is_output(x) && (carriers[(casadi.__hash__(casadi.dep(x, 0)), casadi.which_output(x))] = x)
     foreach(note, outputs)
     calls = Int[]
-    for k in 0:C.n_instructions(g)-1
-        op = names[C.instruction_id(g, k)]
+    for k in 0:casadi.n_instructions(g)-1
+        op = names[casadi.instruction_id(g, k)]
         op in (:OP_INPUT, :OP_OUTPUT) && continue
-        node = C.instruction_MX(g, k)
-        foreach(d -> note(C.dep(node, d)), 0:C.n_dep(node)-1)
-        op === :OP_CALL && C.class_name(C.which_function(node)) == "CallbackInternal" && push!(calls, k)
+        node = casadi.instruction_MX(g, k)
+        foreach(d -> note(casadi.dep(node, d)), 0:casadi.n_dep(node)-1)
+        op === :OP_CALL && casadi.class_name(casadi.which_function(node)) == "CallbackInternal" && push!(calls, k)
     end
     isempty(calls) && return nothing
     from, placeholders, actual = MX[], MX[], MX[]
-    pure(name, expressions) = C.expand(C.Function(name, MX[inputs; placeholders],
-        isempty(from) ? expressions : as_list(C.graph_substitute(expressions, from, placeholders))))
+    pure(name, expressions) = casadi.expand(casadi.Function(name, MX[inputs; placeholders],
+        isempty(from) ? expressions : as_list(casadi.graph_substitute(expressions, from, placeholders))))
     apply(p) = as_list(p(MX[inputs; actual]...))
     stages = Stage[]
     try
         for k in calls
-            node = C.instruction_MX(g, k)
-            callee = C.which_function(node)
-            haskey(JULIA_CALLS, C.__hash__(callee)) || return nothing
-            call = JULIA_CALLS[C.__hash__(callee)][1]
-            all(d -> C.nnz_in(callee, d) > 0, 0:call.nargs-1) || return nothing
-            pre = pure("pre$k", MX[C.dep(node, d) for d in 0:call.nargs-1])
+            node = casadi.instruction_MX(g, k)
+            callee = casadi.which_function(node)
+            haskey(JULIA_CALLS, casadi.__hash__(callee)) || return nothing
+            call = JULIA_CALLS[casadi.__hash__(callee)][1]
+            all(d -> casadi.nnz_in(callee, d) > 0, 0:call.nargs-1) || return nothing
+            pre = pure("pre$k", MX[casadi.dep(node, d) for d in 0:call.nargs-1])
             computed = apply(pre)
             # The Julia function reads its arguments only, so the other inputs get zeros.
-            arguments = MX[d < call.nargs ? computed[d+1] : MX.zeros(C.sparsity_in(callee, d)) for d in 0:C.n_in(callee)-1]
+            arguments = MX[d < call.nargs ? computed[d+1] : MX.zeros(casadi.sparsity_in(callee, d)) for d in 0:casadi.n_in(callee)-1]
             results = as_list(callee(arguments...))
             read = Int[]
-            for o in 0:C.n_out(callee)-1
-                carrier = get(carriers, (C.__hash__(node), o), nothing)
-                (carrier === nothing || C.nnz_out(callee, o) == 0) && continue    # nothing reads it, or it has no value
+            for o in 0:casadi.n_out(callee)-1
+                carrier = get(carriers, (casadi.__hash__(node), o), nothing)
+                (carrier === nothing || casadi.nnz_out(callee, o) == 0) && continue    # nothing reads it, or it has no value
                 push!(from, carrier)
-                push!(placeholders, MX.sym("c$(k)_$o", C.sparsity_out(callee, o)))
+                push!(placeholders, MX.sym("c$(k)_$o", casadi.sparsity_out(callee, o)))
                 push!(actual, results[o+1])
                 push!(read, o + 1)
             end
             push!(stages, Stage(Algorithm(pre), call, collect(1:call.nargs), read, true))
         end
         post = pure("post", outputs)
-        names_in, names_out = [C.name_in(f, i) for i in 0:n_in-1], [C.name_out(f, j) for j in 0:n_out-1]
-        staged = C.Function(C.name(f), inputs, apply(post), names_in, names_out)
+        names_in, names_out = [casadi.name_in(f, i) for i in 0:n_in-1], [casadi.name_out(f, j) for j in 0:n_out-1]
+        staged = casadi.Function(casadi.name(f), inputs, apply(post), names_in, names_out)
         post = Algorithm(post)
-        StagedAlgorithm(C.name(f), mark_live(stages, post, n_in), post, MXAlgorithm(staged; expand = true),
-                        Int[C.nnz_in(f, i) for i in 0:n_in-1], Int[C.nnz_out(f, j) for j in 0:n_out-1],
-                        [C.sparsity_in(f, i) for i in 0:n_in-1], [C.sparsity_out(f, j) for j in 0:n_out-1],
+        StagedAlgorithm(casadi.name(f), mark_live(stages, post, n_in), post, MXAlgorithm(staged; expand = true),
+                        Int[casadi.nnz_in(f, i) for i in 0:n_in-1], Int[casadi.nnz_out(f, j) for j in 0:n_out-1],
+                        [casadi.sparsity_in(f, i) for i in 0:n_in-1], [casadi.sparsity_out(f, j) for j in 0:n_out-1],
                         names_in, names_out)
     catch err
-        err isa Union{ArgumentError,C.SwigError} || rethrow()
+        err isa Union{ArgumentError,casadi.SwigError} || rethrow()
         nothing
     end
 end
@@ -169,7 +169,7 @@ function whole_statements(alg::StagedAlgorithm, ref; load = (i, k) -> :(arg[$i][
         stage.live || continue
         call, pre = stage.call, stage.pre
         places = [nonzero_indices(sp) for sp in pre.sparsity_out]
-        values = [Any[0.0 for _ in 1:C.size1(sp)*C.size2(sp)] for sp in pre.sparsity_out]
+        values = [Any[0.0 for _ in 1:casadi.size1(sp)*casadi.size2(sp)] for sp in pre.sparsity_out]
         append!(statements, chunk_statements(pre, eachindex(pre.instructions), Int[], Int[], ref; load = read,
             store = (j, k, value) -> (values[j][places[j][k]] = value; nothing), prefix = Symbol(:s, s)))
         arguments = [:($(ref(:Helpers, :static))(Tuple{$(call.shapes_in[d]...)}, $(Expr(:tuple, values[stage.arguments[d]]...))))

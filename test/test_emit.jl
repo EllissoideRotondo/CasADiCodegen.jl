@@ -2,9 +2,9 @@ import ForwardDiff
 import SpecialFunctions
 
 include("interpreter.jl")
-const SCALAR = C.Sparsity.dense(1, 1)
-const COLUMN2 = C.Sparsity.dense(2, 1)
-column(n) = C.Sparsity.dense(n, 1)
+const SCALAR = casadi.Sparsity.dense(1, 1)
+const COLUMN2 = casadi.Sparsity.dense(2, 1)
+column(n) = casadi.Sparsity.dense(n, 1)
 
 # f(x, p) = [x1 * x2 + p, sin(x1)], with slot reuse as CasADi produces it.
 function demo_algorithm()

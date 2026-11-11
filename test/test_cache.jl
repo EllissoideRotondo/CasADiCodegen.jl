@@ -106,7 +106,7 @@ end
 # solvers again from their algorithms and options, and it holds the code of
 # the right sides, so it gives the numbers of `build_function` exactly.
 written_nonzeros(owner, name, f, arguments) =
-    Base.invokelatest((r, a) -> getfield(getfield(owner, name[1]), name[2])(r, a), [zeros(C.nnz_out(f, i - 1)) for i in 1:C.n_out(f)], arguments)
+    Base.invokelatest((r, a) -> getfield(getfield(owner, name[1]), name[2])(r, a), [zeros(casadi.nnz_out(f, i - 1)) for i in 1:casadi.n_out(f)], arguments)
 
 @testset "an integrator in a written module" begin
     F = integrator("WF", Vern9(), two_body(), 0.0, 3.0; abstol = 1e-12, reltol = 1e-12, specialize = SciMLBase.AutoSpecialize)
@@ -130,7 +130,7 @@ end
     solved = root(MX(1.0), te + xe[2])
     # A grid of times with adjoint sensitivities.
     K = integrator("WK", Vern9(), delete!(copy(swing), "zero"), 0.0, [1.0, 2.0]; adjoint = true, TIGHT...)
-    g = CasADiCodegen.Function("mixed", [y0], [xe, te, solved, gradient(solved, y0), gradient(C.sumsqr(K(y0)), y0)])
+    g = CasADiCodegen.Function("mixed", [y0], [xe, te, solved, gradient(solved, y0), gradient(casadi.sumsqr(K(y0)), y0)])
     text = sprint(io -> generate_julia(g, io; module_name = :Mixed, name = :mixed!, expand = false))
     src = Module()
     Base.include_string(src, text)
@@ -156,7 +156,7 @@ end
     F = integrator("CF", Vern9(), two_body(), 0.0, 3.0; abstol = 1e-12, reltol = 1e-12, specialize = SciMLBase.AutoSpecialize)
     f = with_derivatives(F, 1)
     cached = build_function(f; expression = Val{false}, cache = directory, nonzeros = true)
-    result = [zeros(C.nnz_out(f, i - 1)) for i in 1:C.n_out(f)]
+    result = [zeros(casadi.nnz_out(f, i - 1)) for i in 1:casadi.n_out(f)]
     @test Base.invokelatest(cached, result, (ODE_X0, ODE_MU)) == ode_emitted(f, (ODE_X0, ODE_MU))
     project = read(joinpath(directory, only(readdir(directory)), "Project.toml"), String)
     @test occursin("SciMLBase = ", project) && occursin("OrdinaryDiffEqVerner = ", project)

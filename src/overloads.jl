@@ -7,8 +7,8 @@ const Symbolic = Union{SX,MX}
 # Functions of `Base` that the front end does not cover, elementwise as `log10` of the
 # front end.
 Base.log2(x::Symbolic) = log(x) / log(2.0)
-Base.exp2(x::T) where {T<:Symbolic} = C.power(convert(T, 2.0), x)
-Base.abs2(x::Symbolic) = C.times(x, x)
+Base.exp2(x::T) where {T<:Symbolic} = casadi.power(convert(T, 2.0), x)
+Base.abs2(x::Symbolic) = casadi.times(x, x)
 
 """
     inv(A::MX, lsolver)
@@ -18,10 +18,10 @@ example `"qr"`. Throws `DimensionMismatch` when `A` is not square.
 """
 function Base.inv(A::MX, lsolver::AbstractString)
     size(A, 1) == size(A, 2) || throw(DimensionMismatch("the matrix is not square: its size is $(size(A))"))
-    C.inv(A, lsolver)
+    casadi.inv(A, lsolver)
 end
-SpecialFunctions.erf(x::Symbolic) = C.erf(x)
-SpecialFunctions.erfinv(x::Symbolic) = C.erfinv(x)
+SpecialFunctions.erf(x::Symbolic) = casadi.erf(x)
+SpecialFunctions.erfinv(x::Symbolic) = casadi.erfinv(x)
 
 """
     norm(x::Union{SX,MX}, p::Real = 2)
@@ -34,22 +34,22 @@ absolute value, and `p = 0` the number of nonzero elements. The norm of an empty
 """
 function LinearAlgebra.norm(x::T, p::Real = 2) where {T<:Symbolic}
     size(x, 1) * size(x, 2) == 0 && return T(0.0)
-    p == 2 && return C.norm_fro(x)
+    p == 2 && return casadi.norm_fro(x)
     # The 1 and infinity norms of CasADi are those of the elements, not of the matrix.
-    p == 1 && return C.norm_1(x)
-    p == Inf && return C.norm_inf(x)
-    p == -Inf && return C.mmin(C.abs(x))
-    p == 0 && return C.sum(C.ne(x, T(0.0)))
+    p == 1 && return casadi.norm_1(x)
+    p == Inf && return casadi.norm_inf(x)
+    p == -Inf && return casadi.mmin(casadi.abs(x))
+    p == 0 && return casadi.sum(casadi.ne(x, T(0.0)))
     # A structural zero gives an infinite term when p < 0.
-    a = C.abs(p < 0 ? C.densify(x) : x)
+    a = casadi.abs(p < 0 ? casadi.densify(x) : x)
     # CasADi takes the exponent as a Float64.
     q = Float64(p)
-    -1 <= q <= 1 && return C.power(C.sum(C.power(a, T(q))), T(inv(q)))
+    -1 <= q <= 1 && return casadi.power(casadi.sum(casadi.power(a, T(q))), T(inv(q)))
     # As LinearAlgebra, scale by the largest (p > 1) or smallest (p < -1) absolute value
     # against overflow; a scale that is 0 or infinite is the norm.
-    scale = p > 1 ? C.norm_inf(x) : C.mmin(a)
-    scaled = scale * C.power(C.sum(C.power(a / scale, T(q))), T(inv(q)))
-    C.if_else(C.logic_or(C.eq(scale, T(0.0)), C.eq(scale, T(Inf))), scale, scaled)
+    scale = p > 1 ? casadi.norm_inf(x) : casadi.mmin(a)
+    scaled = scale * casadi.power(casadi.sum(casadi.power(a / scale, T(q))), T(inv(q)))
+    casadi.if_else(casadi.logic_or(casadi.eq(scale, T(0.0)), casadi.eq(scale, T(Inf))), scale, scaled)
 end
 
 """
@@ -63,11 +63,11 @@ where it is the 2-norm. Throws `ArgumentError` for another `p` or a matrix with 
 function LinearAlgebra.opnorm(A::T, p::Real = 2) where {T<:Symbolic}
     p in (1, 2, Inf) || throw(ArgumentError("opnorm: p must be 1, 2 or Inf, got $p"))
     size(A, 1) * size(A, 2) == 0 && return T(0.0)
-    p == 1 && return C.mmax(C.sum1(C.abs(A)))
-    p == Inf && return C.mmax(C.sum2(C.abs(A)))
+    p == 1 && return casadi.mmax(casadi.sum1(casadi.abs(A)))
+    p == Inf && return casadi.mmax(casadi.sum2(casadi.abs(A)))
     1 in size(A) || throw(ArgumentError("opnorm: p = 2 needs a row or a column, but the matrix has size $(size(A)); " *
                                          "use p = 1 or p = Inf, or norm(A) for the Frobenius norm"))
-    C.norm_fro(A)
+    casadi.norm_fro(A)
 end
 
 # Julia array code on symbols. A CasADi matrix is not an `AbstractArray`, so the methods
@@ -75,7 +75,7 @@ end
 # Julia array of symbols that meets a CasADi matrix becomes one.
 
 "A matrix of CasADi: numeric (`DM`) or symbolic."
-const CasadiMatrix = Union{SX,MX,C.DM}
+const CasadiMatrix = Union{SX,MX,casadi.DM}
 
 """
     casadi_matrix(T, a) -> T
@@ -85,9 +85,9 @@ shape of `a`; a vector becomes a column.
 """
 casadi_matrix(::Type{T}, a::AbstractVector{<:Real}) where {T} = T(collect(Float64, a))
 casadi_matrix(::Type{T}, a::AbstractMatrix{<:Real}) where {T} = T(Matrix{Float64}(a))
-casadi_matrix(::Type{T}, a::AbstractVector) where {T} = isempty(a) ? T(0, 1) : C._vertcat(T[graph_element(T, e) for e in a])
+casadi_matrix(::Type{T}, a::AbstractVector) where {T} = isempty(a) ? T(0, 1) : casadi._vertcat(T[graph_element(T, e) for e in a])
 casadi_matrix(::Type{T}, a::AbstractMatrix) where {T} =
-    C._vertcat(T[C._horzcat(T[graph_element(T, a[i, j]) for j in axes(a, 2)]) for i in axes(a, 1)])
+    casadi._vertcat(T[casadi._horzcat(T[graph_element(T, a[i, j]) for j in axes(a, 2)]) for i in axes(a, 1)])
 
 "Return the number or CasADi matrix `e` as a matrix of type `T`; an SX in an MX graph, or the reverse, throws."
 graph_element(::Type{T}, e) where {T} = e isa T ? e : e isa Symbolic ? throw(mixed_graphs(e, T)) : convert(T, e)
@@ -116,7 +116,7 @@ end
 "Return `MX` when the pieces, or the elements of an array among them, hold an MX; `SX` when they hold an SX; `DM` otherwise."
 function graph_type(pieces)
     holds(T) = any(x -> x isa T || (x isa AbstractArray && any(e -> e isa T, x)), pieces)
-    holds(MX) ? MX : holds(SX) ? SX : C.DM
+    holds(MX) ? MX : holds(SX) ? SX : casadi.DM
 end
 
 # As LinearAlgebra, an element of a Julia array that is not a scalar enters with its 2-norm.
@@ -128,8 +128,8 @@ LinearAlgebra.opnorm(A::AbstractMatrix{T}, p::Real = 2) where {T<:Symbolic} = Li
 
 # The elements of a symbolic matrix are its 1 x 1 matrices; those of a `DM` are numbers.
 Base.iterate(x::Symbolic, k::Int = 1) = k > length(x) ? nothing : (x[k], k + 1)
-Base.iterate(d::C.DM, (m, k) = (Matrix{Float64}(d), 1)) = k > length(m) ? nothing : (m[k], (m, k + 1))
-Base.IteratorSize(::Type{C.DM}) = Base.HasShape{2}()
+Base.iterate(d::casadi.DM, (m, k) = (Matrix{Float64}(d), 1)) = k > length(m) ? nothing : (m[k], (m, k + 1))
+Base.IteratorSize(::Type{casadi.DM}) = Base.HasShape{2}()
 Base.IteratorSize(::Type{<:Symbolic}) = Base.HasShape{2}()
 Base.eltype(::Type{T}) where {T<:Symbolic} = T
 Base.ndims(::Symbolic) = 2
@@ -143,17 +143,17 @@ Return the sum of the elements of the symbolic matrix `x` as a 1 x 1 matrix, or 
 """
 function Base.sum(x::Symbolic; dims::Union{Colon,Integer} = :, init::Union{Real,Symbolic} = 0)
     dims isa Colon || dims >= 1 || throw(ArgumentError("sum: dims must be at least 1, got $dims"))
-    total = dims isa Colon ? C.sum(x) : dims == 1 ? C.sum1(x) : dims == 2 ? C.sum2(x) : x
+    total = dims isa Colon ? casadi.sum(x) : dims == 1 ? casadi.sum1(x) : dims == 2 ? casadi.sum2(x) : x
     init isa Real && iszero(init) ? total : total + init
 end
 Base.sum(f, x::Symbolic; kwargs...) = sum(f.(x); kwargs...)
 # A `DM` sums as the Julia matrix of its values.
-Base.sum(d::C.DM; kwargs...) = sum(Matrix{Float64}(d); kwargs...)
-Base.sum(f, d::C.DM; kwargs...) = sum(f, Matrix{Float64}(d); kwargs...)
+Base.sum(d::casadi.DM; kwargs...) = sum(Matrix{Float64}(d); kwargs...)
+Base.sum(f, d::casadi.DM; kwargs...) = sum(f, Matrix{Float64}(d); kwargs...)
 
 # Numbers promote to symbols, so that `[x, 1.0]` is a vector of symbols.
 Base.promote_rule(::Type{T}, ::Type{<:Union{AbstractFloat,Integer,Rational,AbstractIrrational}}) where {T<:Symbolic} = T
-Base.promote_rule(::Type{T}, ::Type{C.DM}) where {T<:Symbolic} = T
+Base.promote_rule(::Type{T}, ::Type{casadi.DM}) where {T<:Symbolic} = T
 
 # The front end takes Julia arrays of numbers; a Julia array of symbols becomes a matrix.
 for op in (:+, :-, :*, :\)
@@ -195,7 +195,7 @@ function Base.copyto!(dest::AbstractArray, bc::Base.Broadcast.Broadcasted{Front.
     end
     dest
 end
-element_value(value::C.DM, k) = Float64(value[k])
+element_value(value::casadi.DM, k) = Float64(value[k])
 element_value(value, k) = value[k]
 function Base.copyto!(dest::CasadiMatrix, bc::Base.Broadcast.Broadcasted{Front.CasadiStyle})
     dest[:, :] = convert(typeof(dest), Front._bceval(bc))
@@ -210,6 +210,6 @@ Join the CasADi matrices and numbers `parts` into one column of blocks or one ro
 blocks, as `vertcat` and `horzcat` of CasADi; an empty `parts` gives a 0 x 0 matrix of
 its element type, or a `DM`.
 """
-vertcat(parts::AbstractVector) = isempty(parts) ? empty_matrix(parts) : C._vertcat(collect(parts))
-horzcat(parts::AbstractVector) = isempty(parts) ? empty_matrix(parts) : C._horzcat(collect(parts))
-empty_matrix(parts) = (eltype(parts) <: CasadiMatrix ? eltype(parts) : C.DM)(0, 0)
+vertcat(parts::AbstractVector) = isempty(parts) ? empty_matrix(parts) : casadi._vertcat(collect(parts))
+horzcat(parts::AbstractVector) = isempty(parts) ? empty_matrix(parts) : casadi._horzcat(collect(parts))
+empty_matrix(parts) = (eltype(parts) <: CasadiMatrix ? eltype(parts) : casadi.DM)(0, 0)

@@ -8,7 +8,6 @@ using CasADiCodegen
 using OrdinaryDiffEqVerner: Vern9
 using SimpleNonlinearSolve: SimpleNewtonRaphson
 import SciMLBase
-const C = CasADiCodegen.C
 nothing # hide
 ```
 
@@ -46,7 +45,7 @@ control is a nested `if_else` on ``\lambda_v``:
 ```@example bang
 y, a = SX.sym("y", 3), SX.sym("a")                         # y = [x, v, λv], a = λx
 λv = y[3]
-u = C.if_else(λv > 1, SX(-1.0), C.if_else(λv < -1, SX(1.0), SX(0.0)))
+u = casadi.if_else(λv > 1, SX(-1.0), casadi.if_else(λv < -1, SX(1.0), SX(0.0)))
 ode = vcat(y[2], u, -a)
 rhs = CasadiFunction("rhs", [y, a], [ode], ["y", "a"], ["ode"])
 CasADiCodegen.nonsmooth_operations(rhs; inputs = ["y"])

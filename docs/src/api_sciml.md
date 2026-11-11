@@ -11,14 +11,14 @@ These constructors make a SciML problem from a solver object of CasADi, from a
 
 ```@docs
 SciMLBase.ODEProblem(::CasADiCodegen.Function, ::AbstractVector{<:Real}, ::AbstractVector{<:Real})
-SciMLBase.ODEProblem(::CasADiCodegen.C.DaeBuilder, ::Union{Nothing,Tuple{Real,Real}})
+SciMLBase.ODEProblem(::CasADiCodegen.casadi.DaeBuilder, ::Union{Nothing,Tuple{Real,Real}})
 SciMLBase.ODEProblem(::CasADiCodegen.Models.System, ::Any, ::Tuple{Real,Real})
 SciMLBase.NonlinearProblem(::CasADiCodegen.Function, ::AbstractVector{<:Real}, ::AbstractVector{<:Real}...)
 SciMLBase.SDEProblem(::CasADiCodegen.Function, ::CasADiCodegen.Function, ::Any, ::Any)
 SciMLBase.DiscreteProblem(::CasADiCodegen.Function, ::Any, ::Any)
 SciMLBase.ImplicitDiscreteProblem(::CasADiCodegen.Function, ::Any, ::Tuple)
 SciMLBase.OptimizationProblem(::CasADiCodegen.Function, ::AbstractVector{<:Real}, ::AbstractVector{<:Real})
-SciMLBase.OptimizationProblem(::CasADiCodegen.C.Opti)
+SciMLBase.OptimizationProblem(::CasADiCodegen.casadi.Opti)
 ```
 
 ## Functions of SciML problems

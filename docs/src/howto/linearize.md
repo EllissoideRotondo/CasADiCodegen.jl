@@ -31,7 +31,7 @@ using SparseArrays
 
 lin_sparse, lin_sparse! = CasADiCodegen.linearization(f, h; sparse = true)
 lin_casadi = CasADiCodegen.linearization_function(f, h; sparse = true)    # (x, u, p) -> (A, B, C, D)
-out = Tuple(SparseMatrixCSC(CasADiCodegen.C.sparsity_out(lin_casadi, i)) for i in 0:3)
+out = Tuple(SparseMatrixCSC(casadi.sparsity_out(lin_casadi, i)) for i in 0:3)
 lin_sparse!(out, ([0.0, 0.0], [0.0], [9.81, 2.0]))
 out[1]
 ```
@@ -67,7 +67,7 @@ unknowns 1 and 3, so they form the first block:
 ```@example linearize
 y = SX.sym("y", 4)
 equations = vcat(y[2] - y[4], y[1] + y[3] - 1, y[4] * y[1] - y[3], y[1] - 2y[3])
-form = CasADiCodegen.block_triangular_form(CasADiCodegen.C.sparsity(jacobian(equations, y)))
+form = CasADiCodegen.block_triangular_form(casadi.sparsity(jacobian(equations, y)))
 [form.colperm[form.colblock[k]:form.colblock[k+1]-1] for k in 1:form.blocks]
 ```
 

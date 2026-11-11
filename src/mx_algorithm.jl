@@ -98,16 +98,16 @@ struct MXAlgorithm
     slot_nnz::Vector{Int}
     nnz_in::Vector{Int}
     nnz_out::Vector{Int}
-    sparsity_in::Vector{C.Sparsity}
-    sparsity_out::Vector{C.Sparsity}
+    sparsity_in::Vector{casadi.Sparsity}
+    sparsity_out::Vector{casadi.Sparsity}
     names_in::Vector{String}
     names_out::Vector{String}
     function MXAlgorithm(name, instructions, slot_nnz, sparsity_in, sparsity_out, names_in, names_out)
         @requires length(names_in) == length(sparsity_in) "one name per input is required"
         @requires length(names_out) == length(sparsity_out) "one name per output is required"
         alg = new(String(name), collect(MXInstruction, instructions), collect(Int, slot_nnz),
-                  Int[C.nnz(sp) for sp in sparsity_in], Int[C.nnz(sp) for sp in sparsity_out],
-                  collect(C.Sparsity, sparsity_in), collect(C.Sparsity, sparsity_out),
+                  Int[casadi.nnz(sp) for sp in sparsity_in], Int[casadi.nnz(sp) for sp in sparsity_out],
+                  collect(casadi.Sparsity, sparsity_in), collect(casadi.Sparsity, sparsity_out),
                   collect(String, names_in), collect(String, names_out))
         check_algorithm(alg)
         alg
@@ -217,7 +217,7 @@ function check_algorithm(alg::MXAlgorithm)
     nothing
 end
 
-isfull(sp::C.Sparsity) = C.nnz(sp) == C.size1(sp) * C.size2(sp)
+isfull(sp::casadi.Sparsity) = casadi.nnz(sp) == casadi.size1(sp) * casadi.size2(sp)
 
 """
     positions(sp) -> (rows, columns)
@@ -225,9 +225,9 @@ isfull(sp::C.Sparsity) = C.nnz(sp) == C.size1(sp) * C.size2(sp)
 Return the 1-based row and column of each nonzero of the sparsity pattern `sp`,
 in nonzero order.
 """
-function positions(sp::C.Sparsity)
-    colind, rows = C.colind(sp), C.row(sp) .+ 1
-    columns = [c for c in 1:C.size2(sp) for _ in colind[c]+1:colind[c+1]]
+function positions(sp::casadi.Sparsity)
+    colind, rows = casadi.colind(sp), casadi.row(sp) .+ 1
+    columns = [c for c in 1:casadi.size2(sp) for _ in colind[c]+1:colind[c+1]]
     rows, columns
 end
 
@@ -240,15 +240,15 @@ nonzero `kz` of `z` is `x[kx] * y[ky]`. The arguments are sparsity patterns.
 The terms are in the nonzero order of `z`: by column of `x`, then by column of
 `y`, then by row of `x`, then by row of `y`.
 """
-function kronecker_terms(z::C.Sparsity, x::C.Sparsity, y::C.Sparsity)
+function kronecker_terms(z::casadi.Sparsity, x::casadi.Sparsity, y::casadi.Sparsity)
     (rows_x, columns_x), (rows_y, columns_y) = positions(x), positions(y)
     terms = NTuple{3,Int}[]
-    for cx in 1:C.size2(x), cy in 1:C.size2(y), kx in findall(==(cx), columns_x), ky in findall(==(cy), columns_y)
+    for cx in 1:casadi.size2(x), cy in 1:casadi.size2(y), kx in findall(==(cx), columns_x), ky in findall(==(cy), columns_y)
         # Loop invariant: `terms` holds the nonzeros of the columns of `z` before this one, and of this one above this row.
         push!(terms, (length(terms) + 1, kx, ky))
     end
     rows, columns = positions(z)
-    nr, nc = C.size1(y), C.size2(y)
+    nr, nc = casadi.size1(y), casadi.size2(y)
     @ensures length(terms) == length(rows) && all(rows[kz] == (rows_x[kx] - 1) * nr + rows_y[ky] &&
                                                  columns[kz] == (columns_x[kx] - 1) * nc + columns_y[ky]
                                                  for (kz, kx, ky) in terms) "the terms must follow the pattern of the Kronecker product"
@@ -264,12 +264,12 @@ Return the terms `(kz, kx, ky)` of the sparse product `z += x * y`: nonzero
 The order is that of the CasADi routine `casadi_mtimes`: by column of `y`, then
 by nonzero of `y`, then by nonzero of `x`. Each sum is then rounded as in CasADi.
 """
-function product_terms(z::C.Sparsity, x::C.Sparsity, y::C.Sparsity)
-    colind_z, row_z = C.colind(z), C.row(z)
-    colind_x, row_x = C.colind(x), C.row(x)
-    colind_y, row_y = C.colind(y), C.row(y)
+function product_terms(z::casadi.Sparsity, x::casadi.Sparsity, y::casadi.Sparsity)
+    colind_z, row_z = casadi.colind(z), casadi.row(z)
+    colind_x, row_x = casadi.colind(x), casadi.row(x)
+    colind_y, row_y = casadi.colind(y), casadi.row(y)
     terms = NTuple{3,Int}[]
-    for c in 1:C.size2(y)
+    for c in 1:casadi.size2(y)
         place = Dict(row_z[k] => k for k in colind_z[c]+1:colind_z[c+1])     # row => nonzero of z
         for ky in colind_y[c]+1:colind_y[c+1], kx in colind_x[row_y[ky]+1]+1:colind_x[row_y[ky]+2]
             kz = get(place, row_x[kx], 0)
@@ -298,28 +298,28 @@ square, and that the result of an inverse and the right side of a solve
 are dense.
 """
 function linear_data(op::Symbol, node)
-    pattern(d) = C.sparsity(C.dep(node, d))
+    pattern(d) = casadi.sparsity(casadi.dep(node, d))
     if op === :OP_MTIMES
         z, x, y = pattern(0), pattern(1), pattern(2)
-        all(isfull, (z, x, y)) ? (; dims = (C.size1(x), C.size2(x), C.size2(y)), terms = NTuple{3,Int}[]) :
+        all(isfull, (z, x, y)) ? (; dims = (casadi.size1(x), casadi.size2(x), casadi.size2(y)), terms = NTuple{3,Int}[]) :
                                  (; dims = nothing, terms = product_terms(z, x, y))
     elseif op in (:OP_BILIN, :OP_RANK1)
         A = pattern(0)
         rows, columns = positions(A)
-        (; rows, columns, dims = isfull(A) ? (C.size1(A), C.size2(A)) : nothing)
+        (; rows, columns, dims = isfull(A) ? (casadi.size1(A), casadi.size2(A)) : nothing)
     elseif op in (:OP_MMIN, :OP_MMAX)
         (; dense = isfull(pattern(0)))
     elseif op === :OP_KRON
-        (; terms = kronecker_terms(C.sparsity(node), pattern(0), pattern(1)))
+        (; terms = kronecker_terms(casadi.sparsity(node), pattern(0), pattern(1)))
     elseif op in (:OP_DETERMINANT, :OP_INVERSE, :OP_SOLVE)
         A = pattern(op === :OP_SOLVE ? 1 : 0)
-        n = C.size1(A)
+        n = casadi.size1(A)
         rows, columns = positions(A)
         place = zeros(Int, n * n)
         place[rows .+ n .* (columns .- 1)] = 1:length(rows)
         op === :OP_DETERMINANT && return (; n, place)
-        nrhs = op === :OP_SOLVE ? C.size2(pattern(0)) : n
-        (; n, place, nrhs, tr = op === :OP_SOLVE && C.info(node)["tr"], qr = op === :OP_SOLVE ? qr_tables(A) : nothing)
+        nrhs = op === :OP_SOLVE ? casadi.size2(pattern(0)) : n
+        (; n, place, nrhs, tr = op === :OP_SOLVE && casadi.info(node)["tr"], qr = op === :OP_SOLVE ? qr_tables(A) : nothing)
     else
         (;)
     end
@@ -385,19 +385,19 @@ node is read from its adjoint (see `slice_write_data`).
 function index_data(op::Symbol, node, slots)
     if op === :OP_LOW
         # CasADi does not keep the lookup mode when it rebuilds the node, so the C code is that of the node with what it depends on.
-        source = c_source(C.Function("node", C.symvar(node), [node]))
+        source = c_source(casadi.Function("node", casadi.symvar(node), [node]))
         return (; mode = parse(Int, c_call(source, "low")[4]))
     end
-    occursin("SetNonzerosSliceParam", C.class_name(node)) && return slice_write_data(op, node, slots)
+    occursin("SetNonzerosSliceParam", casadi.class_name(node)) && return slice_write_data(op, node, slots)
     reads = op === :OP_GETNONZEROS_PARAM
     distinct = [d for d in eachindex(slots) if findfirst(==(slots[d]), slots) == d]
     same = [findfirst(==(s), slots) for s in slots]              # operand => the first operand with its slot
-    sizes = [C.nnz(C.sparsity(C.dep(node, d - 1))) for d in eachindex(slots)]
-    evaluate = rebuild(node, [C.dep(node, d - 1) for d in distinct])
-    casadi(values) = only(evaluate(values[distinct]))
+    sizes = [casadi.nnz(casadi.sparsity(casadi.dep(node, d - 1))) for d in eachindex(slots)]
+    evaluate = rebuild(node, [casadi.dep(node, d - 1) for d in distinct])
+    reference(values) = only(evaluate(values[distinct]))
     range = sizes[1]                                             # the indices are those of the first operand
     keys = (reads ? 2 : 3):length(slots)
-    count = reads ? C.nnz(C.sparsity(node)) : sizes[2]
+    count = reads ? casadi.nnz(casadi.sparsity(node)) : sizes[2]
     # Operands for an evaluation: distinct values that are no whole numbers, and indices `shift + 3j` in and near the range.
     function operands(shift)
         values = [[0.37 * k + 0.11 * d + 1.3 for k in 1:sizes[d]] for d in eachindex(slots)]
@@ -418,7 +418,7 @@ function index_data(op::Symbol, node, slots)
             # With all indices zero and the tags 1, 2, ... as values, each result is its offset plus one.
             tags = operands(nothing)
             tags[1] = collect(1.0:sizes[1])
-            found = casadi(tags)
+            found = reference(tags)
             if all(isfinite, found)
                 offsets = round.(Int, found) .- 1
                 push!(forms, (; offsets, first = inner, second = Int[]), (; offsets, first = outer, second = Int[]))
@@ -427,7 +427,7 @@ function index_data(op::Symbol, node, slots)
             # With all indices zero, the places that change are those of the slice.
             ones_in = operands(nothing)
             ones_in[1], ones_in[2] = zeros(sizes[1]), ones(sizes[2])
-            touched = findall(!iszero, casadi(ones_in)) .- 1
+            touched = findall(!iszero, reference(ones_in)) .- 1
             if length(touched) == ns
                 for slice in (touched, reverse(touched))
                     push!(forms, (; offsets = [slice[(e - 1) ÷ nk + 1] for e in 1:count], first = inner, second = Int[]),
@@ -437,7 +437,7 @@ function index_data(op::Symbol, node, slots)
         end
     end
     probes = [operands(shift) for shift in (nothing, 0, 1, 2)]
-    expected = map(casadi, probes)
+    expected = map(reference, probes)
     k = findfirst(form -> all(isequal(index_model(op, form, x), y) for (x, y) in zip(probes, expected)), forms)
     @requires k !== nothing "operation $op has indices of a form that this package cannot read"
     forms[k]
@@ -458,31 +458,31 @@ evaluates that read correctly, and the slice is read from it.
 function slice_write_data(op::Symbol, node, slots)
     refusal = "operation $op has indices of a form that this package cannot read"
     @requires length(slots) == 3 && allunique(slots) refusal
-    f, place = rebuilt_function(node, [C.dep(node, d - 1) for d in 1:3])
-    x = [MX.sym("x$i", C.sparsity_in(f, i - 1)) for i in 1:C.n_in(f)]
-    seed = MX.sym("seed", C.sparsity_out(f, 0))
-    read = C.Function("read", MX[seed; x], [Front.jtimes(f(x...), x[place[2]], seed, true) / 2])
-    range, count, nk = C.nnz(C.sparsity_out(f, 0)), C.nnz(C.sparsity_in(f, place[2] - 1)), C.nnz(C.sparsity_in(f, place[3] - 1))
+    f, place = rebuilt_function(node, [casadi.dep(node, d - 1) for d in 1:3])
+    x = [MX.sym("x$i", casadi.sparsity_in(f, i - 1)) for i in 1:casadi.n_in(f)]
+    seed = MX.sym("seed", casadi.sparsity_out(f, 0))
+    read = casadi.Function("read", MX[seed; x], [Front.jtimes(f(x...), x[place[2]], seed, true) / 2])
+    range, count, nk = casadi.nnz(casadi.sparsity_out(f, 0)), casadi.nnz(casadi.sparsity_in(f, place[2] - 1)), casadi.nnz(casadi.sparsity_in(f, place[3] - 1))
     @requires nk > 0 && count % nk == 0 refusal
-    function casadi(tags, keys)
-        values = [zeros(C.nnz(C.sparsity_in(read, i))) for i in 0:C.n_in(read)-1]
+    function reference(tags, keys)
+        values = [zeros(casadi.nnz(casadi.sparsity_in(read, i))) for i in 0:casadi.n_in(read)-1]
         values[1], values[1+place[3]] = tags, keys
-        C.nonzeros(read((sparsity_values(C.sparsity_in(read, i - 1), v) for (i, v) in enumerate(values))...))
+        casadi.nonzeros(read((sparsity_values(casadi.sparsity_in(read, i - 1), v) for (i, v) in enumerate(values))...))
     end
     # With all indices zero and the tags 1, 2, ... as the seed, each element reads its offset plus one.
-    found = casadi(collect(1.0:range), zeros(nk))
+    found = reference(collect(1.0:range), zeros(nk))
     @requires all(isfinite, found) refusal
     ns = count ÷ nk
     data = IndexForm((round.(Int, found) .- 1, [(e - 1) ÷ ns + 1 for e in 1:count], Int[]))
     tags = [0.37 * k + 1.3 for k in 1:range]
     @requires all(0:2) do shift
         keys = [Float64(mod(3 * j + shift, range + 2) - 1) for j in 1:nk]
-        isequal(index_model(:OP_GETNONZEROS_PARAM, data, [tags, keys]), casadi(tags, keys))
+        isequal(index_model(:OP_GETNONZEROS_PARAM, data, [tags, keys]), reference(tags, keys))
     end refusal
     data
 end
 
-distinct_operands(node, slots) = [C.dep(node, d - 1) for d in eachindex(slots) if findfirst(==(slots[d]), slots) == d]
+distinct_operands(node, slots) = [casadi.dep(node, d - 1) for d in eachindex(slots) if findfirst(==(slots[d]), slots) == d]
 
 node_source(node, slots) = c_source(rebuilt_function(node, distinct_operands(node, slots))[1])
 
@@ -502,15 +502,15 @@ function pass_data(op::Symbol, node, slots)
     op === :OP_MONITOR && return monitor_text(node)
     op === :OP_ASSERTION && return assertion_text(node, slots)
     op === :OP_DUMP || return nothing
-    rows, columns = positions(C.sparsity(node))
+    rows, columns = positions(casadi.sparsity(node))
     base = match(r"snprintf\(dump_fname, \d+, \"\./(.*)\.%06d\.mtx\"", node_source(node, slots).body)[1]
-    (; base = String(base), rows, columns, dims = (C.size1(node), C.size2(node)))
+    (; base = String(base), rows, columns, dims = (casadi.size1(node), casadi.size2(node)))
 end
 
 function monitor_text(node)
-    operand = C.dep(node, 0)
-    named = C.graph_substitute([node], [operand], [MX.sym("monitored", C.sparsity(operand))])[1]::MX
-    text, head = C.str(named), "monitor(monitored, "
+    operand = casadi.dep(node, 0)
+    named = casadi.graph_substitute([node], [operand], [MX.sym("monitored", casadi.sparsity(operand))])[1]::MX
+    text, head = casadi.str(named), "monitor(monitored, "
     startswith(text, head) ? String(chop(text; head = length(head), tail = 1)) : "monitor"
 end
 
@@ -523,7 +523,7 @@ of an evaluation with a false condition, so the node is evaluated at zeros.
 function assertion_text(node, slots)
     operands = distinct_operands(node, slots)
     evaluate = rebuild(node, operands)
-    text = try evaluate([zeros(C.nnz(C.sparsity(x))) for x in operands]); "" catch err; sprint(showerror, err) end
+    text = try evaluate([zeros(casadi.nnz(casadi.sparsity(x))) for x in operands]); "" catch err; sprint(showerror, err) end
     String(strip(last(split(text, "Assertion error:"; limit = 2))))
 end
 
@@ -547,15 +547,15 @@ of the node, rebuilt on fresh symbols.
 """
 function table_data(op::Symbol, node, slots)
     if op === :OP_HORZREPSUM
-        return (; n = C.nnz(C.sparsity(C.dep(node, 0))) ÷ max(C.nnz(C.sparsity(node)), 1))
+        return (; n = casadi.nnz(casadi.sparsity(casadi.dep(node, 0))) ÷ max(casadi.nnz(casadi.sparsity(node)), 1))
     elseif op === :OP_FIND
-        operand = C.sparsity(C.dep(node, 0))
-        return (; rows = Vector{Int}(C.row(operand)), last = C.size1(operand))
+        operand = casadi.sparsity(casadi.dep(node, 0))
+        return (; rows = Vector{Int}(casadi.row(operand)), last = casadi.size1(operand))
     end
     source = node_source(node, slots)
     op === :OP_CONVEXIFY && return convexify_data(source)
     operands = distinct_operands(node, slots)
-    sizes = [C.nnz(C.sparsity(x)) for x in operands]
+    sizes = [casadi.nnz(casadi.sparsity(x)) for x in operands]
     evaluate = rebuild(node, operands)
     if op === :OP_BSPLINE
         data = bspline_data(source)
@@ -666,24 +666,24 @@ function bspline_value(data, x, c)
 end
 
 """
-    check_bspline(data, casadi) -> nothing
+    check_bspline(data, reference) -> nothing
 
 Check that the tables of a B-spline reproduce CasADi; throw `AssertionError`
-otherwise. `casadi(x, c)` returns the CasADi value at the point `x` for the
+otherwise. `reference(x, c)` returns the CasADi value at the point `x` for the
 coefficients `c`, which are `nothing` when the tables hold them.
 
 The points lie in a knot span, at the first and the last knot, and out of
 range. A spline of degree zero is checked in a span only: at a knot CasADi
 writes out of its work space, and the result is not defined.
 """
-function check_bspline(data, casadi)
+function check_bspline(data, reference)
     span(d) = data.knots[data.offsets[d]+1:data.offsets[d+1]]
     count = data.strides[end] * (length(span(data.n)) - data.degrees[end] - 1)
     c = data.coefficients === nothing ? [sin(0.7 * k) + 0.1 * k for k in 1:count] : nothing
     inside(d, fraction) = (knots = span(d); knots[1] + fraction * (knots[end] - knots[1]))
     points = [[inside(d, fraction) for d in 1:data.n] for fraction in (0.37, 0.81, 0.0, 1.0, -0.2, 1.3)]
     for x in (all(>(0), data.degrees) ? points : points[1:2])
-        @ensures isapprox(bspline_value(data, x, c)::Vector{Float64}, casadi(x, c); rtol = 1e-9, atol = 1e-12, nans = true) "the tables of the B-spline must reproduce CasADi at the point $x"
+        @ensures isapprox(bspline_value(data, x, c)::Vector{Float64}, reference(x, c); rtol = 1e-9, atol = 1e-12, nans = true) "the tables of the B-spline must reproduce CasADi at the point $x"
     end
     nothing
 end
@@ -732,16 +732,16 @@ Return `nothing` when the dense factorization is the better one: the matrix is
 dense or has fewer than 8 rows, has a structural rank defect, or has factors
 with more than half the nonzeros of a dense matrix.
 """
-function qr_tables(A::C.Sparsity)
-    n = C.size1(A)
+function qr_tables(A::casadi.Sparsity)
+    n = casadi.size1(A)
     (n >= 8 && !isfull(A)) || return nothing
-    V, R, prinv, pc = C.qr_sparse(A)::Tuple{C.Sparsity,C.Sparsity,Vector,Vector}
-    (C.size1(V) == n && 2 * (C.nnz(V) + C.nnz(R)) <= n^2) || return nothing
-    vcat(Int[n, n, C.nnz(A), C.nnz(V), C.nnz(R)], C.colind(A), C.row(A), C.colind(V), C.row(V), C.colind(R), C.row(R),
+    V, R, prinv, pc = casadi.qr_sparse(A)::Tuple{casadi.Sparsity,casadi.Sparsity,Vector,Vector}
+    (casadi.size1(V) == n && 2 * (casadi.nnz(V) + casadi.nnz(R)) <= n^2) || return nothing
+    vcat(Int[n, n, casadi.nnz(A), casadi.nnz(V), casadi.nnz(R)], casadi.colind(A), casadi.row(A), casadi.colind(V), casadi.row(V), casadi.colind(R), casadi.row(R),
          Vector{Int}(prinv), Vector{Int}(pc))
 end
 
-sparsity_values(sp::C.Sparsity, values) = C.nnz(sp) == 0 ? C.DM(sp) : C.DM(sp, C.DM(values))
+sparsity_values(sp::casadi.Sparsity, values) = casadi.nnz(sp) == 0 ? casadi.DM(sp) : casadi.DM(sp, casadi.DM(values))
 
 """
     rebuild(node, operands) -> evaluate
@@ -761,13 +761,13 @@ cases need care:
 """
 function rebuild(node, operands)
     f, place = rebuilt_function(node, operands)
-    patterns = [C.sparsity_in(f, i - 1) for i in 1:C.n_in(f)]
+    patterns = [casadi.sparsity_in(f, i - 1) for i in 1:casadi.n_in(f)]
     function evaluate(values::Vector{Vector{Float64}})
-        all = [zeros(C.nnz(sp)) for sp in patterns]
+        all = [zeros(casadi.nnz(sp)) for sp in patterns]
         all[place] = values
         r = f(map(sparsity_values, patterns, all)...)
-        results = (r isa C.DM ? C.DM[r] : collect(C.DM, r))::Vector{C.DM}
-        [C.nonzeros(x) ./ 2 for x in results]
+        results = (r isa casadi.DM ? casadi.DM[r] : collect(casadi.DM, r))::Vector{casadi.DM}
+        [casadi.nonzeros(x) ./ 2 for x in results]
     end
 end
 
@@ -783,31 +783,31 @@ function rebuilt_function(node, operands)
     place = zeros(Int, length(operands))          # operand => position in `inputs`
     parents = Dict{Int,Int}()                     # node with many results => position of its first result
     for (d, x) in enumerate(operands)
-        if C.is_output(x)
-            parent = C.dep(x, 0)
-            first_result = get!(parents, C.__hash__(parent)) do
-                patterns = [C.sparsity(C.get_output(parent, o)) for o in 0:C.n_out(parent)-1]
+        if casadi.is_output(x)
+            parent = casadi.dep(x, 0)
+            first_result = get!(parents, casadi.__hash__(parent)) do
+                patterns = [casadi.sparsity(casadi.get_output(parent, o)) for o in 0:casadi.n_out(parent)-1]
                 arguments = [MX.sym("a$o", sp) for (o, sp) in enumerate(patterns)]
-                identity = C.Function("identity", arguments, arguments, Dict("never_inline" => true))
+                identity = casadi.Function("identity", arguments, arguments, Dict("never_inline" => true))
                 fresh = [MX.sym("r$o", sp) for (o, sp) in enumerate(patterns)]
                 returned = identity(fresh...)
                 push!(from, parent)
                 # A result with no nonzeros is a constant and not a result of the call.
                 listed = as_list(returned)
-                push!(to, C.dep(listed[findfirst(C.is_output, listed)::Int], 0))
+                push!(to, casadi.dep(listed[findfirst(casadi.is_output, listed)::Int], 0))
                 append!(inputs, fresh)
                 length(inputs) - length(fresh) + 1
             end
-            place[d] = first_result + C.which_output(x)
+            place[d] = first_result + casadi.which_output(x)
         else
-            push!(inputs, MX.sym("d$d", C.sparsity(x)))
+            push!(inputs, MX.sym("d$d", casadi.sparsity(x)))
             push!(from, x)
             push!(to, inputs[end])
             place[d] = length(inputs)
         end
     end
-    results = C.n_out(node) == 1 ? [node] : [C.get_output(node, o) for o in 0:C.n_out(node)-1]
-    (C.Function("node", inputs, C.graph_substitute([2 * r for r in results], from, to)), place)
+    results = casadi.n_out(node) == 1 ? [node] : [casadi.get_output(node, o) for o in 0:casadi.n_out(node)-1]
+    (casadi.Function("node", inputs, casadi.graph_substitute([2 * r for r in results], from, to)), place)
 end
 
 """
@@ -824,8 +824,8 @@ The maps are checked on a second, random evaluation.
 """
 function copy_maps(node, slots, adding::Bool)
     distinct = [d for d in eachindex(slots) if findfirst(==(slots[d]), slots) == d]
-    operands = [C.dep(node, d - 1) for d in distinct]
-    sizes = [C.nnz(C.sparsity(x)) for x in operands]
+    operands = [casadi.dep(node, d - 1) for d in distinct]
+    sizes = [casadi.nnz(casadi.sparsity(x)) for x in operands]
     evaluate = rebuild(node, operands)
     base = cumsum(sizes) .- sizes            # operand d carries the tags base[d]+1 : base[d]+sizes[d]
     maps = if adding
@@ -849,7 +849,7 @@ function copy_maps(node, slots, adding::Bool)
     expected = evaluate(values)
     for o in eachindex(expected), k in eachindex(expected[o])
         actual = sum((m[k] == 0 ? 0.0 : values[d][m[k]] for (d, m) in enumerate(maps[o])); init = 0.0)
-        @ensures actual == expected[o][k] "operation $(op_names()[C.op(node)]) is not a copy of nonzeros"
+        @ensures actual == expected[o][k] "operation $(op_names()[casadi.op(node)]) is not a copy of nonzeros"
     end
     map(maps) do found
         every = [zeros(Int, length(first(found))) for _ in slots]
@@ -873,15 +873,15 @@ throws for any other. A call of a matrix function that has more argument nonzero
 than instructions, such as an interpolant, is replaced by those instructions (see
 `inline_calls`), because a call copies its arguments.
 """
-MXAlgorithm(f::C.Function; expand::Bool = false) = read_mx(f, expand, Dict{Int,Any}())
+MXAlgorithm(f::casadi.Function; expand::Bool = false) = read_mx(f, expand, Dict{Int,Any}())
 
 # `callees` maps the identity of a CasADi function to its copy (see `callee_copy`).
-function read_mx(f::C.Function, expand::Bool, callees::Dict{Int,Any})
-    label = "function \"$(C.name(f))\""
-    @requires C.is_a(f, "MXFunction") "$label is not a matrix (MX) function"
-    @requires !C.has_free(f) "$label has free symbols: $(C.get_free(f))"
+function read_mx(f::casadi.Function, expand::Bool, callees::Dict{Int,Any})
+    label = "function \"$(casadi.name(f))\""
+    @requires casadi.is_a(f, "MXFunction") "$label is not a matrix (MX) function"
+    @requires !casadi.has_free(f) "$label has free symbols: $(casadi.get_free(f))"
     names = op_names()
-    n = C.n_instructions(f)
+    n = casadi.n_instructions(f)
     instructions = Vector{MXInstruction}(undef, n)
     slot_nnz = Int[]
     inlined = Set{Int}()                         # the calls that are replaced by the instructions of the callee
@@ -894,9 +894,9 @@ function read_mx(f::C.Function, expand::Bool, callees::Dict{Int,Any})
         end
     end
     for k in 1:n
-        op = names[C.instruction_id(f, k - 1)]
-        operands = C.instruction_input(f, k - 1) .+ 1
-        out = C.instruction_output(f, k - 1) .+ 1
+        op = names[casadi.instruction_id(f, k - 1)]
+        operands = casadi.instruction_input(f, k - 1) .+ 1
+        out = casadi.instruction_output(f, k - 1) .+ 1
         if op === :OP_OUTPUT
             # CasADi writes the segments of one result in order, so the offset is a running sum.
             offset = sum((slot_nnz[ins.in[1]] for ins in @view(instructions[1:k-1])
@@ -904,17 +904,17 @@ function read_mx(f::C.Function, expand::Bool, callees::Dict{Int,Any})
             instructions[k] = MXInstruction(op, Int[], operands, (out[1], offset))
             continue
         end
-        node = C.instruction_MX(f, k - 1)
-        callee = op === :OP_CALL ? callee_copy(C.which_function(node), expand, callees) : nothing
+        node = casadi.instruction_MX(f, k - 1)
+        callee = op === :OP_CALL ? callee_copy(casadi.which_function(node), expand, callees) : nothing
         sizes = op === :OP_CALL ? callee.nnz_out :
-                C.n_out(node) == 1 ? [C.nnz(C.sparsity(node))] :
-                [C.nnz(C.sparsity(C.get_output(node, o))) for o in 0:C.n_out(node)-1]
+                casadi.n_out(node) == 1 ? [casadi.nnz(casadi.sparsity(node))] :
+                [casadi.nnz(casadi.sparsity(casadi.get_output(node, o))) for o in 0:casadi.n_out(node)-1]
         write_slots(out, sizes)
         instructions[k] = if op === :OP_INPUT
-            info = C.info(node)
+            info = casadi.info(node)
             MXInstruction(op, out, Int[], (info["ind"] + 1, info["offset"]))
         elseif op === :OP_CONST
-            MXInstruction(op, out, Int[], Vector{Float64}(C.nonzeros(C.evalf(node))))
+            MXInstruction(op, out, Int[], Vector{Float64}(casadi.nonzeros(casadi.evalf(node))))
         elseif op === :OP_CALL
             callee isa MXAlgorithm && sum(callee.nnz_in; init = 0) > length(callee.instructions) && push!(inlined, k)
             MXInstruction(op, out, operands, callee)
@@ -929,16 +929,16 @@ function read_mx(f::C.Function, expand::Bool, callees::Dict{Int,Any})
         elseif haskey(TABLE_OPERATIONS, op)
             MXInstruction(op, out, operands, table_data(op, node, operands))
         else
-            @requires haskey(OPERATIONS, op) && (C.is_unary(node) || C.is_binary(node)) "$label: unsupported operation $op at instruction $k"
+            @requires haskey(OPERATIONS, op) && (casadi.is_unary(node) || casadi.is_binary(node)) "$label: unsupported operation $op at instruction $k"
             MXInstruction(op, out, operands, nothing)
         end
     end
     replace!(slot_nnz, -1 => 0)                  # a slot that no instruction writes
-    alg = MXAlgorithm(C.name(f), instructions, slot_nnz,
-                      [C.sparsity_in(f, j) for j in 0:C.n_in(f)-1],
-                      [C.sparsity_out(f, j) for j in 0:C.n_out(f)-1],
-                      [C.name_in(f, j) for j in 0:C.n_in(f)-1],
-                      [C.name_out(f, j) for j in 0:C.n_out(f)-1])
+    alg = MXAlgorithm(casadi.name(f), instructions, slot_nnz,
+                      [casadi.sparsity_in(f, j) for j in 0:casadi.n_in(f)-1],
+                      [casadi.sparsity_out(f, j) for j in 0:casadi.n_out(f)-1],
+                      [casadi.name_in(f, j) for j in 0:casadi.n_in(f)-1],
+                      [casadi.name_out(f, j) for j in 0:casadi.n_out(f)-1])
     inline_calls(alg, inlined)
 end
 
@@ -1050,9 +1050,9 @@ The function is checked against `f` at points in and out of the grid. The
 linear forms agree to rounding only, because CasADi computes the inline form
 with other operations.
 """
-function interpolant_function(f::C.Function)
-    source, class, name = c_source(f), C.class_name(f), C.name(f)
-    inputs = MX[MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
+function interpolant_function(f::casadi.Function)
+    source, class, name = c_source(f), casadi.class_name(f), casadi.name(f)
+    inputs = MX[MX.sym(casadi.name_in(f, i), casadi.sparsity_in(f, i)) for i in 0:casadi.n_in(f)-1]
     modes(lookup) = Dict{String,Any}("lookup_mode" => [LOOKUP_MODES[mode+1] for mode in lookup])
     split(values, offsets) = [values[offsets[d]+1:offsets[d+1]] for d in 1:length(offsets)-1]
     if class == "BSplineInterpolant" && c_call(source, "nd_boor_eval") === nothing
@@ -1060,9 +1060,9 @@ function interpolant_function(f::C.Function)
         results = MX[value]
     elseif class == "BSplineInterpolant"
         data = bspline_data(source)
-        coefficients = data.coefficients === nothing ? fitted_coefficients(source, inputs[2], data.m) : MX(C.DM(data.coefficients))
+        coefficients = data.coefficients === nothing ? fitted_coefficients(source, inputs[2], data.m) : MX(casadi.DM(data.coefficients))
         grid = split(data.knots, data.offsets)
-        results = MX[C.bspline(inputs[1], coefficients, grid, data.degrees, data.m, modes(data.lookup))]
+        results = MX[casadi.bspline(inputs[1], coefficients, grid, data.degrees, data.m, modes(data.lookup))]
     else
         gradient = class == "LinearInterpolantJac"
         a = c_call(source, gradient ? "interpn_grad" : "interpn")
@@ -1072,22 +1072,22 @@ function interpolant_function(f::C.Function)
         # A grid or values that are not a table of the C code are arguments of `f`, after the point.
         fixed_grid, fixed = get(source.reals, a[3], nothing), get(source.reals, a[5], nothing)
         grid = fixed_grid === nothing ? diff(offsets) : split(fixed_grid, offsets)
-        table = C.interpolant(name, "linear", grid, fixed === nothing ? m : fixed, merge(modes(source.ints[a[7]][1:n]), Dict("inline" => true)))
+        table = casadi.interpolant(name, "linear", grid, fixed === nothing ? m : fixed, merge(modes(source.ints[a[7]][1:n]), Dict("inline" => true)))
         value = table(inputs[1:1+(fixed_grid === nothing)+(fixed === nothing)]...)
         # CasADi gives no derivative by the values, so each other result of the derivative is a structural zero.
-        results = gradient ? MX[C.project(C.jacobian(value, inputs[1]), C.sparsity_out(f, 0)); [MX(C.sparsity_out(f, j)) for j in 1:C.n_out(f)-1]] : MX[value]
+        results = gradient ? MX[casadi.project(casadi.jacobian(value, inputs[1]), casadi.sparsity_out(f, 0)); [MX(casadi.sparsity_out(f, j)) for j in 1:casadi.n_out(f)-1]] : MX[value]
     end
-    g = C.Function(name, inputs, results, [C.name_in(f, i) for i in 0:C.n_in(f)-1], [C.name_out(f, j) for j in 0:C.n_out(f)-1])
+    g = casadi.Function(name, inputs, results, [casadi.name_in(f, i) for i in 0:casadi.n_in(f)-1], [casadi.name_out(f, j) for j in 0:casadi.n_out(f)-1])
     # The check takes a grid argument of increasing points, 0, 1, 2, ... in each dimension.
     parametric_grid = grid isa Vector{Int}
     knots = parametric_grid ? [collect(0.0:length-1) for length in grid] : grid
     for fraction in (0.37, 0.81, 0.0, 1.0, -0.2, 1.3)
-        values = [C.DM(C.sparsity_in(f, i), C.DM([sin(0.7 * k) + 0.1 * k for k in 1:C.nnz_in(f, i)])) for i in 0:C.n_in(f)-1]
-        values[1] = C.DM([first(points) + fraction * (last(points) - first(points)) for points in knots])
-        parametric_grid && (values[2] = C.DM(reduce(vcat, knots)))
+        values = [casadi.DM(casadi.sparsity_in(f, i), casadi.DM([sin(0.7 * k) + 0.1 * k for k in 1:casadi.nnz_in(f, i)])) for i in 0:casadi.n_in(f)-1]
+        values[1] = casadi.DM([first(points) + fraction * (last(points) - first(points)) for points in knots])
+        parametric_grid && (values[2] = casadi.DM(reduce(vcat, knots)))
         expected, actual = f(values...), g(values...)
-        nonzeros(r) = reduce(vcat, (Vector{Float64}(C.nonzeros(C.densify(x))) for x in (r isa C.DM ? (r,) : r)))
-        @ensures isapprox(nonzeros(actual), nonzeros(expected); rtol = 1e-7, atol = 1e-10, nans = true) "the function that replaces the interpolant \"$name\" must agree with it at the point $(Vector{Float64}(C.nonzeros(values[1])))"
+        nonzeros(r) = reduce(vcat, (Vector{Float64}(casadi.nonzeros(casadi.densify(x))) for x in (r isa casadi.DM ? (r,) : r)))
+        @ensures isapprox(nonzeros(actual), nonzeros(expected); rtol = 1e-7, atol = 1e-10, nans = true) "the function that replaces the interpolant \"$name\" must agree with it at the point $(Vector{Float64}(casadi.nonzeros(values[1])))"
     end
     g
 end
@@ -1106,7 +1106,7 @@ made again with the values as an argument and the default degree and algorithm;
 `interpolant_function` checks the result against `f`, so that other options of `f`
 give an error instead of another function.
 """
-function inline_bspline(f::C.Function, inputs::Vector{MX})
+function inline_bspline(f::casadi.Function, inputs::Vector{MX})
     bytes = serial_bytes(f)
     points, offsets = Float64.(serial_value(bytes, "Interpolant::grid")), Int.(serial_value(bytes, "Interpolant::offset"))
     values, modes = serial_value(bytes, "Interpolant::values"), serial_value(bytes, "Interpolant::lookup_modes")
@@ -1114,11 +1114,11 @@ function inline_bspline(f::C.Function, inputs::Vector{MX})
     grid = [points[offsets[d]+1:offsets[d+1]] for d in 1:length(offsets)-1]
     options = Dict{String,Any}("inline" => true)
     isempty(modes) || (options["lookup_mode"] = String.(modes))
-    table = C.interpolant(C.name(f), "bspline", grid, m, options)
+    table = casadi.interpolant(casadi.name(f), "bspline", grid, m, options)
     c = MX.sym("c", prod(length, grid) * m)
-    linear = C.Function("linear_" * C.name(f), [inputs[1], c], [C.jtimes(table(inputs[1], c), c, c)])
+    linear = casadi.Function("linear_" * casadi.name(f), [inputs[1], c], [casadi.jtimes(table(inputs[1], c), c, c)])
     # The graph of `linear` itself, not a call, so that the values are not copied to a frame.
-    grid, only(as_list(C.call(linear, MX[inputs[1], isempty(values) ? inputs[2] : MX(C.DM(Float64.(values)))], true, false)))
+    grid, only(as_list(casadi.call(linear, MX[inputs[1], isempty(values) ? inputs[2] : MX(casadi.DM(Float64.(values)))], true, false)))
 end
 
 """
@@ -1135,12 +1135,12 @@ function fitted_coefficients(source::CSource, values::MX, m::Integer)
     @requires a !== nothing "the C code of CasADi has no fit of the B-spline coefficients"
     table = source.ints[a[5]]
     nrow, ncol = table[1], table[2]
-    pattern = C.Sparsity(nrow, ncol, table[3:3+ncol], table[4+ncol:end])
+    pattern = casadi.Sparsity(nrow, ncol, table[3:3+ncol], table[4+ncol:end])
     # The matrix is the table of real numbers that the statements give to the first argument of the routine.
     holder = match(Regex("\\b$(a[1]) = (\\w+);"), source.body)[1]
     matrix = source.reals[match(Regex("\\b$holder = (\\w+);"), source.body)[1]]
-    fitted = C.solve(MX(C.DM(pattern, C.DM(matrix))), C.transpose(C.reshape(values, m, nrow)))
-    C.vec(C.transpose(fitted))
+    fitted = casadi.solve(MX(casadi.DM(pattern, casadi.DM(matrix))), casadi.transpose(casadi.reshape(values, m, nrow)))
+    casadi.vec(casadi.transpose(fitted))
 end
 
 """
@@ -1154,26 +1154,26 @@ Each input and result of `f` holds, for each column of the original, that
 column followed by its derivative in each direction. CasADi differentiates the
 results.
 """
-function forward_columns(f::C.Function, inputs::Vector{MX}, results::Vector{MX}, directions::Int)
-    seeds = MX[MX.sym("d" * C.name_in(f, i - 1), C.sparsity(inputs[i])) for i in eachindex(inputs)]
-    slope(value) = reduce(+, (C.jtimes(value, inputs[i], seeds[i]) for i in eachindex(inputs) if C.nnz(C.sparsity(inputs[i])) > 0);
-                          init = MX(C.DM(zeros(size(value)...))))
-    name = C.name(f)
-    value_function = C.Function(name * "_value", inputs, results)
-    slope_function = C.Function(name * "_slope", MX[inputs; seeds], MX[slope(r) for r in results])
-    actual = MX[MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
+function forward_columns(f::casadi.Function, inputs::Vector{MX}, results::Vector{MX}, directions::Int)
+    seeds = MX[MX.sym("d" * casadi.name_in(f, i - 1), casadi.sparsity(inputs[i])) for i in eachindex(inputs)]
+    slope(value) = reduce(+, (casadi.jtimes(value, inputs[i], seeds[i]) for i in eachindex(inputs) if casadi.nnz(casadi.sparsity(inputs[i])) > 0);
+                          init = MX(casadi.DM(zeros(size(value)...))))
+    name = casadi.name(f)
+    value_function = casadi.Function(name * "_value", inputs, results)
+    slope_function = casadi.Function(name * "_slope", MX[inputs; seeds], MX[slope(r) for r in results])
+    actual = MX[MX.sym(casadi.name_in(f, i), casadi.sparsity_in(f, i)) for i in 0:casadi.n_in(f)-1]
     width = 1 + directions
     # Direction `d` of an input, with `d = 0` for the values: one column of each group of `width` columns.
-    chosen(i, d) = (n = size(inputs[i], 2); n == 0 || size(inputs[i], 1) == 0 ? inputs[i] * 0 : horzcat(MX[C.densify(actual[i])[:, (k-1)*width+d+1] for k in 1:n]))
-    empty_safe(i, d) = C.nnz(C.sparsity(inputs[i])) == 0 ? MX(C.sparsity(inputs[i])) : chosen(i, d)
+    chosen(i, d) = (n = size(inputs[i], 2); n == 0 || size(inputs[i], 1) == 0 ? inputs[i] * 0 : horzcat(MX[casadi.densify(actual[i])[:, (k-1)*width+d+1] for k in 1:n]))
+    empty_safe(i, d) = casadi.nnz(casadi.sparsity(inputs[i])) == 0 ? MX(casadi.sparsity(inputs[i])) : chosen(i, d)
     point = MX[empty_safe(i, 0) for i in eachindex(inputs)]
-    groups = [as_list(C.call(value_function, point, false, true))]
+    groups = [as_list(casadi.call(value_function, point, false, true))]
     for d in 1:directions
         # Loop invariant: `groups` holds the values and the derivatives in the directions before `d`.
-        push!(groups, as_list(C.call(slope_function, MX[point; [empty_safe(i, d) for i in eachindex(inputs)]], false, true)))
+        push!(groups, as_list(casadi.call(slope_function, MX[point; [empty_safe(i, d) for i in eachindex(inputs)]], false, true)))
     end
-    joined(o) = C.nnz(C.sparsity_out(f, o - 1)) == 0 ? MX(C.sparsity_out(f, o - 1)) :
-                C.project(horzcat(MX[C.densify(group[o])[:, k] for k in 1:size(results[o], 2) for group in groups]), C.sparsity_out(f, o - 1))
+    joined(o) = casadi.nnz(casadi.sparsity_out(f, o - 1)) == 0 ? MX(casadi.sparsity_out(f, o - 1)) :
+                casadi.project(horzcat(MX[casadi.densify(group[o])[:, k] for k in 1:size(results[o], 2) for group in groups]), casadi.sparsity_out(f, o - 1))
     actual, MX[joined(o) for o in eachindex(results)]
 end
 
@@ -1191,31 +1191,31 @@ controls, once per direction. With `outer > 0` forward directions, which a
 second-order derivative needs, the function is the forward derivative of that
 one (see `forward_columns`); `inputs` then have the columns of one direction.
 """
-function integrator_results(f::C.Function, inputs::Vector{MX}, lists, count::Int, nadj::Int, outer::Int)
-    shape_out(o) = (C.size1_out(f, o), C.size2_out(f, o) ÷ (1 + outer))
-    fitted(value, o) = outer == 0 ? C.project(C.reshape(value, shape_out(o)...), C.sparsity_out(f, o)) : C.reshape(value, shape_out(o)...)
+function integrator_results(f::casadi.Function, inputs::Vector{MX}, lists, count::Int, nadj::Int, outer::Int)
+    shape_out(o) = (casadi.size1_out(f, o), casadi.size2_out(f, o) ÷ (1 + outer))
+    fitted(value, o) = outer == 0 ? casadi.project(casadi.reshape(value, shape_out(o)...), casadi.sparsity_out(f, o)) : casadi.reshape(value, shape_out(o)...)
     results = MX[fitted(vertcat(lists[o+1]), o) for o in 0:2]
     if nadj > 0
         # A seed has one column per output time and direction, and so have the results for the controls; the
         # others have one column per direction.
-        value = vertcat(MX[C.vec(C.densify(r)) for r in results])
-        empty(i) = C.nnz(C.sparsity(inputs[i])) == 0
-        seed(a) = vertcat(MX[C.vec(horzcat(MX[C.densify(inputs[i])[:, (k-1)*nadj+a] for k in 1:count])) for i in 5:7 if !empty(i)])
+        value = vertcat(MX[casadi.vec(casadi.densify(r)) for r in results])
+        empty(i) = casadi.nnz(casadi.sparsity(inputs[i])) == 0
+        seed(a) = vertcat(MX[casadi.vec(horzcat(MX[casadi.densify(inputs[i])[:, (k-1)*nadj+a] for k in 1:count])) for i in 5:7 if !empty(i)])
         for (i, o) in ((1, 3), (2, 4), (3, 5), (4, 6))
             if empty(i)
-                push!(results, outer == 0 ? MX(C.sparsity_out(f, o)) : MX(shape_out(o)...))
+                push!(results, outer == 0 ? MX(casadi.sparsity_out(f, o)) : MX(shape_out(o)...))
                 continue
             end
-            slopes = MX[C.densify(C.jtimes(value, inputs[i], seed(a), true)) for a in 1:nadj]
+            slopes = MX[casadi.densify(casadi.jtimes(value, inputs[i], seed(a), true)) for a in 1:nadj]
             columns = i == 4 ? MX[slopes[a][:, k] for k in 1:count for a in 1:nadj] : slopes
-            push!(results, fitted(C.vec(horzcat(columns)), o))
+            push!(results, fitted(casadi.vec(horzcat(columns)), o))
         end
     else
-        append!(results, MX[MX(C.sparsity_out(f, o)) for o in 3:6])
+        append!(results, MX[MX(casadi.sparsity_out(f, o)) for o in 3:6])
     end
     outer > 0 && ((inputs, results) = forward_columns(f, inputs, results, outer))
-    g = C.Function(C.name(f), inputs, results, [C.name_in(f, i) for i in 0:C.n_in(f)-1], [C.name_out(f, o) for o in 0:C.n_out(f)-1])
-    @ensures all(sparsity_tuple(C.sparsity_out(g, o)) == sparsity_tuple(C.sparsity_out(f, o)) for o in 0:C.n_out(f)-1) "the written integration must have the results of the integrator \"$(C.name(f))\""
+    g = casadi.Function(casadi.name(f), inputs, results, [casadi.name_in(f, i) for i in 0:casadi.n_in(f)-1], [casadi.name_out(f, o) for o in 0:casadi.n_out(f)-1])
+    @ensures all(sparsity_tuple(casadi.sparsity_out(g, o)) == sparsity_tuple(casadi.sparsity_out(f, o)) for o in 0:casadi.n_out(f)-1) "the written integration must have the results of the integrator \"$(casadi.name(f))\""
     g
 end
 
@@ -1245,7 +1245,7 @@ between two output times.
 
 The function is checked against `f` on one evaluation.
 """
-function fixed_step_function(f::C.Function)
+function fixed_step_function(f::casadi.Function)
     bytes = serial_bytes(f)
     field(name) = serial_value(bytes, name)
     integer(name) = Int(field(name))::Int
@@ -1255,45 +1255,45 @@ function fixed_step_function(f::C.Function)
     # direction: the loop is written for that one, and CasADi differentiates it (`outer` directions). Without
     # adjoint sensitivities the directions are in the loop, with the forward derivative of the step.
     outer, nfwd = nadj > 0 ? (directions, 0) : (0, directions)
-    shape_in(i) = (C.size1_in(f, i), C.size2_in(f, i) ÷ (1 + outer))
+    shape_in(i) = (casadi.size1_in(f, i), casadi.size2_in(f, i) ÷ (1 + outer))
     nx1, nz1, np1, nu1, nv1 = integer("Integrator::nx1"), integer("Integrator::nz1"), integer("Integrator::np1"), integer("Integrator::nu1"),
                               integer("FixedStepIntegrator::nv1")
     t0 = Float64(field("Integrator::t0"))::Float64
     times, disc = Vector{Float64}(field("Integrator::tout"))::Vector{Float64}, Vector{Int}(field("FixedStepIntegrator::disc"))::Vector{Int}
-    step = C.get_function(f, "step")
-    forward = nfwd > 0 ? C.get_function(f, "fwd$(nfwd)_step") : nothing
-    inputs = MX[outer == 0 ? MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) : MX.sym(C.name_in(f, i), shape_in(i)...) for i in 0:C.n_in(f)-1]
-    dense(i) = C.vec(C.densify(inputs[i]))
+    step = casadi.get_function(f, "step")
+    forward = nfwd > 0 ? casadi.get_function(f, "fwd$(nfwd)_step") : nothing
+    inputs = MX[outer == 0 ? MX.sym(casadi.name_in(f, i), casadi.sparsity_in(f, i)) : MX.sym(casadi.name_in(f, i), shape_in(i)...) for i in 0:casadi.n_in(f)-1]
+    dense(i) = casadi.vec(casadi.densify(inputs[i]))
     first_part(v, n) = v[1:n]::MX
-    seeds(v, n) = C.reshape(v[n+1:n*(1+nfwd)]::MX, n, nfwd)
+    seeds(v, n) = casadi.reshape(v[n+1:n*(1+nfwd)]::MX, n, nfwd)
     x, p, controls = dense(1), dense(3), dense(4)
-    q = MX(C.DM(zeros(C.nnz_out(step, 2) * (1 + nfwd))))
+    q = MX(casadi.DM(zeros(casadi.nnz_out(step, 2) * (1 + nfwd))))
     # The collocation method starts its unknowns from the state at each point; the sensitivities of a first guess are not used.
-    v = nv1 == 0 ? MX(0, 1) : vertcat(MX[C.repmat(vertcat(MX[first_part(x, nx1), first_part(dense(2), nz1)]), nv1 ÷ (nx1 + nz1), 1); MX(C.DM(fill(NaN, nv1 * nfwd)))])
+    v = nv1 == 0 ? MX(0, 1) : vertcat(MX[casadi.repmat(vertcat(MX[first_part(x, nx1), first_part(dense(2), nz1)]), nv1 ÷ (nx1 + nz1), 1); MX(casadi.DM(fill(NaN, nv1 * nfwd)))])
     states, algebraic, quadratures = MX[], MX[], MX[]
     t, nu = t0, nu1 * (1 + nfwd)
     # One step with its sensitivities as a function of its own, so that the steps between two output times are a loop.
     # The state of the loop is one vector, because `fold` passes on its first argument only.
-    nx, nv, nq = C.size1(x), C.size1(v), C.size1(q)
-    one = let state = MX.sym("state", nx + nv + nq), t = MX.sym("t"), h = MX.sym("h"), p = MX.sym("p", C.size1(p)), u = MX.sym("u", nu)
+    nx, nv, nq = casadi.size1(x), casadi.size1(v), casadi.size1(q)
+    one = let state = MX.sym("state", nx + nv + nq), t = MX.sym("t"), h = MX.sym("h"), p = MX.sym("p", casadi.size1(p)), u = MX.sym("u", nu)
         xs, vs, qs = state[1:nx]::MX, state[nx+1:nx+nv]::MX, state[nx+nv+1:nx+nv+nq]::MX
         point = MX[t, h, first_part(xs, nx1), first_part(vs, nv1), first_part(p, np1), first_part(u, nu1)]
-        next = as_list(C.call(step, point, false, true))
+        next = as_list(casadi.call(step, point, false, true))
         if forward !== nothing
-            slopes = as_list(C.call(forward, MX[point; next; MX(1, 0); MX(1, 0); seeds(xs, nx1); seeds(vs, nv1); seeds(p, np1); seeds(u, nu1)], false, true))
-            next = MX[vertcat(MX[C.vec(next[o]), C.vec(slopes[o])]) for o in 1:3]
+            slopes = as_list(casadi.call(forward, MX[point; next; MX(1, 0); MX(1, 0); seeds(xs, nx1); seeds(vs, nv1); seeds(p, np1); seeds(u, nu1)], false, true))
+            next = MX[vertcat(MX[casadi.vec(next[o]), casadi.vec(slopes[o])]) for o in 1:3]
         end
-        C.Function("$(C.name(f))_step", MX[state, t, h, p, u], MX[vertcat(MX[C.vec(next[1]), C.vec(next[2]), qs + C.vec(next[3])])])
+        casadi.Function("$(casadi.name(f))_step", MX[state, t, h, p, u], MX[vertcat(MX[casadi.vec(next[1]), casadi.vec(next[2]), qs + casadi.vec(next[3])])])
     end
-    loops = Dict{Int,C.Function}()
+    loops = Dict{Int,casadi.Function}()
     for (k, t_next) in enumerate(times)
         # Loop invariant: `x`, `v` and `q` are the values at the time `t`, and the lists hold the results at the output times before it.
         nj = disc[k+1] - disc[k]
         h, start = (t_next - t) / nj, t      # the comprehension below reads `start`: capturing `t` would box it
         u = controls[(k-1)*nu+1:k*nu]
-        steps = get!(() -> nj == 1 ? one : C.fold(one, nj), loops, nj)
-        each(value) = C.repmat(value, 1, nj)
-        state = C.vec(only(as_list(C.call(steps, MX[vertcat(MX[x, v, q]), MX(C.DM(reshape([start + j * h for j in 0:nj-1], 1, nj))), each(MX(h)), each(p), each(u)], false, true))))
+        steps = get!(() -> nj == 1 ? one : casadi.fold(one, nj), loops, nj)
+        each(value) = casadi.repmat(value, 1, nj)
+        state = casadi.vec(only(as_list(casadi.call(steps, MX[vertcat(MX[x, v, q]), MX(casadi.DM(reshape([start + j * h for j in 0:nj-1], 1, nj))), each(MX(h)), each(p), each(u)], false, true))))
         x, v, q = state[1:nx], state[nx+1:nx+nv], state[nx+nv+1:nx+nv+nq]
         push!(states, x)
         push!(algebraic, vertcat(MX[v[(d+1)*nv1-nz1+1:(d+1)*nv1] for d in 0:nfwd]))
@@ -1301,9 +1301,9 @@ function fixed_step_function(f::C.Function)
         t = t_next
     end
     g = integrator_results(f, inputs, [states, algebraic, quadratures], length(times), nadj, outer)
-    values = C.DM[C.DM(C.sparsity_in(f, i), C.DM([0.37 + 0.11 * k / (1 + C.nnz_in(f, i)) for k in 1:C.nnz_in(f, i)])) for i in 0:C.n_in(f)-1]
-    nonzeros(r) = reduce(vcat, (Vector{Float64}(C.nonzeros(C.densify(x))) for x in r))
-    @ensures isapprox(nonzeros(g(values...)), nonzeros(f(values...)); rtol = 1e-9, atol = 1e-12, nans = true) "the written loop must agree with the integrator \"$(C.name(f))\" of CasADi"
+    values = casadi.DM[casadi.DM(casadi.sparsity_in(f, i), casadi.DM([0.37 + 0.11 * k / (1 + casadi.nnz_in(f, i)) for k in 1:casadi.nnz_in(f, i)])) for i in 0:casadi.n_in(f)-1]
+    nonzeros(r) = reduce(vcat, (Vector{Float64}(casadi.nonzeros(casadi.densify(x))) for x in r))
+    @ensures isapprox(nonzeros(g(values...)), nonzeros(f(values...)); rtol = 1e-9, atol = 1e-12, nans = true) "the written loop must agree with the integrator \"$(casadi.name(f))\" of CasADi"
     g
 end
 
@@ -1333,7 +1333,7 @@ The table keeps `g` with its copy, because the key is the identity of `g`.
 CasADi gives the identity of a freed function to a later function, and some
 functions in the table are made during the read and have no other owner.
 """
-callee_copy(g::C.Function, expand::Bool, callees) = first(get!(() -> (read_callee(g, expand, callees), g), callees, C.__hash__(g)))
+callee_copy(g::casadi.Function, expand::Bool, callees) = first(get!(() -> (read_callee(g, expand, callees), g), callees, casadi.__hash__(g)))
 
 """
     fitted(g, switch) -> CasADiCodegen.Function
@@ -1341,21 +1341,21 @@ callee_copy(g::C.Function, expand::Bool, callees) = first(get!(() -> (read_calle
 Return the branch `g` of a switch with the sparsity patterns of the switch:
 `g` itself when they agree, else a function that calls `g` and projects.
 """
-function fitted(g::C.Function, switch::C.Function)
-    agree = all(sparsity_tuple(C.sparsity_in(g, i)) == sparsity_tuple(C.sparsity_in(switch, i + 1)) for i in 0:C.n_in(g)-1) &&
-            all(sparsity_tuple(C.sparsity_out(g, j)) == sparsity_tuple(C.sparsity_out(switch, j)) for j in 0:C.n_out(g)-1)
+function fitted(g::casadi.Function, switch::casadi.Function)
+    agree = all(sparsity_tuple(casadi.sparsity_in(g, i)) == sparsity_tuple(casadi.sparsity_in(switch, i + 1)) for i in 0:casadi.n_in(g)-1) &&
+            all(sparsity_tuple(casadi.sparsity_out(g, j)) == sparsity_tuple(casadi.sparsity_out(switch, j)) for j in 0:casadi.n_out(g)-1)
     agree && return g
-    arguments = [MX.sym("i$i", C.sparsity_in(switch, i + 1)) for i in 0:C.n_in(g)-1]
-    results = C.call(g, arguments, false, false)
-    Front.Function(C.name(g), arguments, [C.project(results[j+1], C.sparsity_out(switch, j)) for j in 0:C.n_out(g)-1])
+    arguments = [MX.sym("i$i", casadi.sparsity_in(switch, i + 1)) for i in 0:casadi.n_in(g)-1]
+    results = casadi.call(g, arguments, false, false)
+    Front.Function(casadi.name(g), arguments, [casadi.project(results[j+1], casadi.sparsity_out(switch, j)) for j in 0:casadi.n_out(g)-1])
 end
 
-function read_switch(switch::C.Function, expand::Bool, callees)
-    info, name = C.info(switch), C.name(switch)
+function read_switch(switch::casadi.Function, expand::Bool, callees)
+    info, name = casadi.info(switch), casadi.name(switch)
     branch(g) = callee_copy(fitted(g, switch), expand, callees)
     cases, default = Any[branch(g) for g in info["f"]], branch(info["f_def"])
-    nnz_in = [C.nnz_in(switch, i) for i in 0:C.n_in(switch)-1]
-    nnz_out = [C.nnz_out(switch, j) for j in 0:C.n_out(switch)-1]
+    nnz_in = [casadi.nnz_in(switch, i) for i in 0:casadi.n_in(switch)-1]
+    nnz_out = [casadi.nnz_out(switch, j) for j in 0:casadi.n_out(switch)-1]
     for alg in [cases; default]
         @requires !(alg isa JuliaCall) "function \"$name\": a branch that is a Julia function itself is not supported; call it from a CasADi function"
     end
@@ -1386,45 +1386,45 @@ Return the copy of a CasADi map. A map of a Julia function, which has no frame
 in the work vector, is unrolled instead: CasADi writes it again as a function
 that calls the body once per block.
 """
-function read_map(map::C.Function, expand::Bool, callees)
-    info, name = C.info(map), C.name(map)
-    f, n = info["f"]::C.Function, Int(info["n"])
+function read_map(map::casadi.Function, expand::Bool, callees)
+    info, name = casadi.info(map), casadi.name(map)
+    f, n = info["f"]::casadi.Function, Int(info["n"])
     body = callee_copy(f, expand, callees)
-    body isa JuliaCall && return read_callee(C.map(f, n, "unroll"), expand, callees)
-    nnz_in = [C.nnz_in(map, i) for i in 0:C.n_in(map)-1]
-    nnz_out = [C.nnz_out(map, j) for j in 0:C.n_out(map)-1]
+    body isa JuliaCall && return read_callee(casadi.map(f, n, "unroll"), expand, callees)
+    nnz_in = [casadi.nnz_in(map, i) for i in 0:casadi.n_in(map)-1]
+    nnz_out = [casadi.nnz_out(map, j) for j in 0:casadi.n_out(map)-1]
     @ensures nnz_in == n .* body.nnz_in && nnz_out == n .* body.nnz_out "map \"$name\": each input and output must hold $n blocks of the body"
     MapCall(name, body, n, nnz_in, nnz_out)
 end
 
-function read_callee(callee::C.Function, expand::Bool, callees)
-    C.is_a(callee, "SXFunction") && return Algorithm(callee)
-    if C.class_name(callee) == "CallbackInternal"
+function read_callee(callee::casadi.Function, expand::Bool, callees)
+    casadi.is_a(callee, "SXFunction") && return Algorithm(callee)
+    if casadi.class_name(callee) == "CallbackInternal"
         # A callback without a record was made with the type of the front end.
-        haskey(JULIA_CALLS, C.__hash__(callee)) || refuse(callee)
-        return JULIA_CALLS[C.__hash__(callee)][1]
+        haskey(JULIA_CALLS, casadi.__hash__(callee)) || refuse(callee)
+        return JULIA_CALLS[casadi.__hash__(callee)][1]
     end
-    C.class_name(callee) in ("Map", "ThreadMap", "OmpMap") && return read_map(callee, expand, callees)
-    C.class_name(callee) == "Switch" && return read_switch(callee, expand, callees)
-    C.class_name(callee) in INTERPOLANT_CLASSES && return read_callee(interpolant_function(callee), expand, callees)
-    C.class_name(callee) == "External" && return external_call(callee)
+    casadi.class_name(callee) in ("Map", "ThreadMap", "OmpMap") && return read_map(callee, expand, callees)
+    casadi.class_name(callee) == "Switch" && return read_switch(callee, expand, callees)
+    casadi.class_name(callee) in INTERPOLANT_CLASSES && return read_callee(interpolant_function(callee), expand, callees)
+    casadi.class_name(callee) == "External" && return external_call(callee)
     # A solver that the user selected has priority over the method of CasADi. Its reader calls the SciML
     # extension, so it runs behind a barrier: loading the extension does not invalidate this method.
-    if C.class_name(callee) in ROOTFINDER_CLASSES || C.class_name(callee) in INTEGRATOR_CLASSES
-        replaced = Base.inferencebarrier(C.class_name(callee) in ROOTFINDER_CLASSES ? solver_rootfinder : solver_integrator)(callee)
-        replaced === nothing || return read_callee(replaced::C.Function, expand, callees)
+    if casadi.class_name(callee) in ROOTFINDER_CLASSES || casadi.class_name(callee) in INTEGRATOR_CLASSES
+        replaced = Base.inferencebarrier(casadi.class_name(callee) in ROOTFINDER_CLASSES ? solver_rootfinder : solver_integrator)(callee)
+        replaced === nothing || return read_callee(replaced::casadi.Function, expand, callees)
     end
-    if C.is_a(callee, "Nlpsol") || C.is_a(callee, "Conic")
-        replaced = Base.inferencebarrier(C.is_a(callee, "Nlpsol") ? solver_optimization : solver_conic)(callee)
-        replaced === nothing || return read_callee(replaced::C.Function, expand, callees)
+    if casadi.is_a(callee, "Nlpsol") || casadi.is_a(callee, "Conic")
+        replaced = Base.inferencebarrier(casadi.is_a(callee, "Nlpsol") ? solver_optimization : solver_conic)(callee)
+        replaced === nothing || return read_callee(replaced::casadi.Function, expand, callees)
     end
-    C.class_name(callee) == "Newton" && return newton_call(callee)
-    if C.class_name(callee) in FIXED_STEP_CLASSES
+    casadi.class_name(callee) == "Newton" && return newton_call(callee)
+    if casadi.class_name(callee) in FIXED_STEP_CLASSES
         written = fixed_step_function(callee)
         written === nothing && refuse(callee)
         return read_callee(written, expand, callees)
     end
-    C.is_a(callee, "MXFunction") || refuse(callee)
+    casadi.is_a(callee, "MXFunction") || refuse(callee)
     expanded = expand ? expanded_algorithm(callee) : nothing
     expanded === nothing ? read_mx(callee, expand, callees) : expanded
 end

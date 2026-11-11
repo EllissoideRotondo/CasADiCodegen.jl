@@ -23,7 +23,7 @@ derivative of `x`, and `"alg"`, the algebraic equations `0 = alg`, of the size o
 `"x"`, `"z"` and `"t"` are symbols or concatenations of symbols. `"p"` and `"t"` are
 optional, and so are `"z"` and `"alg"` together.
 
-The result `dae` has the same form, and `CasADiCodegen.C.integrator` with a DAE plugin
+The result `dae` has the same form, and `casadi.integrator` with a DAE plugin
 such as `"idas"` accepts it. Equation `alg[i]` is replaced by its time derivative of
 order `differentiations[i]`, in which the derivative of `x` is replaced by `ode`. An
 algebraic state `z[j]` whose derivative enters these equations becomes a differential
@@ -92,18 +92,18 @@ function reduce_index(dae::AbstractDict{<:AbstractString}; baumgarte_pole::Real 
     @requires haskey(dae, "z") == haskey(dae, "alg") "reduce_index: the DAE must have both \"z\" and \"alg\", or neither"
     X = typeof(dae["x"])
     @requires X in (SX, MX) && all(v -> v isa X, values(dae)) "reduce_index: the values of the DAE must all be SX or all MX"
-    @requires all(v -> C.is_column(v) && C.is_dense(v), values(dae)) "reduce_index: each value of the DAE must be a dense column vector"
+    @requires all(v -> casadi.is_column(v) && casadi.is_dense(v), values(dae)) "reduce_index: each value of the DAE must be a dense column vector"
     @requires isfinite(baumgarte_pole) && baumgarte_pole <= 0 "reduce_index: baumgarte_pole must be finite and not positive, not $baumgarte_pole"
     x, f = dae["x"], dae["ode"]
     z, g = get(dae, "z", X(0, 1)), get(dae, "alg", X(0, 1))
-    @requires C.is_valid_input(x) && C.is_valid_input(z) "reduce_index: \"x\" and \"z\" must be symbols"
+    @requires casadi.is_valid_input(x) && casadi.is_valid_input(z) "reduce_index: \"x\" and \"z\" must be symbols"
     @requires size(f, 1) == size(x, 1) "reduce_index: \"ode\" has $(size(f, 1)) elements, \"x\" has $(size(x, 1))"
     @requires size(g, 1) == size(z, 1) "reduce_index: \"alg\" has $(size(g, 1)) elements, \"z\" has $(size(z, 1))"
-    @requires !haskey(dae, "t") || (size(dae["t"]) == (1, 1) && C.is_symbolic(dae["t"])) "reduce_index: \"t\" must be a scalar symbol"
+    @requires !haskey(dae, "t") || (size(dae["t"]) == (1, 1) && casadi.is_symbolic(dae["t"])) "reduce_index: \"t\" must be a scalar symbol"
     nz = size(z, 1)
     nz == 0 && return (; dae = Dict{String,X}(dae), invariants = X(0, 1), differentiations = Int[], index = 0)
 
-    rows(e, v) = dependencies(C.jacobian_sparsity(e, v))
+    rows(e, v) = dependencies(casadi.jacobian_sparsity(e, v))
     fx, fz, gx, gz = rows(f, x), rows(f, z), rows(g, x), rows(g, z)
     check_structure(fx, fz, gx, gz)
     graph = pantelides(fx, fz, gx, gz)
@@ -115,8 +115,8 @@ end
 
 "The column indices of each row of `pattern`, sorted, from 1."
 function dependencies(pattern)
-    deps = [Int[] for _ in 1:C.size1(pattern)]
-    r, c = C.get_triplet(pattern)
+    deps = [Int[] for _ in 1:casadi.size1(pattern)]
+    r, c = casadi.get_triplet(pattern)
     for (i, j) in zip(r, c)
         push!(deps[i+1], j + 1)
     end
@@ -284,13 +284,13 @@ Return a scalar symbol for each element of the column of symbols `v`. The elemen
 vector symbol are not symbols, so they get new ones, named as the elements of an SX vector
 symbol (`name_0`, `name_1`, ...), and `fresh` is true.
 """
-function scalar_symbols(v::C.MX)
-    parts = C.vertsplit(v)
-    all(C.is_symbolic, parts) && return (parts, false)
-    base = C.name(v)
-    ([C.MX.sym("$(base)_$(k - 1)") for k in 1:size(v, 1)], true)
+function scalar_symbols(v::casadi.MX)
+    parts = casadi.vertsplit(v)
+    all(casadi.is_symbolic, parts) && return (parts, false)
+    base = casadi.name(v)
+    ([casadi.MX.sym("$(base)_$(k - 1)") for k in 1:size(v, 1)], true)
 end
-scalar_symbols(v::C.SX) = (C.vertsplit(v), false)
+scalar_symbols(v::casadi.SX) = (casadi.vertsplit(v), false)
 
 """
     reduced_dae(dae, graph, X, pole) -> NamedTuple
@@ -304,21 +304,21 @@ function reduced_dae(dae, graph, X, pole)
     nz = size(z, 1)
     t = get(dae, "t", nothing)
     zs, fresh = scalar_symbols(z)
-    fresh && ((f, g) = (C.substitute(f, z, vertcat(zs)), C.substitute(g, z, vertcat(zs))))
+    fresh && ((f, g) = (casadi.substitute(f, z, vertcat(zs)), casadi.substitute(g, z, vertcat(zs))))
     syms = Vector{X}(undef, length(var_base))
     syms[1:nz] = zs
     for j in eachindex(var_der)
-        var_der[j] != 0 && (syms[var_der[j]] = X.sym("d" * C.name(syms[j])))
+        var_der[j] != 0 && (syms[var_der[j]] = X.sym("d" * casadi.name(syms[j])))
     end
     exprs = Vector{X}(undef, length(eq_base))
-    exprs[1:nz] = C.vertsplit(g)
+    exprs[1:nz] = casadi.vertsplit(g)
     known = [j for j in eachindex(var_der) if var_der[j] != 0]
     time, slope = t === nothing ? (X[], X[]) : ([t], [X(1)])
     arguments = vertcat(vcat([x], syms[known], time))
     seeds = vertcat(vcat([f], syms[var_der[known]], slope))
     for order in 1:maximum(eq_order)
         targets = [e for e in eachindex(eq_der) if eq_der[e] != 0 && eq_order[e] == order - 1]
-        derivatives = C.vertsplit(Front.jtimes(vertcat(exprs[targets]), arguments, seeds))
+        derivatives = casadi.vertsplit(Front.jtimes(vertcat(exprs[targets]), arguments, seeds))
         exprs[eq_der[targets]] = derivatives
     end
     chain(start, der) = (c = [start]; while der[c[end]] != 0; push!(c, der[c[end]]); end; c)
@@ -335,7 +335,7 @@ function reduced_dae(dae, graph, X, pole)
     haskey(dae, "p") && (result["p"] = dae["p"])
     t === nothing || (result["t"] = t)
     invariants = vertcat(reduce(vcat, (exprs[c[1:end-1]] for c in eq_chains); init = X[]))
-    jac = dependencies(C.jacobian_sparsity(result["alg"], algebraic))
+    jac = dependencies(casadi.jacobian_sparsity(result["alg"], algebraic))
     col_of = maximum_matching(jac, nz)
     if !all(!iszero, col_of)
         names = ["alg[$i]" for i in overdetermined(jac, col_of)]

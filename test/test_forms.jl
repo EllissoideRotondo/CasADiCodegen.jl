@@ -24,8 +24,8 @@ function dense_input(sp, nz)
     ncol == 1 ? vec(M) : M
 end
 
-forms_expected(f, nz) = [dense_values(C.sparsity_out(f, j - 1), r) for (j, r) in enumerate(mx_casadi(f, nz))]
-forms_inputs(f, nz) = Tuple(dense_input(C.sparsity_in(f, i - 1), v) for (i, v) in enumerate(nz))
+forms_expected(f, nz) = [dense_values(casadi.sparsity_out(f, j - 1), r) for (j, r) in enumerate(mx_casadi(f, nz))]
+forms_inputs(f, nz) = Tuple(dense_input(casadi.sparsity_in(f, i - 1), v) for (i, v) in enumerate(nz))
 static(a::AbstractVector) = SVector{length(a)}(a)
 static(a::AbstractMatrix) = SMatrix{size(a)...}(a)
 mutable_static(a::AbstractVector) = MVector{length(a),Float64}(undef)
@@ -57,9 +57,9 @@ const FORM_CASES = ((SX, (;)), (SX, (; chunk_size = 3)), (MX, (; expand = false)
 
 # Sparse input, dense input, and dense, sparse and matrix outputs.
 function forms_function(T)
-    L, v = T.sym("L", C.Sparsity.lower(3)), T.sym("v", 2)
+    L, v = T.sym("L", casadi.Sparsity.lower(3)), T.sym("v", 2)
     y = vcat(L[1, 1] * v[1] + L[3, 2], sin(v[2]))
-    CasADiCodegen.Function("f", [L, v], [y, 2 * L + L * v[1], C.transpose(L), C.mtimes(v, C.transpose(v))])
+    CasADiCodegen.Function("f", [L, v], [y, 2 * L + L * v[1], casadi.transpose(L), casadi.mtimes(v, casadi.transpose(v))])
 end
 
 @testset "output forms: values of CasADi" begin
@@ -222,7 +222,7 @@ end
 # values, which Julia refused to parse ("expression too large"). A static argument then
 # gets ordinary arrays and one warning per function, and not a silent change of type.
 @testset "output forms: limit of static arrays" begin
-    diagonal(n) = (x = SX.sym("x", n); CasADiCodegen.Function("diagonal", [x], [C.jacobian(x .^ 2, x)]))
+    diagonal(n) = (x = SX.sym("x", n); CasADiCodegen.Function("diagonal", [x], [casadi.jacobian(x .^ 2, x)]))
     g = build_function(diagonal(32); expression = Val{false})[1]     # 1024 elements
     @test (@test_logs g(SVector{32}(1.0:32.0))) isa SMatrix{32,32,Float64}
 
@@ -244,19 +244,19 @@ end
 function masked_function(T, mask)
     rows = [mod(k - 1, 3) for k in 1:9 if mask[k]]
     cols = [div(k - 1, 3) for k in 1:9 if mask[k]]
-    X, v = T.sym("X", C.Sparsity.triplet(3, 3, rows, cols)), T.sym("v", 3)
+    X, v = T.sym("X", casadi.Sparsity.triplet(3, 3, rows, cols)), T.sym("v", 3)
     # The second output is full, because X + 1 is not zero at a structural zero. Each operation is
     # rounded correctly, so that a sum that cancels cannot enlarge a difference between two libraries.
-    CasADiCodegen.Function("f", [X, v], [C.mtimes(X, v), X * 3 + (X + 1) * v[2], C.transpose(X)])
+    CasADiCodegen.Function("f", [X, v], [casadi.mtimes(X, v), X * 3 + (X + 1) * v[2], casadi.transpose(X)])
 end
 
 "The arrays of `expected` with a sparse matrix at each sparse pattern, and the same for the inputs."
-sparse_outputs(f, expected) = Tuple(is_sparse_pattern(C.sparsity_out(f, j - 1)) ? SparseMatrixCSC(C.sparsity_out(f, j - 1)) : fill(NaN, size(e))
+sparse_outputs(f, expected) = Tuple(is_sparse_pattern(casadi.sparsity_out(f, j - 1)) ? SparseMatrixCSC(casadi.sparsity_out(f, j - 1)) : fill(NaN, size(e))
                                     for (j, e) in enumerate(expected))
-sparse_inputs(f, nz) = Tuple(is_sparse_pattern(C.sparsity_in(f, i - 1)) ?
-                             (S = SparseMatrixCSC(C.sparsity_in(f, i - 1)); nonzeros(S) .= v; S) : dense_values(C.sparsity_in(f, i - 1), v)
+sparse_inputs(f, nz) = Tuple(is_sparse_pattern(casadi.sparsity_in(f, i - 1)) ?
+                             (S = SparseMatrixCSC(casadi.sparsity_in(f, i - 1)); nonzeros(S) .= v; S) : dense_values(casadi.sparsity_in(f, i - 1), v)
                              for (i, v) in enumerate(nz))
-is_sparse_pattern(sp) = 0 < C.nnz(sp) < C.size1(sp) * C.size2(sp)
+is_sparse_pattern(sp) = 0 < casadi.nnz(sp) < casadi.size1(sp) * casadi.size2(sp)
 
 function sparse_agrees(f, nz; kwargs...)
     expected = forms_expected(f, nz)
@@ -275,7 +275,7 @@ end
     end
     f = forms_function(SX)
     nz = mx_inputs(f)
-    S = SparseMatrixCSC(C.sparsity_out(f, 1))
+    S = SparseMatrixCSC(casadi.sparsity_out(f, 1))
     @test S isa SparseMatrixCSC{Float64,Int} && size(S) == (3, 3) && nnz(S) == 6 && iszero(S)
 
     # No allocation: the function works on the stored values.
@@ -303,7 +303,7 @@ end
     Base.invokelatest((o, a) -> src.Gen.f!(o, a), out, x)
     @test all(all(close_enough.(Array(a), e)) for (a, e) in zip(out, forms_expected(f, nz)))
     a = SX.sym("a", 2)
-    dense = sprint(io -> generate_julia(CasADiCodegen.Function("d", [a], [a * 2, C.mtimes(sin.(a), C.transpose(a))]), io))
+    dense = sprint(io -> generate_julia(CasADiCodegen.Function("d", [a], [a * 2, casadi.mtimes(sin.(a), casadi.transpose(a))]), io))
     @test !occursin("SparseArrays", dense) && !occursin("stored", dense)
 end
 
@@ -315,7 +315,7 @@ end
     f = CasADiCodegen.Function("j", [x], [CasADiCodegen.jacobian(vcat([x[k]^2 + (k > 1 ? x[k-1] : 0.0) for k in 1:n]...), x)])
     _, g! = build_function(f; expression = Val{false})
     h! = build_function(f; expression = Val{false}, nonzeros = true)
-    J, v = SparseMatrixCSC(C.sparsity_out(f, 0)), rand(n)
+    J, v = SparseMatrixCSC(casadi.sparsity_out(f, 0)), rand(n)
     g!((J,), (v,))
     @test nonzeros(J) == h!((zeros(nnz(J)),), (v,))[1]
     fastest(call) = minimum(@elapsed(for _ in 1:20; call(); end) for _ in 1:50)
@@ -356,7 +356,7 @@ end
     # No form of the split code allocates memory: the work vector belongs to the task.
     nonzero_form = build_function(f; expression = Val{false}, chunk_size = 3, nonzeros = true)
     _, inplace = build_function(f; expression = Val{false}, chunk_size = 3)
-    res_nz, res = Tuple(zeros(C.nnz(sp)) for sp in C.sparsity_out.(Ref(f), 0:3)), Tuple(zeros(size(e)) for e in expected)
+    res_nz, res = Tuple(zeros(casadi.nnz(sp)) for sp in casadi.sparsity_out.(Ref(f), 0:3)), Tuple(zeros(size(e)) for e in expected)
     arg_nz, arg = Tuple(nz), Tuple(forms_inputs(f, nz))
     nonzero_form(res_nz, arg_nz); inplace(res, arg)
     @test (@allocated nonzero_form(res_nz, arg_nz)) == 0
@@ -390,8 +390,8 @@ end
     # A matrix function that calls a scalar function, with patterns that have structural zeros.
     a = SX.sym("a", 2)
     inner = CasADiCodegen.Function("inner", [a], [vcat(a[1] * a[2], sin(a[1]))])
-    L, v = MX.sym("L", C.Sparsity.lower(3)), MX.sym("v", 2)
-    f = CasADiCodegen.Function("f", [L, v], [inner(v) + L[1, 1], 2 * L + L * v[1], C.mtimes(v, C.transpose(inner(v)))])
+    L, v = MX.sym("L", casadi.Sparsity.lower(3)), MX.sym("v", 2)
+    f = CasADiCodegen.Function("f", [L, v], [inner(v) + L[1, 1], 2 * L + L * v[1], casadi.mtimes(v, casadi.transpose(inner(v)))])
     nz = mx_inputs(f)
     expected = forms_expected(f, nz)
     x = forms_inputs(f, nz)

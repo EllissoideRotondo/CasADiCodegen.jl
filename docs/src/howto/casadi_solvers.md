@@ -13,7 +13,7 @@ import SciMLBase
 x, mu = MX.sym("x", 4), MX.sym("mu")
 r3 = (x[1]^2 + x[2]^2)^1.5
 ode = vcat(x[3], x[4], -mu * x[1] / r3, -mu * x[2] / r3)
-cv = CasADiCodegen.C.integrator("cv", "cvodes", Dict("x" => x, "p" => mu, "ode" => ode), 0.0, [1.0, 2.0, 3.0])
+cv = casadi.integrator("cv", "cvodes", Dict("x" => x, "p" => mu, "ode" => ode), 0.0, [1.0, 2.0, 3.0])
 nothing # hide
 ```
 
@@ -53,7 +53,7 @@ the package generates code for them; an override replaces them by a SciML solver
 name and class:
 
 ```julia
-R = CasADiCodegen.C.integrator("R", "rk", Dict("x" => x, "p" => mu, "ode" => ode), 0.0, 1.0)
+R = casadi.integrator("R", "rk", Dict("x" => x, "p" => mu, "ode" => ode), 0.0, 1.0)
 solvers = Solvers(overrides = (Solver(R, Vern9(); abstol = 1e-12),))
 
 import Ipopt, OptimizationMOI
@@ -93,19 +93,19 @@ For a ball that bounces with the restitution `e`:
 h, v, e = MX.sym("h"), MX.sym("v"), MX.sym("e")             # height, speed, restitution
 model = Dict("x" => vcat(h, v), "p" => e, "ode" => vcat(v, -9.81), "zero" => h)
 bounce = CasadiFunction("transition", Dict("x" => vcat(h, v), "p" => e, "post_x" => vcat(h, -e * v)),
-                        CasADiCodegen.C.event_in(), CasADiCodegen.C.event_out())
-ball = CasADiCodegen.C.integrator("ball", "cvodes", model, 0.0, [0.5, 1.0, 2.0], Dict("transition" => bounce))
+                        casadi.event_in(), casadi.event_out())
+ball = casadi.integrator("ball", "cvodes", model, 0.0, [0.5, 1.0, 2.0], Dict("transition" => bounce))
 ```
 
 CasADi differentiates such an integrator by forward directions only, so take `jacobian`
-of an expression, which is dense, since `CasADiCodegen.C.jacobian(F)` of a function that
+of an expression, which is dense, since `casadi.jacobian(F)` of a function that
 holds it throws:
 
 ```julia
 s0, q = MX.sym("s0", 2), MX.sym("q")
-final = CasADiCodegen.C.vec(ball(Dict("x0" => s0, "p" => q))["xf"])
+final = casadi.vec(ball(Dict("x0" => s0, "p" => q))["xf"])
 J = jacobian(final, vcat(s0, q))
-f = CasadiFunction("f", [s0, q], [final, CasADiCodegen.C.densify(J)])
+f = CasadiFunction("f", [s0, q], [final, casadi.densify(J)])
 ```
 
 With algebraic states, the algebraic equations are solved again after each transition.
@@ -133,12 +133,12 @@ per output time. A model of a `DaeBuilder` whose variables are scalars gives a s
 indexed by name:
 
 ```@example solvers
-dae = CasADiCodegen.C.DaeBuilder("decay")
-y = CasADiCodegen.C.add(dae, "y", "local", "continuous")
-k = CasADiCodegen.C.add(dae, "k", "parameter", "tunable")
-CasADiCodegen.C.eq(dae, CasADiCodegen.C.der(dae, y), -k * y)
-CasADiCodegen.C.set_start(dae, "y", 1.0)
-CasADiCodegen.C.set_start(dae, "k", 0.5)
+dae = casadi.DaeBuilder("decay")
+y = casadi.add(dae, "y", "local", "continuous")
+k = casadi.add(dae, "k", "parameter", "tunable")
+casadi.eq(dae, casadi.der(dae, y), -k * y)
+casadi.set_start(dae, "y", 1.0)
+casadi.set_start(dae, "k", 0.5)
 solution = SciMLBase.solve(SciMLBase.ODEProblem(dae, (0.0, 2.0)), Vern9(); abstol = 1e-12, reltol = 1e-12)
 solution[:y][end] ≈ exp(-1.0)
 ```

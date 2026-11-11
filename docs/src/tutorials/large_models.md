@@ -35,7 +35,7 @@ the temperature `y` of the middle cell, is an observed variable of the solution 
 ```@example large
 heat = CasadiFunction("heat", [x, vcat(k, c, uin)], [vcat(equations...), x[N÷2]],
                       ["x", "p"], ["rhs", "y"])
-CasADiCodegen.C.n_instructions(heat)
+casadi.n_instructions(heat)
 ```
 
 The number of instructions grows in proportion to `N`, and the generated code has no loop.

@@ -28,7 +28,7 @@ pull2(r, m) = ([0.0 m[1]; 0.0 0.0; m[1] 0.0; 0.0 2.0], [r[2]; 0.0; r[1]; 0.0;;],
 end
 
 struct PlainCallback <: Callback end
-C.eval_(::PlainCallback, arg) = [arg[1]]
+casadi.eval_(::PlainCallback, arg) = [arg[1]]
 
 const DRAG_X = [0.7, -1.3, 0.4]
 
@@ -36,10 +36,10 @@ emitted(f, res, arg; kwargs...) = build_function(f; nonzeros = true, expression 
 
 @testset "a Julia function is a CasADi function" begin
     drag = callback(CallbackModels.drag, "drag", (3,), (2,))
-    @test C.nonzeros(drag(C.DM(DRAG_X))) == CallbackModels.drag(DRAG_X)
+    @test casadi.nonzeros(drag(casadi.DM(DRAG_X))) == CallbackModels.drag(DRAG_X)
     v = MX.sym("v", 3)
     f = CasADiCodegen.Function("f", [v], [2 * drag(v * 3)])
-    @test C.nonzeros(f(C.DM(DRAG_X))) == 2 * CallbackModels.drag(3 * DRAG_X)
+    @test casadi.nonzeros(f(casadi.DM(DRAG_X))) == 2 * CallbackModels.drag(3 * DRAG_X)
     @test emitted(f, [zeros(2)], (DRAG_X,))[1] == 2 * CallbackModels.drag(3 * DRAG_X)
     @test emitted(f, [zeros(2)], (DRAG_X,); expand = false, chunk_size = 1)[1] == 2 * CallbackModels.drag(3 * DRAG_X)
 end
@@ -54,7 +54,7 @@ end
     expected = CallbackModels.mix(M, DRAG_X)
     @test emitted(f, [zeros(2)], (vec(M), DRAG_X))[1] == expected[1] .+ expected[2]
     @test emitted(g, [zeros(1)], (vec(M), DRAG_X))[1] == 2 * expected[2]
-    @test casadi_nonzeros(f(C.DM(M), C.DM(DRAG_X)))[1] == expected[1] .+ expected[2]
+    @test casadi_nonzeros(f(casadi.DM(M), casadi.DM(DRAG_X)))[1] == expected[1] .+ expected[2]
 end
 
 @testset "Jacobian from a Julia function" begin
@@ -62,7 +62,7 @@ end
     v = MX.sym("v", 3)
     f = CasADiCodegen.Function("f", [v], [jacobian(drag(2 * v), v)])
     expected = 2 * CallbackModels.drag_jacobian(2 * DRAG_X)
-    @test reshape(C.nonzeros(f(C.DM(DRAG_X))), 2, 3) == expected
+    @test reshape(casadi.nonzeros(f(casadi.DM(DRAG_X))), 2, 3) == expected
     @test reshape(emitted(f, [zeros(6)], (DRAG_X,))[1], 2, 3) == expected
 end
 
@@ -72,7 +72,7 @@ end
     y = drag(v)
     f = CasADiCodegen.Function("f", [v], [jacobian(y, v)])
     @test reshape(emitted(f, [zeros(6)], (DRAG_X,))[1], 2, 3) ≈ CallbackModels.drag_jacobian(DRAG_X)
-    @test reshape(C.nonzeros(f(C.DM(DRAG_X))), 2, 3) ≈ CallbackModels.drag_jacobian(DRAG_X)
+    @test reshape(casadi.nonzeros(f(casadi.DM(DRAG_X))), 2, 3) ≈ CallbackModels.drag_jacobian(DRAG_X)
     # Second derivatives: the backend differentiates its own Jacobian.
     h = CasADiCodegen.Function("h", [v], [jacobian(jacobian(y[1], v), v)])
     x = DRAG_X
@@ -95,11 +95,11 @@ end
     f = CasADiCodegen.Function("f", [t], orders)
     tv = 0.3
     expected = [M.curve([2tv]), 2 * M.curve1([2tv]), 4 * M.curve2([2tv]), 8 * M.curve3([2tv])]
-    @test all(C.nonzeros(r) ≈ e for (r, e) in zip(f(C.DM(tv)), expected))
+    @test all(casadi.nonzeros(r) ≈ e for (r, e) in zip(f(casadi.DM(tv)), expected))
     @test all(emitted(f, [zeros(3) for _ in 1:4], ([tv],)) .≈ expected)
     # The chain ends: one more derivative has no function.
     short = callback(M.curve, "short", (1,), (3,); jacobian = M.curve1)
-    @test_throws C.SwigError jacobian(jacobian(short(t), t), t)
+    @test_throws casadi.SwigError jacobian(jacobian(short(t), t), t)
     # A written module calls each function of the chain by its name.
     text = sprint(io -> generate_julia(f, io; module_name = :Gen))
     @test occursin("checked(Main.CallbackModels.curve3,", text)
@@ -130,7 +130,7 @@ end
     y = LinearAlgebra.dot(c, x) * x + sin.(c) + mix(A, curve(t) + x)[2] * x
     f = CasADiCodegen.Function("f", [x, t, A], [y, jacobian(y, vcat(x, t)), mix(A, x)[1]])
     xv, tv, Av = DRAG_X, [0.3], [1.0 2.0 3.0; -1.0 0.5 2.0]
-    expected = casadi_nonzeros(f(C.DM(xv), C.DM(tv), C.DM(Av)))
+    expected = casadi_nonzeros(f(casadi.DM(xv), casadi.DM(tv), casadi.DM(Av)))
     blank() = [zeros(length(e)) for e in expected]
     # One function with local variables by default; matrix code with `expand = false` or when it is split.
     code(; kwargs...) = string(build_function(f; nonzeros = true, kwargs...))
@@ -189,7 +189,7 @@ end
     pause = callback(v -> (yield(); 2 .* v), "pause", (3,), (3,))
     v = MX.sym("v", 3)
     a = sin.(v)
-    f = CasADiCodegen.Function("f", [v], [3 * a + C.times(pause(a), a)])
+    f = CasADiCodegen.Function("f", [v], [3 * a + casadi.times(pause(a), a)])
     inputs = [DRAG_X .+ k for k in 1:8]
     for kwargs in ((; expand = false), (; chunk_size = 2))
         @test occursin("workspace", string(build_function(f; nonzeros = true, kwargs...)))
@@ -219,7 +219,7 @@ end
     runs = Ref(0)
     counted = callback(v -> (runs[] += 1; [v[1]^2, v[2]]), "counted", (2,), (2,))
     a, c = MX.sym("a", 2), MX.sym("c")
-    f = CasADiCodegen.Function("f", [c, a], [C.if_else(c > 0, counted(a), 2 * a, true)])
+    f = CasADiCodegen.Function("f", [c, a], [casadi.if_else(c > 0, counted(a), 2 * a, true)])
     g = build_function(f; nonzeros = true, expression = Val{false})
     @test g([zeros(2)], ([0.0], [3.0, 4.0])) == [[6.0, 8.0]]
     @test runs[] == 0

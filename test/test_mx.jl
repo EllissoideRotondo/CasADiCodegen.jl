@@ -29,30 +29,30 @@ end
 # the loop over the elements and the scalar operand, which the next test set checks.
 @testset "conditional and constant power on matrices" begin
     x = MX.sym("x", 3)
-    f = CasADiCodegen.Function("c", [x], [C.if_else(x, x + 1, MX(0.0)), x .^ 2.5])
+    f = CasADiCodegen.Function("c", [x], [casadi.if_else(x, x + 1, MX(0.0)), x .^ 2.5])
     @test mx_close(f)
 end
 
 @testset "elementwise results are bit for bit those of CasADi" begin
     x, y, s = MX.sym("x", 2, 3), MX.sym("y", 2, 3), MX.sym("s")
-    f = CasADiCodegen.Function("x", [x, y, s], [C.times(x, y) + s, s ./ x - y, C.fmin(x, y) * 2, C.abs(x - s)])
+    f = CasADiCodegen.Function("x", [x, y, s], [casadi.times(x, y) + s, s ./ x - y, casadi.fmin(x, y) * 2, casadi.abs(x - s)])
     @test mx_same(f)
 end
 
 const STRUCTURAL = [
     "slice" => (:OP_GETNONZEROS, (A, B, v) -> A[2:3, 1]),
-    "slice with a step" => (:OP_GETNONZEROS, (A, B, v) -> C.reshape(A, 9, 1)[1:4:9] * 2),
+    "slice with a step" => (:OP_GETNONZEROS, (A, B, v) -> casadi.reshape(A, 9, 1)[1:4:9] * 2),
     "scattered nonzeros" => (:OP_VERTCAT, (A, B, v) -> vcat(A[1, 1], A[3, 2], A[2, 3]) * 2),
     "vertical join" => (:OP_VERTCAT, (A, B, v) -> vcat(v, 2 * v, A[1:3, 2]) + 1),
     "horizontal join" => (:OP_HORZCAT, (A, B, v) -> hcat(A, 2 * B, v) + 1),
-    "diagonal join" => (:OP_DIAGCAT, (A, B, v) -> 2 * C.diagcat([A, 2 * v])),
-    "vertical split" => (:OP_VERTSPLIT, (A, B, v) -> C.vertsplit(2 * v, 1)[3] + C.vertsplit(2 * v, 1)[1]),
-    "horizontal split" => (:OP_HORZSPLIT, (A, B, v) -> C.horzsplit(A + B, 1)[2] * 2),
-    "transpose" => (:OP_TRANSPOSE, (A, B, v) -> 2 * C.transpose(A)),
-    "reshape" => (:OP_RESHAPE, (A, B, v) -> 2 * C.reshape(A + B, 1, 9)),
-    "projection to a sparse pattern" => (:OP_PROJECT, (A, B, v) -> 2 * C.project(A + B, C.Sparsity.lower(3))),
-    "projection to a dense pattern" => (:OP_PROJECT, (A, B, v) -> C.cos(C.project(A, C.Sparsity.diag(3)))),
-    "repetition" => (:OP_HORZREPMAT, (A, B, v) -> 2 * C.repmat(2 * v, 1, 3)),
+    "diagonal join" => (:OP_DIAGCAT, (A, B, v) -> 2 * casadi.diagcat([A, 2 * v])),
+    "vertical split" => (:OP_VERTSPLIT, (A, B, v) -> casadi.vertsplit(2 * v, 1)[3] + casadi.vertsplit(2 * v, 1)[1]),
+    "horizontal split" => (:OP_HORZSPLIT, (A, B, v) -> casadi.horzsplit(A + B, 1)[2] * 2),
+    "transpose" => (:OP_TRANSPOSE, (A, B, v) -> 2 * casadi.transpose(A)),
+    "reshape" => (:OP_RESHAPE, (A, B, v) -> 2 * casadi.reshape(A + B, 1, 9)),
+    "projection to a sparse pattern" => (:OP_PROJECT, (A, B, v) -> 2 * casadi.project(A + B, casadi.Sparsity.lower(3))),
+    "projection to a dense pattern" => (:OP_PROJECT, (A, B, v) -> casadi.cos(casadi.project(A, casadi.Sparsity.diag(3)))),
+    "repetition" => (:OP_HORZREPMAT, (A, B, v) -> 2 * casadi.repmat(2 * v, 1, 3)),
 ]
 
 @testset "structural operations" begin
@@ -69,7 +69,7 @@ end
     M = 2 * A
     M[1:3, 2] = v
     N = 2 * A
-    N[2, 1:3] = N[2, 1:3] + C.transpose(v)
+    N[2, 1:3] = N[2, 1:3] + casadi.transpose(v)
     f = CasADiCodegen.Function("set", [A, v], [M, N * 3])
     @test !isempty(intersect(mx_ops(f), (:OP_SETNONZEROS, :OP_ADDNONZEROS, :OP_SUBASSIGN)))
     @test mx_same(f)
@@ -83,23 +83,23 @@ end
 
 @testset "sums into nonzeros, as reverse derivatives make them" begin
     x, seed = MX.sym("x", 4), MX.sym("seed", 6)
-    f = CasADiCodegen.Function("adj", [x, seed], [C.jtimes(vcat(x[2:3], C.sin(x)), x, seed, true)])
+    f = CasADiCodegen.Function("adj", [x, seed], [casadi.jtimes(vcat(x[2:3], casadi.sin(x)), x, seed, true)])
     @test :OP_ADDNONZEROS in mx_ops(f)
     @test mx_close(f)
 end
 
 @testset "sparse inputs and outputs" begin
-    L = MX.sym("L", C.Sparsity.lower(3))
-    D = MX.sym("D", C.Sparsity.diag(3))
-    f = CasADiCodegen.Function("sp", [L, D], [C.transpose(L) * 2, L + D, vcat(L, D)])
+    L = MX.sym("L", casadi.Sparsity.lower(3))
+    D = MX.sym("D", casadi.Sparsity.diag(3))
+    f = CasADiCodegen.Function("sp", [L, D], [casadi.transpose(L) * 2, L + D, vcat(L, D)])
     @test nnz_in(f) == [6, 3]
     @test mx_same(f)
 end
 
 @testset "constants" begin
     v = MX.sym("v", 4)
-    table = C.DM([10.0, -20.5, 30.25, 1e-3])
-    f = CasADiCodegen.Function("k", [v], [v + table, v * 3.5, MX(table), MX(C.DM([7.0, 7.0]))])
+    table = casadi.DM([10.0, -20.5, 30.25, 1e-3])
+    f = CasADiCodegen.Function("k", [v], [v + table, v * 3.5, MX(table), MX(casadi.DM([7.0, 7.0]))])
     @test mx_same(f)
     ex = build_function(f; nonzeros = true, expand = false)
     @test occursin("k!_constants", string(ex))       # a table for the values that differ
@@ -110,7 +110,7 @@ function call_case()
     a = SX.sym("a", 3)
     h = CasADiCodegen.Function("h", [a], [vcat(a[1] * a[2] + a[3], sin(a[3])), a[1] - a[2]])
     p, q = MX.sym("p", 3), MX.sym("q", 3)
-    m = CasADiCodegen.Function("m", [p, q], [h(C.times(p, q))[1] + q[1:2], C.transpose(C.reshape(p, 1, 3)) - h(q)[2]])
+    m = CasADiCodegen.Function("m", [p, q], [h(casadi.times(p, q))[1] + q[1:2], casadi.transpose(casadi.reshape(p, 1, 3)) - h(q)[2]])
     v = MX.sym("v", 3)
     first_h, second_h = h(v), h(2 * v)
     inner = m(v, vcat(second_h[1], first_h[2]))
@@ -170,7 +170,7 @@ end
     v = MX.sym("v", 3)
     a = SX.sym("a", 3)
     h = CasADiCodegen.Function("h", [a], [vcat(a[1] * a[2], sin(a[3]))])
-    f = CasADiCodegen.Function("file", [v], [vcat(h(v), v) + C.DM([1.0, 2.0, 3.0, 4.0, 5.0])])
+    f = CasADiCodegen.Function("file", [v], [vcat(h(v), v) + casadi.DM([1.0, 2.0, 3.0, 4.0, 5.0])])
     x = mx_inputs(f)
     mktempdir() do dir
         path = joinpath(dir, "gen.jl")
@@ -189,59 +189,59 @@ end
 
 @testset "wrong argument shape in matrix code" begin
     v = MX.sym("v", 3)
-    g = build_function(CasADiCodegen.Function("shape", [v], [C.transpose(v) * 2]); nonzeros = true, expression = Val{false}, expand = false)
+    g = build_function(CasADiCodegen.Function("shape", [v], [casadi.transpose(v) * 2]); nonzeros = true, expression = Val{false}, expand = false)
     @test_throws ArgumentError g([zeros(3)], ([1.0, 2.0],))
     @test_throws ArgumentError g([zeros(2)], ([1.0, 2.0, 3.0],))
 end
 
 @testset "what the matrix emitter does not support is named" begin
     X, v = MX.sym("X", 2, 2), MX.sym("v", 2)
-    err = mx_error(CasADiCodegen.Function("watched", [X, v], [C.norm_2(X) * v]))
+    err = mx_error(CasADiCodegen.Function("watched", [X, v], [casadi.norm_2(X) * v]))
     @test err isa ArgumentError && occursin("watched", err.msg) && occursin("OP_NORM2", err.msg)
     p = MX.sym("p")
     err = mx_error(CasADiCodegen.Function("free", [v], [v * p], Dict("allow_free" => true)))
     @test err isa ArgumentError && occursin("free", err.msg)
-    inner = CasADiCodegen.Function("inner", [X, v], [C.norm_2(X) * v])
+    inner = CasADiCodegen.Function("inner", [X, v], [casadi.norm_2(X) * v])
     err = mx_error(CasADiCodegen.Function("outer", [X, v], [inner(X, 2 * v)]); expand = true)
     @test err isa ArgumentError && occursin("inner", err.msg) && occursin("OP_NORM2", err.msg)
 end
 
 # Values near the unit matrix keep the linear systems well conditioned.
-const SHIFT = C.DM([3.0 0 0; 0 3 0; 0 0 3])
+const SHIFT = casadi.DM([3.0 0 0; 0 3 0; 0 0 3])
 const LINEAR = [
-    "dense product" => (:OP_MTIMES, (A, B, L, u, v, s) -> C.mtimes(A, B)),
-    "product with a vector" => (:OP_MTIMES, (A, B, L, u, v, s) -> C.mtimes(A, v) + u),
-    "sparse product" => (:OP_MTIMES, (A, B, L, u, v, s) -> C.mtimes(L, C.transpose(L))),
-    "sparse times dense" => (:OP_MTIMES, (A, B, L, u, v, s) -> C.mtimes(C.mtimes(L, A), L)),
-    "product into a sparse pattern" => (:OP_MTIMES, (A, B, L, u, v, s) -> C.project(C.mtimes(A, A), C.Sparsity.lower(3)) * 2),
-    "sum of each column" => (:OP_MTIMES, (A, B, L, u, v, s) -> C.sum1(A) * 2),
-    "inner product" => (:OP_DOT, (A, B, L, u, v, s) -> C.dot(u, v) * s),
-    "sum of squares" => (:OP_DOT, (A, B, L, u, v, s) -> C.sumsqr(L)),
-    "bilinear form" => (:OP_BILIN, (A, B, L, u, v, s) -> C.bilin(A, u, v)),
-    "sparse bilinear form" => (:OP_BILIN, (A, B, L, u, v, s) -> C.bilin(L, u, v)),
-    "rank one update" => (:OP_RANK1, (A, B, L, u, v, s) -> C.rank1(A, s, u, v)),
-    "sparse rank one update" => (:OP_RANK1, (A, B, L, u, v, s) -> C.rank1(L, s, u, v) * 2),
-    "norm of Frobenius" => (:OP_NORMF, (A, B, L, u, v, s) -> C.norm_fro(A) + C.norm_2(v)),
-    "norm 1" => (:OP_NORM1, (A, B, L, u, v, s) -> C.norm_1(v)),
-    "norm infinity" => (:OP_NORMINF, (A, B, L, u, v, s) -> C.norm_inf(v - 1)),
-    "smallest element" => (:OP_MMIN, (A, B, L, u, v, s) -> C.mmin(v) + C.mmin(L + 5)),
-    "largest element" => (:OP_MMAX, (A, B, L, u, v, s) -> C.mmax(A) + C.mmax(L - 5)),
-    "Kronecker product" => (:OP_KRON, (A, B, L, u, v, s) -> C.kron(A, B)),
-    "sparse Kronecker product" => (:OP_KRON, (A, B, L, u, v, s) -> C.kron(L, B) * 2),
-    "Kronecker product with a sparse second factor" => (:OP_KRON, (A, B, L, u, v, s) -> C.kron(v, L) + 1),
-    "logarithm of the sum of the exponentials" => (:OP_LOGSUMEXP, (A, B, L, u, v, s) -> C.logsumexp(v) * s),
-    "logarithm of the sum of the exponentials, largest element first" => (:OP_LOGSUMEXP, (A, B, L, u, v, s) -> C.logsumexp(-v)),
-    "determinant" => (:OP_DETERMINANT, (A, B, L, u, v, s) -> C.det(A + SHIFT)),
-    "inverse through a linear solve" => (:OP_SOLVE, (A, B, L, u, v, s) -> C.inv(A + SHIFT, "qr")),
-    "linear solve" => (:OP_SOLVE, (A, B, L, u, v, s) -> C.solve(A + SHIFT, v)),
-    "linear solve with a sparse matrix" => (:OP_SOLVE, (A, B, L, u, v, s) -> C.solve(L + C.DM(C.Sparsity.diag(3), C.DM([3.0, 3.0, 3.0])), v) * 2),
-    "linear solve with the transpose" => (:OP_SOLVE, (A, B, L, u, v, s) -> C.solve(C.transpose(A + SHIFT), v)),
-    "linear solve with many right sides" => (:OP_SOLVE, (A, B, L, u, v, s) -> C.solve(A + SHIFT, B)),
+    "dense product" => (:OP_MTIMES, (A, B, L, u, v, s) -> casadi.mtimes(A, B)),
+    "product with a vector" => (:OP_MTIMES, (A, B, L, u, v, s) -> casadi.mtimes(A, v) + u),
+    "sparse product" => (:OP_MTIMES, (A, B, L, u, v, s) -> casadi.mtimes(L, casadi.transpose(L))),
+    "sparse times dense" => (:OP_MTIMES, (A, B, L, u, v, s) -> casadi.mtimes(casadi.mtimes(L, A), L)),
+    "product into a sparse pattern" => (:OP_MTIMES, (A, B, L, u, v, s) -> casadi.project(casadi.mtimes(A, A), casadi.Sparsity.lower(3)) * 2),
+    "sum of each column" => (:OP_MTIMES, (A, B, L, u, v, s) -> casadi.sum1(A) * 2),
+    "inner product" => (:OP_DOT, (A, B, L, u, v, s) -> casadi.dot(u, v) * s),
+    "sum of squares" => (:OP_DOT, (A, B, L, u, v, s) -> casadi.sumsqr(L)),
+    "bilinear form" => (:OP_BILIN, (A, B, L, u, v, s) -> casadi.bilin(A, u, v)),
+    "sparse bilinear form" => (:OP_BILIN, (A, B, L, u, v, s) -> casadi.bilin(L, u, v)),
+    "rank one update" => (:OP_RANK1, (A, B, L, u, v, s) -> casadi.rank1(A, s, u, v)),
+    "sparse rank one update" => (:OP_RANK1, (A, B, L, u, v, s) -> casadi.rank1(L, s, u, v) * 2),
+    "norm of Frobenius" => (:OP_NORMF, (A, B, L, u, v, s) -> casadi.norm_fro(A) + casadi.norm_2(v)),
+    "norm 1" => (:OP_NORM1, (A, B, L, u, v, s) -> casadi.norm_1(v)),
+    "norm infinity" => (:OP_NORMINF, (A, B, L, u, v, s) -> casadi.norm_inf(v - 1)),
+    "smallest element" => (:OP_MMIN, (A, B, L, u, v, s) -> casadi.mmin(v) + casadi.mmin(L + 5)),
+    "largest element" => (:OP_MMAX, (A, B, L, u, v, s) -> casadi.mmax(A) + casadi.mmax(L - 5)),
+    "Kronecker product" => (:OP_KRON, (A, B, L, u, v, s) -> casadi.kron(A, B)),
+    "sparse Kronecker product" => (:OP_KRON, (A, B, L, u, v, s) -> casadi.kron(L, B) * 2),
+    "Kronecker product with a sparse second factor" => (:OP_KRON, (A, B, L, u, v, s) -> casadi.kron(v, L) + 1),
+    "logarithm of the sum of the exponentials" => (:OP_LOGSUMEXP, (A, B, L, u, v, s) -> casadi.logsumexp(v) * s),
+    "logarithm of the sum of the exponentials, largest element first" => (:OP_LOGSUMEXP, (A, B, L, u, v, s) -> casadi.logsumexp(-v)),
+    "determinant" => (:OP_DETERMINANT, (A, B, L, u, v, s) -> casadi.det(A + SHIFT)),
+    "inverse through a linear solve" => (:OP_SOLVE, (A, B, L, u, v, s) -> casadi.inv(A + SHIFT, "qr")),
+    "linear solve" => (:OP_SOLVE, (A, B, L, u, v, s) -> casadi.solve(A + SHIFT, v)),
+    "linear solve with a sparse matrix" => (:OP_SOLVE, (A, B, L, u, v, s) -> casadi.solve(L + casadi.DM(casadi.Sparsity.diag(3), casadi.DM([3.0, 3.0, 3.0])), v) * 2),
+    "linear solve with the transpose" => (:OP_SOLVE, (A, B, L, u, v, s) -> casadi.solve(casadi.transpose(A + SHIFT), v)),
+    "linear solve with many right sides" => (:OP_SOLVE, (A, B, L, u, v, s) -> casadi.solve(A + SHIFT, B)),
     # CasADi makes the right side of a solve dense, also when the user gives a sparse one.
-    "linear solve with a sparse right side" => (:OP_SOLVE, (A, B, L, u, v, s) -> C.solve(A + SHIFT, L)),
+    "linear solve with a sparse right side" => (:OP_SOLVE, (A, B, L, u, v, s) -> casadi.solve(A + SHIFT, L)),
 ]
 
-linear_function(build) = (A = MX.sym("A", 3, 3); B = MX.sym("B", 3, 2); L = MX.sym("L", C.Sparsity.lower(3));
+linear_function(build) = (A = MX.sym("A", 3, 3); B = MX.sym("B", 3, 2); L = MX.sym("L", casadi.Sparsity.lower(3));
     u = MX.sym("u", 3); v = MX.sym("v", 3); s = MX.sym("s");
     CasADiCodegen.Function("la", [A, B, L, u, v, s], [build(A, B, L, u, v, s)]))
 
@@ -253,7 +253,7 @@ end
 @testset "linear algebra" begin
     @testset "$label" for (label, (op, build)) in LINEAR
         f = linear_function(build)
-        @test getfield(C, op) in [C.instruction_id(f, k) for k in 0:C.n_instructions(f)-1]
+        @test getfield(casadi, op) in [casadi.instruction_id(f, k) for k in 0:casadi.n_instructions(f)-1]
         @test mx_near(f)
         # The split does not depend on the operation, so one operation shows it.
         label == "linear solve" && @test mx_near(f; chunk_size = 1)
@@ -263,7 +263,7 @@ end
 # CasADi has no numerical evaluation for the inverse node, so Julia is the oracle.
 @testset "matrix inverse node and elementwise reciprocal" begin
     A = MX.sym("A", 2, 2)
-    f = CasADiCodegen.Function("both", [A], [C.inv_node(A), 1 ./ A])
+    f = CasADiCodegen.Function("both", [A], [casadi.inv_node(A), 1 ./ A])
     @test :OP_INVERSE in mx_ops(f)
     x = [[4.0, 1.0, 2.0, 3.0]]
     @test mx_emitted(f, x)[1] ≈ vec(inv([4.0 2.0; 1.0 3.0]))
@@ -271,7 +271,7 @@ end
 end
 
 @testset "linear algebra in a written module" begin
-    f = linear_function((A, B, L, u, v, s) -> C.solve(A + SHIFT, C.mtimes(L, v)) * C.det(A + SHIFT))
+    f = linear_function((A, B, L, u, v, s) -> casadi.solve(A + SHIFT, casadi.mtimes(L, v)) * casadi.det(A + SHIFT))
     text = sprint(io -> generate_julia(f, io; module_name = :Gen, name = :g!, expand = false))
     @test occursin("import LinearAlgebra", text)
     src = Module()
@@ -279,10 +279,10 @@ end
     x = mx_inputs(f)
     @test isequal(mx_emitted(f, x), Base.invokelatest((r, a) -> src.Gen.g_nonzeros!(r, a), [zeros(3)], Tuple(x)))
     @test mx_near(f)
-    plain = sprint(io -> generate_julia(linear_function((A, B, L, u, v, s) -> C.mtimes(A, v)), io; expand = false))
+    plain = sprint(io -> generate_julia(linear_function((A, B, L, u, v, s) -> casadi.mtimes(A, v)), io; expand = false))
     @test !occursin("import LinearAlgebra", plain)      # products are plain loops
-    big = MX.sym("S", C.Sparsity.lower(8))
-    wide = CasADiCodegen.Function("wide", [big], [C.mtimes(big, C.transpose(big))])
+    big = MX.sym("S", casadi.Sparsity.lower(8))
+    wide = CasADiCodegen.Function("wide", [big], [casadi.mtimes(big, casadi.transpose(big))])
     @test occursin("wide_nonzeros!_indices", sprint(io -> generate_julia(wide, io; expand = false)))
     @test mx_near(wide) && mx_near(wide; chunk_size = 1)
     @test isequal(mx_emitted(wide, mx_inputs(wide)),
@@ -292,7 +292,7 @@ end
 
 @testset "linear algebra accepts any real number type" begin
     A, v = MX.sym("A", 3, 3), MX.sym("v", 3)
-    g = build_function(CasADiCodegen.Function("ad", [A, v], [C.solve(A, v), C.mtimes(A, v), C.det(A), C.inv_node(A)]); nonzeros = true,
+    g = build_function(CasADiCodegen.Function("ad", [A, v], [casadi.solve(A, v), casadi.mtimes(A, v), casadi.det(A), casadi.inv_node(A)]); nonzeros = true,
                        expression = Val{false}, expand = false)
     M = [4.0 1.0 0.5; 0.2 3.0 0.1; 0.3 0.7 5.0]
     x = [0.3, -1.2, 0.8]
@@ -311,18 +311,18 @@ const GRAPH_H = let a = SX.sym("a", 3)
     CasADiCodegen.Function("h", [a], [vcat(a[2] * a[3], a[1] - a[2], a[3]), a[1] * a[1]])
 end
 const GRAPH_M = let p = MX.sym("p", 3), q = MX.sym("q", 3)
-    CasADiCodegen.Function("m", [p, q], [C.times(vcat(p[2:3], q[1]), q) + GRAPH_H(p)[1]])
+    CasADiCodegen.Function("m", [p, q], [casadi.times(vcat(p[2:3], q[1]), q) + GRAPH_H(p)[1]])
 end
 const GRAPH_STEPS = [
-    (x, y) -> x + y, (x, y) -> x - y, (x, y) -> C.times(x, y), (x, y) -> C.fmin(x, y), (x, y) -> C.fmax(x, y),
-    (x, y) -> -x, (x, y) -> 2 * x, (x, y) -> C.abs(x), (x, y) -> x[1] * y, (x, y) -> x - y[3],
+    (x, y) -> x + y, (x, y) -> x - y, (x, y) -> casadi.times(x, y), (x, y) -> casadi.fmin(x, y), (x, y) -> casadi.fmax(x, y),
+    (x, y) -> -x, (x, y) -> 2 * x, (x, y) -> casadi.abs(x), (x, y) -> x[1] * y, (x, y) -> x - y[3],
     (x, y) -> vcat(x[2:3], y[1]), (x, y) -> vcat(y[3], x[1:2]),
-    (x, y) -> C.transpose(C.reshape(vcat(x, y), 2, 3))[1:3, 2],
-    (x, y) -> C.horzsplit(hcat(x, y), 1)[2] + C.DM([1.0, -2.0, 0.5]),
+    (x, y) -> casadi.transpose(casadi.reshape(vcat(x, y), 2, 3))[1:3, 2],
+    (x, y) -> casadi.horzsplit(hcat(x, y), 1)[2] + casadi.DM([1.0, -2.0, 0.5]),
     (x, y) -> GRAPH_H(x)[1], (x, y) -> GRAPH_H(y)[2] * x, (x, y) -> GRAPH_M(x, y),
-    (x, y) -> C.mtimes(C.mtimes(x, C.transpose(y)), x), (x, y) -> C.dot(x, y) * y,
-    (x, y) -> C.norm_1(x) - y, (x, y) -> C.norm_inf(y) * x, (x, y) -> C.mmin(x) + C.mmax(y) * y,
-    (x, y) -> C.rank1(C.mtimes(y, C.transpose(x)), x[2], x, y)[1:3, 2], (x, y) -> C.bilin(C.mtimes(x, C.transpose(x)), y, x) * x,
+    (x, y) -> casadi.mtimes(casadi.mtimes(x, casadi.transpose(y)), x), (x, y) -> casadi.dot(x, y) * y,
+    (x, y) -> casadi.norm_1(x) - y, (x, y) -> casadi.norm_inf(y) * x, (x, y) -> casadi.mmin(x) + casadi.mmax(y) * y,
+    (x, y) -> casadi.rank1(casadi.mtimes(y, casadi.transpose(x)), x[2], x, y)[1:3, 2], (x, y) -> casadi.bilin(casadi.mtimes(x, casadi.transpose(x)), y, x) * x,
 ]
 
 function graph_function(steps)
@@ -332,7 +332,7 @@ function graph_function(steps)
         # Loop invariant: each node is a vector of 3 numbers.
         node = GRAPH_STEPS[kind](nodes[mod1(i, length(nodes))], nodes[mod1(j, length(nodes))])
         # CasADi can simplify a step to a scalar, as (v - u[3]) - v to -u[3].
-        C.numel(node) == 1 && (node = C.repmat(node, 3, 1))
+        casadi.numel(node) == 1 && (node = casadi.repmat(node, 3, 1))
         @assert size(node) == (3, 1)
         push!(nodes, node)
     end
@@ -363,9 +363,9 @@ end
     x, p = SX.sym("x", 2), SX.sym("p")
     step = CasADiCodegen.Function("step", [x, p], [vcat(x[2] * p, sin(x[1]) + p), x[1] * x[2]])
     X, P = MX.sym("X", 2, 5), MX.sym("P", 1, 5)
-    both = C.map(step, 5)(X, P)
+    both = casadi.map(step, 5)(X, P)
     y, z = both[1], both[2]
-    f = CasADiCodegen.Function("f", [X, P], [y, z, jacobian(y, X), jacobian(C.sum2(z), P)])
+    f = CasADiCodegen.Function("f", [X, P], [y, z, jacobian(y, X), jacobian(casadi.sum2(z), P)])
     @test mx_same(f)
     @test mx_same(f; chunk_size = 3)
     # The body is one Julia function, which a loop over the columns calls (see "a map is a loop" in test_nodes.jl).
@@ -373,16 +373,16 @@ end
     @test count("function f_step!(w)", source) == 1
     # A map inside a map, and a map of a matrix function.
     row = MX.sym("row", 2, 3)
-    inner = CasADiCodegen.Function("inner", [row], [C.sum2(C.map(CasADiCodegen.Function("sq", [x], [x[1]^2 + x[2]]), 3)(row))])
+    inner = CasADiCodegen.Function("inner", [row], [casadi.sum2(casadi.map(CasADiCodegen.Function("sq", [x], [x[1]^2 + x[2]]), 3)(row))])
     cube = MX.sym("cube", 2, 12)
-    @test mx_same(CasADiCodegen.Function("g", [cube], [C.map(inner, 4)(cube)]))
+    @test mx_same(CasADiCodegen.Function("g", [cube], [casadi.map(inner, 4)(cube)]))
 end
 
 # A copy that moves blocks with a fixed stride, as a transpose does, is one loop over the
 # blocks; the size of its code does not depend on the number of blocks.
 @testset "a transpose is a loop over blocks" begin
     transposed(n) = let X = MX.sym("X", 2, n), v = MX.sym("v", n)
-        CasADiCodegen.Function("t", [X, v], [C.transpose(X), vcat(C.transpose(v[1:n-1]), C.transpose(v[2:n])) + X[:, 1:n-1]])
+        CasADiCodegen.Function("t", [X, v], [casadi.transpose(X), vcat(casadi.transpose(v[1:n-1]), casadi.transpose(v[2:n])) + X[:, 1:n-1]])
     end
     code_length(f) = length(string(build_function(f; nonzeros = true, expression = Val{true}, expand = false)))
     @test mx_same(transposed(5))
@@ -391,22 +391,22 @@ end
 
 @testset "a split whose first part has no nonzeros" begin
     # The parts of a sparse column are operands of a join; the first part is structurally zero.
-    a = MX.sym("a", C.Sparsity.triplet(4, 1, [2, 3], [0, 0]))
-    parts = C.vertsplit(2 * a, [0, 2, 3, 4])
+    a = MX.sym("a", casadi.Sparsity.triplet(4, 1, [2, 3], [0, 0]))
+    parts = casadi.vertsplit(2 * a, [0, 2, 3, 4])
     f = CasADiCodegen.Function("f", [a], [vcat(parts[3], parts[2], parts[1])])
     @test :OP_VERTSPLIT in mx_ops(f) && mx_same(f)
     # A constant column with one nonzero, between two parts that have none.
-    c = MX(C.DM(C.Sparsity.triplet(4, 1, [2], [0]), C.DM([1.5])))
+    c = MX(casadi.DM(casadi.Sparsity.triplet(4, 1, [2], [0]), casadi.DM([1.5])))
     s = MX.sym("s")
-    g = CasADiCodegen.Function("g", [s], [hcat(MX(1, 1), C.vertsplit(c, [0, 2, 3, 4])[2]) * s])
+    g = CasADiCodegen.Function("g", [s], [hcat(MX(1, 1), casadi.vertsplit(c, [0, 2, 3, 4])[2]) * s])
     @test :OP_VERTSPLIT in mx_ops(g) && mx_same(g)
 end
 
 @testset "branches that run only when they are selected" begin
     a, c = MX.sym("a", 2), MX.sym("c")
-    y = C.if_else(c > 0, sin.(a) / a[1], 2 * a, true)
+    y = casadi.if_else(c > 0, sin.(a) / a[1], 2 * a, true)
     f = CasADiCodegen.Function("f", [c, a], [y, jacobian(y, a)])
-    several = C.conditional(c, [sin.(a), cos.(a), a], 3 * a, true)
+    several = casadi.conditional(c, [sin.(a), cos.(a), a], 3 * a, true)
     g = CasADiCodegen.Function("g", [c, a], [several, jacobian(several, a)])
     av = [0.3, 1.7]
     for selector in (1.0, 0.0, -2.0, 0.5, 2.0, 2.9, 3.0, -0.5, -1.0, NaN)
@@ -419,7 +419,7 @@ end
     # The branch that is not selected does not run: it would divide by zero here and give NaN in a sum.
     @test mx_emitted(f, [[0.0], [0.0, 1.0]])[1] == [0.0, 2.0]
     # A branch with another pattern than the switch.
-    sparse_branch = C.if_else(c > 0, vcat(a[1], MX(1, 1)), a, true)
+    sparse_branch = casadi.if_else(c > 0, vcat(a[1], MX(1, 1)), a, true)
     @test mx_same(CasADiCodegen.Function("s", [c, a], [sparse_branch]))
 end
 
@@ -427,15 +427,15 @@ end
 # nonzeros that are read or written at such places. CasADi builds them for
 # an interpolant with `inline`, and for the derivatives of one.
 const INDEXED = [
-    "place in a grid" => (:OP_LOW, (v, x, i, j) -> C.low(v, i) + C.low(v, j[1])),
-    "nonzeros at indices" => (:OP_GETNONZEROS_PARAM, (v, x, i, j) -> C.get_nz(v, false, i)),
-    "nonzeros at indices plus a slice" => (:OP_GETNONZEROS_PARAM, (v, x, i, j) -> C.get_nz(v, false, i, C.Slice(1, 5, 2))),
-    "nonzeros at a slice plus indices" => (:OP_GETNONZEROS_PARAM, (v, x, i, j) -> C.get_nz(v, false, C.Slice(1, 5, 2), i)),
-    "nonzeros at sums of indices" => (:OP_GETNONZEROS_PARAM, (v, x, i, j) -> C.get_nz(v, false, i, j)),
-    "assignment at indices" => (:OP_SETNONZEROS_PARAM, (v, x, i, j) -> (y = 2 * v; C.set_nz(y, x[1:2], false, i); y)),
-    "sum at indices" => (:OP_ADDNONZEROS_PARAM, (v, x, i, j) -> C.jtimes(C.get_nz(v, false, i), v, x[1:2], true)),
-    "sum at indices plus a slice" => (:OP_ADDNONZEROS_PARAM, (v, x, i, j) -> C.jtimes(C.get_nz(v, false, i, C.Slice(1, 5, 2)), v, reshape(x, 2, 2), true)),
-    "sum at sums of indices" => (:OP_ADDNONZEROS_PARAM, (v, x, i, j) -> C.jtimes(C.get_nz(v, false, i, j), v, reshape(x, 2, 2), true)),
+    "place in a grid" => (:OP_LOW, (v, x, i, j) -> casadi.low(v, i) + casadi.low(v, j[1])),
+    "nonzeros at indices" => (:OP_GETNONZEROS_PARAM, (v, x, i, j) -> casadi.get_nz(v, false, i)),
+    "nonzeros at indices plus a slice" => (:OP_GETNONZEROS_PARAM, (v, x, i, j) -> casadi.get_nz(v, false, i, casadi.Slice(1, 5, 2))),
+    "nonzeros at a slice plus indices" => (:OP_GETNONZEROS_PARAM, (v, x, i, j) -> casadi.get_nz(v, false, casadi.Slice(1, 5, 2), i)),
+    "nonzeros at sums of indices" => (:OP_GETNONZEROS_PARAM, (v, x, i, j) -> casadi.get_nz(v, false, i, j)),
+    "assignment at indices" => (:OP_SETNONZEROS_PARAM, (v, x, i, j) -> (y = 2 * v; casadi.set_nz(y, x[1:2], false, i); y)),
+    "sum at indices" => (:OP_ADDNONZEROS_PARAM, (v, x, i, j) -> casadi.jtimes(casadi.get_nz(v, false, i), v, x[1:2], true)),
+    "sum at indices plus a slice" => (:OP_ADDNONZEROS_PARAM, (v, x, i, j) -> casadi.jtimes(casadi.get_nz(v, false, i, casadi.Slice(1, 5, 2)), v, reshape(x, 2, 2), true)),
+    "sum at sums of indices" => (:OP_ADDNONZEROS_PARAM, (v, x, i, j) -> casadi.jtimes(casadi.get_nz(v, false, i, j), v, reshape(x, 2, 2), true)),
 ]
 
 indexed_function(build) = (v = MX.sym("v", 6); x = MX.sym("x", 4); i = MX.sym("i", 2); j = MX.sym("j", 2);
@@ -459,35 +459,35 @@ end
 # memory, so the oracle is the same write with each index written out: slice[s] + i[k].
 @testset "a sum at a slice plus indices" begin
     places(i) = vcat(1 + i[1], 3 + i[1], 1 + i[2], 3 + i[2])
-    f = indexed_function((v, x, i, j) -> C.jtimes(C.get_nz(v, false, C.Slice(1, 5, 2), i), v, reshape(x, 2, 2), true))
-    reference = indexed_function((v, x, i, j) -> C.jtimes(C.get_nz(v, false, places(i)), v, x, true))
+    f = indexed_function((v, x, i, j) -> casadi.jtimes(casadi.get_nz(v, false, casadi.Slice(1, 5, 2), i), v, reshape(x, 2, 2), true))
+    reference = indexed_function((v, x, i, j) -> casadi.jtimes(casadi.get_nz(v, false, places(i)), v, x, true))
     @test :OP_ADDNONZEROS_PARAM in mx_ops(f)
     g = build_function(f; nonzeros = true, expression = Val{false}, expand = false)
     @test all(isequal(mx_casadi(reference, x), g([fill(NaN, n) for n in nnz_out(f)], Tuple(x))) for x in INDEXED_INPUTS)
     # The same node in a larger graph: the gradient of a sum of the nonzeros that are read.
     v, i = MX.sym("v", 6), MX.sym("i", 2)
-    cost(read) = CasADiCodegen.Function("cost", [v, i], [gradient(C.dot(read, read), v)])
-    @test :OP_ADDNONZEROS_PARAM in mx_ops(cost(C.get_nz(v, false, C.Slice(1, 5, 2), i)))
-    h = build_function(cost(C.get_nz(v, false, C.Slice(1, 5, 2), i)); nonzeros = true, expression = Val{false}, expand = false)
-    @test all(isequal(mx_casadi(cost(C.get_nz(v, false, places(i))), x[[1, 3]]), h([fill(NaN, 6)], Tuple(x[[1, 3]]))) for x in INDEXED_INPUTS)
+    cost(read) = CasADiCodegen.Function("cost", [v, i], [gradient(casadi.dot(read, read), v)])
+    @test :OP_ADDNONZEROS_PARAM in mx_ops(cost(casadi.get_nz(v, false, casadi.Slice(1, 5, 2), i)))
+    h = build_function(cost(casadi.get_nz(v, false, casadi.Slice(1, 5, 2), i)); nonzeros = true, expression = Val{false}, expand = false)
+    @test all(isequal(mx_casadi(cost(casadi.get_nz(v, false, places(i))), x[[1, 3]]), h([fill(NaN, 6)], Tuple(x[[1, 3]]))) for x in INDEXED_INPUTS)
 end
 
 @testset "linear interpolant with inline" begin
     grid, values = [0.0, 1.0, 2.5, 3.0, 4.0], [0.0, 1.0, 4.0, 9.0, 16.0]
-    table = C.interpolant("table", "linear", [grid], values, Dict("inline" => true))
+    table = casadi.interpolant("table", "linear", [grid], values, Dict("inline" => true))
     x = MX.sym("x")
-    f = CasADiCodegen.Function("line", [x], [table(x), C.jacobian(table(x), x)])
+    f = CasADiCodegen.Function("line", [x], [table(x), casadi.jacobian(table(x), x)])
     out, inplace = build_function(f; expression = Val{false})       # CasADi cannot expand it, so the code is matrix code
-    @test all(out([t])[k] ≈ dense_values(f(C.DM(t))[k]) for t in (-1.0, 0.0, 0.3, 1.0, 2.7, 3.99, 4.0, 7.0), k in 1:2)
+    @test all(out([t])[k] ≈ dense_values(f(casadi.DM(t))[k]) for t in (-1.0, 0.0, 0.3, 1.0, 2.7, 3.99, 4.0, 7.0), k in 1:2)
     @test ForwardDiff.derivative(t -> out([t])[1][1], 2.7) ≈ 10.0
     # Two dimensions, with the values as an argument, and the derivative by the values.
-    plane = C.interpolant("plane", "linear", [[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]], 2, Dict("inline" => true))
+    plane = casadi.interpolant("plane", "linear", [[0.0, 1.0, 2.0], [0.0, 1.0, 2.0]], 2, Dict("inline" => true))
     p, c = MX.sym("p", 2), MX.sym("c", 18)
-    g = CasADiCodegen.Function("plane_all", [p, c], [plane(p, c), C.jacobian(plane(p, c), c), C.jacobian(plane(p, c), p)])
+    g = CasADiCodegen.Function("plane_all", [p, c], [plane(p, c), casadi.jacobian(plane(p, c), c), casadi.jacobian(plane(p, c), p)])
     emitted = build_function(g; expression = Val{false})[1]
     coefficients = collect(1.0:18.0) .^ 1.5
     for point in ([0.5, 1.5], [1.0, 1.0], [2.0, 0.0], [-0.5, 2.5])
-        expected, actual = g(C.DM(point), C.DM(coefficients)), emitted(point, coefficients)
+        expected, actual = g(casadi.DM(point), casadi.DM(coefficients)), emitted(point, coefficients)
         @test all(dense_values(expected[k]) ≈ vec(actual[k]) for k in 1:3)
     end
     text = sprint(io -> generate_julia(f, io; module_name = :Table, name = :line!))
@@ -498,7 +498,7 @@ end
 
 @testset "monitor prints and passes its value" begin
     v = MX.sym("v", 3)
-    f = CasADiCodegen.Function("watched", [v], [2 * C.monitor(v, "half of the result")])
+    f = CasADiCodegen.Function("watched", [v], [2 * casadi.monitor(v, "half of the result")])
     @test :OP_MONITOR in mx_ops(f)
     g = build_function(f; nonzeros = true, expression = Val{false}, expand = false)
     result, printed = zeros(3), ""
@@ -515,14 +515,14 @@ end
 # the SciML ecosystem, and a class for which the package has no Julia code, are refused.
 @testset "functions of CasADi without Julia code are refused" begin
     x, p = MX.sym("x", 2), MX.sym("p")
-    decay = C.integrator("decay", "cvodes", Dict("x" => x, "p" => p, "ode" => -p * x), 0.0, 1.0)
+    decay = casadi.integrator("decay", "cvodes", Dict("x" => x, "p" => p, "ode" => -p * x), 0.0, 1.0)
     f = CasADiCodegen.Function("f", [x, p], [decay(x, MX(0, 1), p, MX(0, 1), MX(), MX(), MX())[1]])
     # Generated code never calls CasADi: a solver object of CasADi needs a solver of the SciML ecosystem.
     @test_throws "integrator \"cvodes\" of CasADi" build_function(f; nonzeros = true, expression = Val{false})
     @test_throws "give one with the option solvers = CasADiCodegen.Solvers(ode = ...)" generate_julia(f, IOBuffer())
     # A class for which the package has no Julia code.
     z = MX.sym("z")
-    root = C.rootfinder("root", "nlpsol", Dict("x" => z, "p" => p, "g" => z^2 - p), Dict("nlpsol" => "ipopt"))
+    root = casadi.rootfinder("root", "nlpsol", Dict("x" => z, "p" => p, "g" => z^2 - p), Dict("nlpsol" => "ipopt"))
     f = CasADiCodegen.Function("f", [p], [root(p, p)])
     @test_throws "has the class ImplicitToNlp of CasADi, for which this package has no Julia code" build_function(f; expression = Val{false})
 end
@@ -533,11 +533,11 @@ end
     n = 16
     # Three diagonals and the two far corners.
     entries = [(i, j) for i in 0:n-1 for j in 0:n-1 if abs(i - j) <= 1 || abs(i - j) == n - 1]
-    band = C.Sparsity.triplet(n, n, first.(entries), last.(entries))
+    band = casadi.Sparsity.triplet(n, n, first.(entries), last.(entries))
     A, b, B = MX.sym("A", band), MX.sym("b", n), MX.sym("B", n, 2)
     rows, columns = CasADiCodegen.Codegen.positions(band)
-    values = [[rows[k] == columns[k] ? 4.0 + 0.1 * k : 0.3 + 0.05 * k for k in 1:C.nnz(band)], [0.5 * k - 2 for k in 1:n], [0.25 * k - 1 for k in 1:2n]]
-    f = CasADiCodegen.Function("sparse_solve", [A, b, B], [C.solve(A, b), C.solve(C.transpose(A), b), C.solve(A, B)])
+    values = [[rows[k] == columns[k] ? 4.0 + 0.1 * k : 0.3 + 0.05 * k for k in 1:casadi.nnz(band)], [0.5 * k - 2 for k in 1:n], [0.25 * k - 1 for k in 1:2n]]
+    f = CasADiCodegen.Function("sparse_solve", [A, b, B], [casadi.solve(A, b), casadi.solve(casadi.transpose(A), b), casadi.solve(A, B)])
     expected = mx_casadi(f, values)
     g = build_function(f; nonzeros = true, expression = Val{false}, expand = false)
     results = [zeros(n), zeros(n), zeros(2n)]
@@ -546,7 +546,7 @@ end
     @test @allocated(g(results, arguments)) == 0
     # Dual numbers: the derivative of the solution by the right side is the inverse.
     dense = zeros(n, n)
-    foreach(k -> dense[rows[k], columns[k]] = values[1][k], 1:C.nnz(band))
+    foreach(k -> dense[rows[k], columns[k]] = values[1][k], 1:casadi.nnz(band))
     J = ForwardDiff.jacobian(r -> g([similar(r, n), similar(r, n), similar(r, 2n)], (values[1], r, values[3]))[1], values[2])
     @test J ≈ inv(dense)
     text = sprint(io -> generate_julia(f, io; module_name = :Banded, name = :solve!, expand = false))

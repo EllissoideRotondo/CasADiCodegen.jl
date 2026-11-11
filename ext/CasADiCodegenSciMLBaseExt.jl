@@ -815,7 +815,7 @@ G.object_source(writer::G.SourceWriter, s::RootSolver{N}) where {N} = :(
 # CasADi functions as the functions of SciML problems. Each wrapper calls the
 # in-place generated function with the arguments that the CasADi function has.
 
-const C = CasADiCodegen.C
+const casadi = CasADiCodegen.casadi
 
 "A generated in-place function `g!` as a SciML function of `N` of the arguments (u, p, t)."
 struct Call{N,G}
@@ -985,8 +985,8 @@ SciMLBase.numargs(::Allocating{2}) = [3, 2]
 # SX symbols for an SX function, whose call on them gives its expressions again; MX symbols
 # would make a call node that the code generator expands back to SX, at a cost in time and memory.
 function symbols(f::CasADiCodegen.Function)
-    T = C.is_a(f, "SXFunction") ? CasADiCodegen.SX : CasADiCodegen.MX
-    [T.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
+    T = casadi.is_a(f, "SXFunction") ? CasADiCodegen.SX : CasADiCodegen.MX
+    [T.sym(casadi.name_in(f, i), casadi.sparsity_in(f, i)) for i in 0:casadi.n_in(f)-1]
 end
 "The keywords of the code generation that the SciML constructors pass on."
 codegen_options(; chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false) =
@@ -1007,17 +1007,17 @@ Return the out-of-place function of `value` that returns static arrays, as a Sci
 of the `arguments`. With `matrix` it returns an `SMatrix` also for one column.
 """
 function outofplace(name, arguments, value; matrix::Bool, options...)
-    elements = prod(shape(C.sparsity(value)))
+    elements = prod(shape(casadi.sparsity(value)))
     @requires elements <= G.STATIC_LIMIT "$name: inplace = false returns static arrays of at most $(G.STATIC_LIMIT) elements, and this one has $elements; use inplace = true"
     g = G.build_function(CasADiCodegen.Function("sciml_" * name, arguments, [value]); expression = Val{false}, force_SA = true, options...)[1]
-    Static{length(arguments),matrix ? Tuple{shape(C.sparsity(value))...} : Nothing,typeof(g)}(g)
+    Static{length(arguments),matrix ? Tuple{shape(casadi.sparsity(value))...} : Nothing,typeof(g)}(g)
 end
 
 "The function `name` of `value` for a SciML function: a `Call` in place, or else a `Static`."
 sciml_function(name, arguments, value, inplace::Bool; matrix::Bool = false, codegen...) =
     inplace ? concrete(Call{length(arguments),Any}(CasADiCodegenSciMLBaseExt.inplace(name, arguments, value; codegen...))) :
               outofplace(name, arguments, value; matrix, codegen...)
-shape(sp) = (C.size1(sp), C.size2(sp))
+shape(sp) = (casadi.size1(sp), casadi.size2(sp))
 
 """
     sparse_prototype(kind, J) -> SparseMatrixCSC
@@ -1028,7 +1028,7 @@ the `jac_prototype` of a SciML function. It needs SparseArrays.jl loaded.
 function sparse_prototype(kind, J)
     sparse_extension = Base.get_extension(CasADiCodegen, :CasADiCodegenSparseArraysExt)
     @requires sparse_extension !== nothing "$kind: sparse = true needs SparseArrays.jl; load it with `using SparseArrays`"
-    sparse_extension.SparseArrays.SparseMatrixCSC(C.sparsity(J))
+    sparse_extension.SparseArrays.SparseMatrixCSC(casadi.sparsity(J))
 end
 
 function check_sparse(kind, sparse::Bool, jac::Bool, inplace::Bool, options)
@@ -1043,13 +1043,13 @@ of the size of the first argument (of any size without `square`), and its other 
 them, which are column vectors.
 """
 function vector_field(kind, f::CasADiCodegen.Function, most::Int; square::Bool = true)
-    @requires 1 <= C.n_in(f) <= most && C.n_out(f) >= 1 "$kind: the function \"$(C.name(f))\" must have 1 to $most arguments and at least one result"
-    n = C.size1(C.sparsity_in(f, 0))
-    m = square ? n : C.size1(C.sparsity_out(f, 0))
-    @requires shape(C.sparsity_in(f, 0)) == (n, 1) && shape(C.sparsity_out(f, 0)) == (m, 1) "$kind: the first argument and the first result of \"$(C.name(f))\" must be column vectors$(square ? " of one size" : "")"
-    @requires all(C.size2(C.sparsity_out(f, o)) == 1 for o in 1:C.n_out(f)-1) "$kind: the other results of \"$(C.name(f))\" must be column vectors"
+    @requires 1 <= casadi.n_in(f) <= most && casadi.n_out(f) >= 1 "$kind: the function \"$(casadi.name(f))\" must have 1 to $most arguments and at least one result"
+    n = casadi.size1(casadi.sparsity_in(f, 0))
+    m = square ? n : casadi.size1(casadi.sparsity_out(f, 0))
+    @requires shape(casadi.sparsity_in(f, 0)) == (n, 1) && shape(casadi.sparsity_out(f, 0)) == (m, 1) "$kind: the first argument and the first result of \"$(casadi.name(f))\" must be column vectors$(square ? " of one size" : "")"
+    @requires all(casadi.size2(casadi.sparsity_out(f, o)) == 1 for o in 1:casadi.n_out(f)-1) "$kind: the other results of \"$(casadi.name(f))\" must be column vectors"
     arguments = symbols(f)
-    values = C.n_out(f) == 1 ? [f(arguments...)] : collect(f(arguments...))
+    values = casadi.n_out(f) == 1 ? [f(arguments...)] : collect(f(arguments...))
     arguments, CasADiCodegen.densify(values[1]), map(CasADiCodegen.densify, values[2:end])
 end
 
@@ -1066,22 +1066,22 @@ names the elements of an SX symbol. An MX argument may join column symbols with 
 Return `nothing` when the argument has other symbols or is not dense.
 """
 function element_names(f::CasADiCodegen.Function, i::Int)
-    C.is_dense(C.sparsity_in(f, i)) || return nothing
-    if C.is_a(f, "SXFunction")
-        e = C.sx_in(f, i)
-        n = C.numel(e)
-        all(k -> C.is_symbolic(e[k]), 1:n) || return nothing
-        return [Symbol(C.name(e[k])) for k in 1:n]
+    casadi.is_dense(casadi.sparsity_in(f, i)) || return nothing
+    if casadi.is_a(f, "SXFunction")
+        e = casadi.sx_in(f, i)
+        n = casadi.numel(e)
+        all(k -> casadi.is_symbolic(e[k]), 1:n) || return nothing
+        return [Symbol(casadi.name(e[k])) for k in 1:n]
     end
-    e = C.mx_in(f, i)
-    n = C.numel(e)
-    if C.is_symbolic(e)
-        return n == 1 ? [Symbol(C.name(e))] : [Symbol(C.name(e), "_", k - 1) for k in 1:n]
+    e = casadi.mx_in(f, i)
+    n = casadi.numel(e)
+    if casadi.is_symbolic(e)
+        return n == 1 ? [Symbol(casadi.name(e))] : [Symbol(casadi.name(e), "_", k - 1) for k in 1:n]
     end
-    C.is_valid_input(e) || return nothing
-    parts = C.primitives(e)
-    all(part -> C.size2(part) == 1 && C.is_dense(C.sparsity(part)), parts) && sum(C.numel, parts; init = 0) == n || return nothing
-    names = [C.numel(part) == 1 ? [Symbol(C.name(part))] : [Symbol(C.name(part), "_", k - 1) for k in 1:C.numel(part)] for part in parts]
+    casadi.is_valid_input(e) || return nothing
+    parts = casadi.primitives(e)
+    all(part -> casadi.size2(part) == 1 && casadi.is_dense(casadi.sparsity(part)), parts) && sum(casadi.numel, parts; init = 0) == n || return nothing
+    names = [casadi.numel(part) == 1 ? [Symbol(casadi.name(part))] : [Symbol(casadi.name(part), "_", k - 1) for k in 1:casadi.numel(part)] for part in parts]
     reduce(vcat, names; init = Symbol[])
 end
 
@@ -1184,10 +1184,10 @@ element also `y_0`, `y_1`, ..., each element.
 function observed_functions(f::CasADiCodegen.Function, arguments, values, codegen)
     observed = Dict{Symbol,Any}()
     for (o, value) in enumerate(values)
-        name = C.name_out(f, o)
+        name = casadi.name_out(f, o)
         g = G.build_function(CasADiCodegen.Function("sciml_observed_" * name, arguments, [value]); expression = Val{false}, codegen...)[1]
         call = length(arguments) == 1 ? (u, p, t...) -> g(u) : length(arguments) == 2 ? (u, p, t...) -> g(u, given(p)) : (u, p, t) -> g(u, given(p), t)
-        n = C.size1(C.sparsity(value))
+        n = casadi.size1(casadi.sparsity(value))
         observed[Symbol(name)] = n == 1 ? (arguments...) -> call(arguments...)[1] : (arguments...) -> collect(vec(call(arguments...)))
         for k in 1:(n == 1 ? 0 : n)
             observed[Symbol(name, "_", k - 1)] = (arguments...) -> call(arguments...)[k]
@@ -1208,13 +1208,13 @@ parameters and the time; the arguments after the state are optional.
 """
 function named_system(f::CasADiCodegen.Function, arguments, values, time::Bool, codegen; places::NTuple{3,Int} = (0, 1, 2))
     states = element_names(f, places[1])
-    parameters = C.n_in(f) > places[2] ? element_names(f, places[2]) : Symbol[]
-    clock = !time ? Symbol[] : C.n_in(f) > places[3] ? element_names(f, places[3]) : [:t]
-    outputs = [Symbol(C.name_out(f, o)) for o in 1:length(values)]
-    elements = [Symbol(C.name_out(f, o), "_", k - 1) for (o, v) in enumerate(values) if C.size1(C.sparsity(v)) > 1 for k in 1:C.size1(C.sparsity(v))]
+    parameters = casadi.n_in(f) > places[2] ? element_names(f, places[2]) : Symbol[]
+    clock = !time ? Symbol[] : casadi.n_in(f) > places[3] ? element_names(f, places[3]) : [:t]
+    outputs = [Symbol(casadi.name_out(f, o)) for o in 1:length(values)]
+    elements = [Symbol(casadi.name_out(f, o), "_", k - 1) for (o, v) in enumerate(values) if casadi.size1(casadi.sparsity(v)) > 1 for k in 1:casadi.size1(casadi.sparsity(v))]
     named = !any(isnothing, (states, parameters, clock)) && (!time || length(clock) == 1) &&
             allunique([states; parameters; clock; outputs; elements])
-    @requires named || isempty(values) "the further results of \"$(C.name(f))\" are observed variables, which need distinct names for the symbols of its arguments and for its results"
+    @requires named || isempty(values) "the further results of \"$(casadi.name(f))\" are observed variables, which need distinct names for the symbols of its arguments and for its results"
     named || return (;)
     # A parameter symbol of several elements is also one parameter, the vector of its elements.
     taken = Set([states; parameters; clock; outputs; elements])
@@ -1251,7 +1251,7 @@ result work:
 
 A function of the time without parameters takes an empty parameter argument, such as
 `SX(0, 1)`; its problem then needs no parameters.
-- An observed variable has the name of its result (see `C.name_out`). A result of more
+- An observed variable has the name of its result (see `casadi.name_out`). A result of more
   than one element `y` also gives `y_0`, `y_1`, ..., one per element.
 
 A function whose arguments are not made of named symbols, or whose names occur twice,
@@ -1341,8 +1341,8 @@ function drift(kind, f::CasADiCodegen.Function, codegen; jac::Bool, paramjac::Bo
     names = user_sys ? (;) : named_system(f, arguments, observed, true, codegen)
     # OrdinaryDiffEq.jl wraps the right side and the Jacobian of a function that is not
     # FullSpecialize, but not the Jacobian by the parameters, whose type would stay in that of the solver.
-    pJ = paramjac && length(arguments) >= 2 ? (P = CasADiCodegen.jacobian(value, arguments[2]); matrix_function("paramjac", P, Val(shape(C.sparsity(P))))) : nothing
-    keywords = (; jac = jac ? matrix_function("jac", J, sparse ? prototype.jac_prototype : Val(shape(C.sparsity(J)))) : nothing,
+    pJ = paramjac && length(arguments) >= 2 ? (P = CasADiCodegen.jacobian(value, arguments[2]); matrix_function("paramjac", P, Val(shape(casadi.sparsity(P))))) : nothing
+    keywords = (; jac = jac ? matrix_function("jac", J, sparse ? prototype.jac_prototype : Val(shape(casadi.sparsity(J)))) : nothing,
                 paramjac = pJ !== nothing && inplace && specialize !== SciMLBase.FullSpecialize ? Opaque(pJ) : pJ,
                 prototype..., names...)
     arguments, wrap("rhs", value; matrix = false), keywords
@@ -1438,11 +1438,11 @@ Return the size of the result of the noise `g` of the drift `f`, after a check t
 has the arguments of `f`, one result, and a row per state.
 """
 function noise_shape(f::CasADiCodegen.Function, g::CasADiCodegen.Function)
-    @requires C.n_in(g) == C.n_in(f) && all(shape(C.sparsity_in(g, i)) == shape(C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1) &&
-              C.n_out(g) == 1 "SDEFunction: the noise \"$(C.name(g))\" must have the arguments of \"$(C.name(f))\" and one result"
-    n = C.size1(C.sparsity_in(f, 0))
-    @requires C.size1(C.sparsity_out(g, 0)) == n "SDEFunction: the noise \"$(C.name(g))\" must have $n rows, one per state; got $(C.size1(C.sparsity_out(g, 0)))"
-    shape(C.sparsity_out(g, 0))
+    @requires casadi.n_in(g) == casadi.n_in(f) && all(shape(casadi.sparsity_in(g, i)) == shape(casadi.sparsity_in(f, i)) for i in 0:casadi.n_in(f)-1) &&
+              casadi.n_out(g) == 1 "SDEFunction: the noise \"$(casadi.name(g))\" must have the arguments of \"$(casadi.name(f))\" and one result"
+    n = casadi.size1(casadi.sparsity_in(f, 0))
+    @requires casadi.size1(casadi.sparsity_out(g, 0)) == n "SDEFunction: the noise \"$(casadi.name(g))\" must have $n rows, one per state; got $(casadi.size1(casadi.sparsity_out(g, 0)))"
+    shape(casadi.sparsity_out(g, 0))
 end
 
 """
@@ -1453,7 +1453,7 @@ and for a matrix, zeros of its size: a `Matrix`, a `SparseMatrixCSC` of its patt
 `sparse`, or an `SMatrix` out of place.
 """
 function noise_prototype(g::CasADiCodegen.Function, inplace::Bool, sparse::Bool)
-    n, m = shape(C.sparsity_out(g, 0))
+    n, m = shape(casadi.sparsity_out(g, 0))
     m == 1 && return nothing
     !inplace ? zero(StaticArrays.SMatrix{n,m,Float64}) : sparse ? sparse_prototype("SDEProblem", g(symbols(g)...)) : zeros(n, m)
 end
@@ -1466,7 +1466,7 @@ function noise_function(f::CasADiCodegen.Function, g::CasADiCodegen.Function, ar
     call = sciml_function("noise", arguments, value, inplace; matrix = m > 1, codegen...)
     inplace || return call
     m == 1 && return Allocating{3}(call, Val((n,)))
-    _, _, colptr, rowval = G.sparsity_tuple(C.sparsity_out(g, 0))
+    _, _, colptr, rowval = G.sparsity_tuple(casadi.sparsity_out(g, 0))
     Allocating{3}(Patterned(call, colptr, rowval), Val((n, m)))
 end
 
@@ -1594,13 +1594,13 @@ other `options` go to `SciMLBase.ImplicitDiscreteFunction`.
 function SciMLBase.ImplicitDiscreteFunction(f::CasADiCodegen.Function; inplace::Bool = true,
                                             specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
                                             chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
-    @requires 2 <= C.n_in(f) <= 4 && C.n_out(f) == 1 "ImplicitDiscreteFunction: the function \"$(C.name(f))\" must have 2 to 4 arguments and one result"
-    n = C.size1(C.sparsity_in(f, 0))
-    @requires shape(C.sparsity_in(f, 0)) == (n, 1) && shape(C.sparsity_in(f, 1)) == (n, 1) && C.size2(C.sparsity_out(f, 0)) == 1 "ImplicitDiscreteFunction: the next and the current state of \"$(C.name(f))\" must be column vectors of the same size, and its result a column vector"
+    @requires 2 <= casadi.n_in(f) <= 4 && casadi.n_out(f) == 1 "ImplicitDiscreteFunction: the function \"$(casadi.name(f))\" must have 2 to 4 arguments and one result"
+    n = casadi.size1(casadi.sparsity_in(f, 0))
+    @requires shape(casadi.sparsity_in(f, 0)) == (n, 1) && shape(casadi.sparsity_in(f, 1)) == (n, 1) && casadi.size2(casadi.sparsity_out(f, 0)) == 1 "ImplicitDiscreteFunction: the next and the current state of \"$(casadi.name(f))\" must be column vectors of the same size, and its result a column vector"
     codegen = codegen_options(; chunk_size, split_above, optlevel, cache)
     arguments = symbols(f)
     value = CasADiCodegen.densify(f(arguments...))
-    m = C.size1(C.sparsity(value))
+    m = casadi.size1(casadi.sparsity(value))
     names = haskey(options, :sys) ? (;) : named_system(f, arguments, [], true, codegen; places = (0, 2, 3))
     prototype = m == n || haskey(options, :resid_prototype) ? (;) :
                 (; resid_prototype = inplace ? zeros(m) : zero(StaticArrays.SVector{m,Float64}))
@@ -1646,12 +1646,12 @@ Return the places, from 1, of the parameters `solved` of `f`, each given by its 
 its name (see `element_names`).
 """
 function parameter_places(f::CasADiCodegen.Function, solved::AbstractVector)
-    np = C.n_in(f) >= 2 ? C.nnz_in(f, 1) : 0
+    np = casadi.n_in(f) >= 2 ? casadi.nnz_in(f, 1) : 0
     names = np > 0 ? element_names(f, 1) : Symbol[]
-    place(i::Integer) = (@requires 1 <= i <= np "ODEFunction: $i is not a parameter of \"$(C.name(f))\", which has $np"; Int(i))
+    place(i::Integer) = (@requires 1 <= i <= np "ODEFunction: $i is not a parameter of \"$(casadi.name(f))\", which has $np"; Int(i))
     function place(name::Symbol)
         found = names === nothing ? nothing : findfirst(==(name), names)
-        @requires found !== nothing "ODEFunction: $name is not a parameter of \"$(C.name(f))\""
+        @requires found !== nothing "ODEFunction: $name is not a parameter of \"$(casadi.name(f))\""
         found
     end
     places = map(place, solved)
@@ -1857,13 +1857,13 @@ with the unknowns `u` and the parameters `solved`. It is a `NonlinearProblem` wh
 as many equations as unknowns, and a `NonlinearLeastSquaresProblem` otherwise.
 """
 function initialization_data(f::CasADiCodegen.Function, conditions::CasADiCodegen.Function, solved::AbstractVector, mass, inplace::Bool, specialize, codegen)
-    k = C.n_in(f)
-    @requires C.n_in(conditions) == k && all(shape(C.sparsity_in(conditions, i)) == shape(C.sparsity_in(f, i)) for i in 0:k-1) &&
-              C.n_out(conditions) >= 1 && C.size2(C.sparsity_out(conditions, 0)) == 1 "ODEFunction: the conditions \"$(C.name(conditions))\" must have the arguments of \"$(C.name(f))\" and a column vector as their first result"
+    k = casadi.n_in(f)
+    @requires casadi.n_in(conditions) == k && all(shape(casadi.sparsity_in(conditions, i)) == shape(casadi.sparsity_in(f, i)) for i in 0:k-1) &&
+              casadi.n_out(conditions) >= 1 && casadi.size2(casadi.sparsity_out(conditions, 0)) == 1 "ODEFunction: the conditions \"$(casadi.name(conditions))\" must have the arguments of \"$(casadi.name(f))\" and a column vector as their first result"
     places = parameter_places(f, solved)
-    n, np = C.nnz_in(f, 0), k >= 2 ? C.nnz_in(f, 1) : 0
+    n, np = casadi.nnz_in(f, 0), k >= 2 ? casadi.nnz_in(f, 1) : 0
     fixed = setdiff(1:np, places)
-    T = C.is_a(f, "SXFunction") && C.is_a(conditions, "SXFunction") ? CasADiCodegen.SX : CasADiCodegen.MX
+    T = casadi.is_a(f, "SXFunction") && casadi.is_a(conditions, "SXFunction") ? CasADiCodegen.SX : CasADiCodegen.MX
     # Scalar symbols with the names of the state and of the parameters, so that the initialization problem has them.
     states, parameters = element_names(f, 0), np > 0 ? element_names(f, 1) : Symbol[]
     named = states !== nothing && parameters !== nothing
@@ -1878,10 +1878,10 @@ function initialization_data(f::CasADiCodegen.Function, conditions::CasADiCodege
     end
     t = T.sym("t")
     arguments = [vcat(u...), vcat(p...), t][1:k]
-    call(g) = (r = g(arguments...); CasADiCodegen.densify(C.n_out(g) == 1 ? r : r[1]))
+    call(g) = (r = g(arguments...); CasADiCodegen.densify(casadi.n_out(g) == 1 ? r : r[1]))
     column(parts) = isempty(parts) ? T(0, 1) : vcat(parts...)
     value, extra = call(f), call(conditions)
-    equations = column([[value[i] for i in algebraic_rows(mass)]; [extra[i] for i in 1:C.size1(C.sparsity(extra))]])
+    equations = column([[value[i] for i in algebraic_rows(mass)]; [extra[i] for i in 1:casadi.size1(casadi.sparsity(extra))]])
     unknowns = column([u; p[places]])
     known = column(k >= 3 ? [p[fixed]; t] : p[fixed])
     residual = CasADiCodegen.Function("initialization", [unknowns, known], [equations])
@@ -1892,9 +1892,9 @@ function initialization_data(f::CasADiCodegen.Function, conditions::CasADiCodege
     if specialize !== SciMLBase.FullSpecialize
         g = SciMLBase.NonlinearFunction{true,specialize}(OpaqueNonlinear(g.f); jac = OpaqueNonlinear(g.jac), g.resid_prototype, g.sys)
     end
-    m, w = C.size1(C.sparsity(equations)), zeros(n + length(places))
-    problem = m == length(w) ? SciMLBase.NonlinearProblem(g, w, zeros(C.numel(known))) :
-              SciMLBase.NonlinearLeastSquaresProblem(g, w, zeros(C.numel(known)))
+    m, w = casadi.size1(casadi.sparsity(equations)), zeros(n + length(places))
+    problem = m == length(w) ? SciMLBase.NonlinearProblem(g, w, zeros(casadi.numel(known))) :
+              SciMLBase.NonlinearLeastSquaresProblem(g, w, zeros(casadi.numel(known)))
     s = Initialization(n, places, fixed, k >= 3, !inplace)
     SciMLBase.OverrideInitData(problem, s, StateMap(s), isempty(places) ? nothing : ParameterMap(s))
 end
@@ -1929,13 +1929,13 @@ function SciMLBase.NonlinearFunction(f::CasADiCodegen.Function; jac::Bool = true
     arguments, value, observed = vector_field("NonlinearFunction", f, 2; square = false)
     wrap(name, expression; matrix = true) = sciml_function(name, arguments, expression, inplace; matrix, codegen...)
     J = jac ? CasADiCodegen.jacobian(value, arguments[1]) : nothing
-    m = C.size1(C.sparsity(value))
-    residual = m == C.size1(arguments[1]) || haskey(options, :resid_prototype) ? (;) :
+    m = casadi.size1(casadi.sparsity(value))
+    residual = m == casadi.size1(arguments[1]) || haskey(options, :resid_prototype) ? (;) :
                (; resid_prototype = inplace ? zeros(m) : zeros(StaticArrays.SVector{m,Float64}))
     prototype = sparse ? (; jac_prototype = sparse_prototype("NonlinearFunction", J), residual...) : residual
     names = haskey(options, :sys) ? (;) : named_system(f, arguments, observed, false, codegen)
     # In place, the Jacobian also has an out-of-place method, which returns a new matrix.
-    jacobian = !jac ? nothing : inplace ? Allocating{2}(wrap("jac", J), sparse ? prototype.jac_prototype : Val(shape(C.sparsity(J)))) : wrap("jac", J)
+    jacobian = !jac ? nothing : inplace ? Allocating{2}(wrap("jac", J), sparse ? prototype.jac_prototype : Val(shape(casadi.sparsity(J)))) : wrap("jac", J)
     SciMLBase.NonlinearFunction{inplace,specialize}(wrap("residual", value; matrix = false);
         jac = jacobian, prototype..., names..., options...)
 end
@@ -1992,27 +1992,27 @@ function SciMLBase.OptimizationFunction(objective::CasADiCodegen.Function, const
     @requires !lag_h || (sparse && hess) "OptimizationFunction: lag_h = true needs sparse = true and hess = true"
     @requires !sparse || !any(haskey(options, k) for k in (:hess_prototype, :cons_jac_prototype, :cons_hess_prototype, :lag_hess_prototype)) "OptimizationFunction: sparse = true makes the prototypes itself"
     codegen = codegen_options(; chunk_size, split_above, optlevel, cache)
-    n = C.n_in(objective)
-    @requires 1 <= n <= 2 && C.n_out(objective) == 1 && shape(C.sparsity_out(objective, 0)) == (1, 1) "OptimizationFunction: the objective must have 1 or 2 arguments and one number as its result"
-    @requires C.size2(C.sparsity_in(objective, 0)) == 1 "OptimizationFunction: the unknown must be a column vector"
+    n = casadi.n_in(objective)
+    @requires 1 <= n <= 2 && casadi.n_out(objective) == 1 && shape(casadi.sparsity_out(objective, 0)) == (1, 1) "OptimizationFunction: the objective must have 1 or 2 arguments and one number as its result"
+    @requires casadi.size2(casadi.sparsity_in(objective, 0)) == 1 "OptimizationFunction: the unknown must be a column vector"
     arguments = symbols(objective)
     x = arguments[1]
     cost = CasADiCodegen.densify(objective(arguments...))
     # Each function is in place, with an out-of-place method that returns a new array: dense, or a copy of the sparse prototype.
-    result(M) = sparse ? sparse_prototype("OptimizationFunction", M) : Val(shape(C.sparsity(M)))
+    result(M) = sparse ? sparse_prototype("OptimizationFunction", M) : Val(shape(casadi.sparsity(M)))
     call(name, expression, new) = Allocating{2}(sciml_function(name, arguments, expression, true; codegen...), new)
     # A prototype for each sparse matrix; the dense form has none.
     prototype(name, M) = sparse ? (; name => sparse_prototype("OptimizationFunction", M)) : (;)
     H = hess ? first(CasADiCodegen.hessian(cost, x)) : nothing
-    given = (; grad = call("grad", CasADiCodegen.gradient(cost, x), Val((C.size1(x),))), hess = hess ? call("hess", H, result(H)) : nothing,
+    given = (; grad = call("grad", CasADiCodegen.gradient(cost, x), Val((casadi.size1(x),))), hess = hess ? call("hess", H, result(H)) : nothing,
              (hess ? prototype(:hess_prototype, H) : (;))...)
     value = nothing
     if constraints !== nothing
-        @requires C.n_in(constraints) == n && C.n_out(constraints) == 1 && C.size2(C.sparsity_out(constraints, 0)) == 1 &&
-                  all(shape(C.sparsity_in(constraints, i)) == shape(C.sparsity_in(objective, i)) for i in 0:n-1) "OptimizationFunction: the constraints must be a column vector and have the arguments of the objective"
+        @requires casadi.n_in(constraints) == n && casadi.n_out(constraints) == 1 && casadi.size2(casadi.sparsity_out(constraints, 0)) == 1 &&
+                  all(shape(casadi.sparsity_in(constraints, i)) == shape(casadi.sparsity_in(objective, i)) for i in 0:n-1) "OptimizationFunction: the constraints must be a column vector and have the arguments of the objective"
         value = CasADiCodegen.densify(constraints(arguments...))
         J = CasADiCodegen.jacobian(value, x)
-        given = (; given..., cons = call("cons", value, Val((C.size1(value),))), cons_j = call("cons_j", J, result(J)), prototype(:cons_jac_prototype, J)...)
+        given = (; given..., cons = call("cons", value, Val((casadi.size1(value),))), cons_j = call("cons_j", J, result(J)), prototype(:cons_jac_prototype, J)...)
         if hess && !lag_h
             # The dense form has m·n² entries: with `sparse` only the stored values are written.
             each = [first(CasADiCodegen.hessian(value[j], x)) for j in 1:size(value, 1)]
@@ -2024,7 +2024,7 @@ function SciMLBase.OptimizationFunction(objective::CasADiCodegen.Function, const
     if lag_h
         T = typeof(x)
         σ, μ = T.sym("sigma"), T.sym("mu", value === nothing ? 0 : size(value, 1))
-        upper = C.triu(first(CasADiCodegen.hessian(value === nothing ? σ * cost : σ * cost + C.dot(μ, value), x)))
+        upper = casadi.triu(first(CasADiCodegen.hessian(value === nothing ? σ * cost : σ * cost + casadi.dot(μ, value), x)))
         lagrange = G.build_function(CasADiCodegen.Function("sciml_lag_h", [arguments..., σ, μ], [upper]);
                                     expression = Val{false}, nonzeros = true, codegen...)
         given = (; given..., lag_h = LagrangeHessian{n,typeof(lagrange)}(lagrange), prototype(:lag_hess_prototype, upper)...)
@@ -2093,7 +2093,7 @@ function SciMLBase.ODEProblem(I::CasADiCodegen.Function, x0::AbstractVector{<:Re
     controls = reshape(float(collect(u)), model.nu, intervals)
     callback = get(options, :callback, nothing)
     if model.events > 0
-        transition = CasADiCodegen.C.has_function(I, "transition") ? CasADiCodegen.C.get_function(I, "transition") : nothing
+        transition = casadi.has_function(I, "transition") ? casadi.get_function(I, "transition") : nothing
         events = G.event_functions(model, transition)
         emitted(g) = G.Emitted(G.build_function(g; expression = Val{false}, nonzeros = true), g, :nonzeros)
         rhs = model.nz == 0 ? G.RightSide(nothing) : G.emitted_right_side(model)
@@ -2107,7 +2107,7 @@ function SciMLBase.ODEProblem(I::CasADiCodegen.Function, x0::AbstractVector{<:Re
 end
 
 """
-    SciMLBase.ODEProblem(dae::CasADiCodegen.C.DaeBuilder, tspan = nothing; jac = true, paramjac = true,
+    SciMLBase.ODEProblem(dae::casadi.DaeBuilder, tspan = nothing; jac = true, paramjac = true,
                          sparse = false, specialize = SciMLBase.FullSpecialize, chunk_size = nothing,
                          split_above = nothing, optlevel = nothing, cache = false, options...)
 
@@ -2134,37 +2134,37 @@ go to the problem.
 
 # Examples
 ```julia
-dae = CasADiCodegen.C.DaeBuilder("decay")
-x, k = CasADiCodegen.C.add(dae, "x", "local", "continuous"), CasADiCodegen.C.add(dae, "k", "parameter", "tunable")
-CasADiCodegen.C.eq(dae, CasADiCodegen.C.der(dae, x), -k * x)
-CasADiCodegen.C.set_start(dae, "x", 1.0)
-CasADiCodegen.C.set_start(dae, "k", 0.5)
+dae = casadi.DaeBuilder("decay")
+x, k = casadi.add(dae, "x", "local", "continuous"), casadi.add(dae, "k", "parameter", "tunable")
+casadi.eq(dae, casadi.der(dae, x), -k * x)
+casadi.set_start(dae, "x", 1.0)
+casadi.set_start(dae, "k", 0.5)
 solution = SciMLBase.solve(SciMLBase.ODEProblem(dae, (0.0, 2.0)), Vern9())
 solution[:x]
 ```
 """
-function SciMLBase.ODEProblem(dae::CasADiCodegen.C.DaeBuilder, tspan::Union{Nothing,Tuple{Real,Real}} = nothing;
+function SciMLBase.ODEProblem(dae::casadi.DaeBuilder, tspan::Union{Nothing,Tuple{Real,Real}} = nothing;
                               jac::Bool = true, paramjac::Bool = true, sparse::Bool = false,
                               specialize::Type{<:SciMLBase.AbstractSpecialization} = SciMLBase.FullSpecialize,
                               chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
-    name = C.name(dae)
+    name = casadi.name(dae)
     label = "DaeBuilder \"$name\""
-    @requires isempty(C.q(dae)) "$label: a model with quadratures is not supported"
-    @requires C.nzero(dae) == 0 "$label: a model with when equations is not supported"
-    span = tspan === nothing ? (C.start_time(dae), C.stop_time(dae)) : tspan
+    @requires isempty(casadi.q(dae)) "$label: a model with quadratures is not supported"
+    @requires casadi.nzero(dae) == 0 "$label: a model with when equations is not supported"
+    span = tspan === nothing ? (casadi.start_time(dae), casadi.stop_time(dae)) : tspan
     @requires all(isfinite, span) "$label: give the time span, or set the start and stop times of the DaeBuilder"
-    g = C.create(dae, "$(name)_dae", ["x", "z", "p", "u", "t"], ["ode", "alg"])
-    nx, nz, np, nu = (C.nnz_in(g, i) for i in 0:3)
+    g = casadi.create(dae, "$(name)_dae", ["x", "z", "p", "u", "t"], ["ode", "alg"])
+    nx, nz, np, nu = (casadi.nnz_in(g, i) for i in 0:3)
     state, parameters, t = CasADiCodegen.MX.sym("u", nx + nz), CasADiCodegen.MX.sym("p", np + nu), CasADiCodegen.MX.sym("t")
     # A model that does not use the time has a time of no element.
-    time = C.nnz_in(g, 4) == 0 ? CasADiCodegen.MX(C.sparsity_in(g, 4)) : t
+    time = casadi.nnz_in(g, 4) == 0 ? CasADiCodegen.MX(casadi.sparsity_in(g, 4)) : t
     ode, alg = g(G.part(state, 0, nx), G.part(state, nx, nz), G.part(parameters, 0, np), G.part(parameters, np, nu), time)
     rhs = CasADiCodegen.Function(name, [state, parameters, t], [vcat(ode, alg)])
-    differential, algebraic, constant, inputs = C.x(dae), C.z(dae), C.p(dae), C.u(dae)
-    u0, p0 = C.start(dae, [differential; algebraic]), C.start(dae, [constant; inputs])
+    differential, algebraic, constant, inputs = casadi.x(dae), casadi.z(dae), casadi.p(dae), casadi.u(dae)
+    u0, p0 = casadi.start(dae, [differential; algebraic]), casadi.start(dae, [constant; inputs])
     @ensures length(u0) == nx + nz && length(p0) == np + nu "$label: the start values do not have the sizes of the model"
     # CasADi replaces a constant by its value, which is NaN until `set(dae, name, value)` gives it.
-    @requires all(isfinite, C.nonzeros(rhs(C.DM(u0), C.DM(p0), C.DM(float(span[1]))))) "$label: the right side is not finite at the start values; give each constant its value with set(dae, name, value)"
+    @requires all(isfinite, casadi.nonzeros(rhs(casadi.DM(u0), casadi.DM(p0), casadi.DM(float(span[1]))))) "$label: the right side is not finite at the start values; give each constant its value with set(dae, name, value)"
     scalar = length(u0) == length(differential) + length(algebraic) && length(p0) == length(constant) + length(inputs)
     names = scalar ? (; sys = Names(SciMLBase.SymbolCache(Symbol.([differential; algebraic]), Symbol.([constant; inputs]), :t), Dict{Symbol,Any}(), Dict{Symbol,UnitRange{Int}}())) : (;)
     mass = nz == 0 ? (;) : (; mass_matrix = LinearAlgebra.Diagonal([ones(nx); zeros(nz)]))
@@ -2216,15 +2216,15 @@ function SciMLBase.ODEProblem(sys::CasADiCodegen.Models.System, u0, tspan::Tuple
     nx = length(sys.x)
     observed = M.observed(sys)
     x0 = values_of(label, "state", states, u0, [fill(NaN, nx); zeros(length(sys.z))], observed)
-    missing_states = [C.name(states[i]) for i in 1:nx if isnan(x0[i])]
+    missing_states = [casadi.name(states[i]) for i in 1:nx if isnan(x0[i])]
     @requires isempty(missing_states) "$label: give the initial value of each differential state; $(join(missing_states, ", ")) has none"
     p0 = values_of(label, "parameter", parameters, p, fill(NaN, length(parameters)), observed)
-    missing_parameters = [C.name(parameters[i]) for i in eachindex(parameters) if isnan(p0[i])]
+    missing_parameters = [casadi.name(parameters[i]) for i in eachindex(parameters) if isnan(p0[i])]
     @requires isempty(missing_parameters) "$label: give the value of each parameter; $(join(missing_parameters, ", ")) has none"
     column(v) = isempty(v) ? CasADiCodegen.SX(0, 1) : vcat(v...)
     results = append!([column([sys.ode; sys.alg])], last.(observed))
     rhs = CasADiCodegen.Function(sys.name, [column(states), column(parameters), sys.t], results,
-                                 ["u", "p", "t"], ["du"; [C.name(first(o)) for o in observed]])
+                                 ["u", "p", "t"], ["du"; [casadi.name(first(o)) for o in observed]])
     mass = isempty(sys.z) ? (;) : (; mass_matrix = LinearAlgebra.Diagonal([ones(nx); zeros(length(sys.z))]))
     f = SciMLBase.ODEFunction(rhs; jac, paramjac, sparse, specialize, chunk_size, split_above, optlevel, cache, mass...)
     SciMLBase.ODEProblem(f, x0, float.(tspan), p0; options...)
@@ -2243,14 +2243,14 @@ function values_of(label, kind, symbols::Vector{CasADiCodegen.SX}, given, defaul
         return Vector{Float64}(given)
     end
     values = copy(defaults)
-    names = [C.name(s) for s in symbols]
+    names = [casadi.name(s) for s in symbols]
     for (key, value) in given
-        place = key isa CasADiCodegen.SX ? findfirst(s -> C.is_equal(s, key), symbols) :
+        place = key isa CasADiCodegen.SX ? findfirst(s -> casadi.is_equal(s, key), symbols) :
                 key isa Union{Symbol,AbstractString} ? findfirst(==(String(key)), names) :
                 throw(ArgumentError("$label: a $kind is a symbol, a Symbol or a String, not $(repr(key))"))
         if place === nothing
-            name = key isa CasADiCodegen.SX ? C.name(key) : String(key)
-            eliminated = any(o -> C.name(first(o)) == name, observed)
+            name = key isa CasADiCodegen.SX ? casadi.name(key) : String(key)
+            eliminated = any(o -> casadi.name(first(o)) == name, observed)
             @requires false "$label: $name is not a $kind of the model$(eliminated ? "; it is an observed variable, which the model computes" : "")"
         end
         values[place] = value
@@ -2353,15 +2353,15 @@ function SciMLBase.OptimizationProblem(S::CasADiCodegen.Function, x0::AbstractVe
 end
 
 """
-    SciMLBase.OptimizationProblem(opti::CasADiCodegen.C.Opti; hess = true, sparse = false, lag_h = sparse && hess,
+    SciMLBase.OptimizationProblem(opti::casadi.Opti; hess = true, sparse = false, lag_h = sparse && hess,
                                   chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
 
 Make the SciML problem of the optimization problem that the `Opti` object of CasADi holds,
 with generated code for the objective, the constraints and their derivatives.
 
 - The unknowns are the variables of `opti`, in the order of their declaration, as
-  `C.x(opti)` joins them. Their initial values come from `set_initial`, or are zero.
-- The parameters are the parameters of `opti` (`C.p(opti)`), with the values from
+  `casadi.x(opti)` joins them. Their initial values come from `set_initial`, or are zero.
+- The parameters are the parameters of `opti` (`casadi.p(opti)`), with the values from
   `set_value`. Each parameter must have a value.
 - The constraints are those of `subject_to`, with the bounds that `opti` gives them.
   `opti` keeps a bound on a variable as a constraint, so the problem has no `lb` and
@@ -2370,42 +2370,41 @@ with generated code for the objective, the constraints and their derivatives.
 
 The keywords from `hess` to `cache` have the meaning that they have for
 [`OptimizationFunction`](@ref SciMLBase.OptimizationFunction(::CasADiCodegen.Function, ::Union{Nothing,CasADiCodegen.Function})).
-The other `options` go to the problem. `C.value(opti, expression, [C.x(opti) == CasADiCodegen.DM(solution.u)])`
+The other `options` go to the problem. `casadi.value(opti, expression, [casadi.x(opti) == DM(solution.u)])`
 evaluates an expression of `opti` at the solution.
 
 # Examples
 ```julia
-C = CasADiCodegen.C
-opti = C.Opti()
-x, a = C.variable(opti, 2), C.parameter(opti)
-C.minimize(opti, (x[1] - a)^2 + x[2]^2)
-C.subject_to(opti, x[1] + x[2] >= 1)
-C.set_value(opti, a, C.DM(0.25))
+opti = Opti()
+x, a = variable(opti, 2), parameter(opti)
+minimize(opti, (x[1] - a)^2 + x[2]^2)
+subject_to(opti, x[1] + x[2] >= 1)
+casadi.set_value(opti, a, 0.25)
 problem = SciMLBase.OptimizationProblem(opti; sparse = true)
 solution = SciMLBase.solve(problem, OptimizationIpopt.IpoptOptimizer())
 ```
 """
-function SciMLBase.OptimizationProblem(opti::C.Opti; hess::Bool = true, sparse::Bool = false, lag_h::Bool = sparse && hess,
+function SciMLBase.OptimizationProblem(opti::casadi.Opti; hess::Bool = true, sparse::Bool = false, lag_h::Bool = sparse && hess,
                                        chunk_size = nothing, split_above = nothing, optlevel = nothing, cache = false, options...)
-    x, p = C.x(opti), C.p(opti)
-    given = C.value_parameters(opti)
-    numbers(expression, values) = Vector{Float64}(C.nonzeros(CasADiCodegen.DM(C.value(opti, expression, values))))
+    x, p = casadi.x(opti), casadi.p(opti)
+    given = casadi.value_parameters(opti)
+    numbers(expression, values) = Vector{Float64}(casadi.nonzeros(CasADiCodegen.DM(casadi.value(opti, expression, values))))
     # CasADi refuses the value of a parameter that has none.
-    p0 = C.np(opti) == 0 ? Float64[] : try
+    p0 = casadi.np(opti) == 0 ? Float64[] : try
         numbers(p, given)
     catch err
-        err isa C.SwigError || rethrow()
+        err isa casadi.SwigError || rethrow()
         Float64[NaN]
     end
     @requires all(isfinite, p0) "Opti: give each parameter its value with set_value"
-    x0 = numbers(x, C.initial(opti))
-    arguments = C.np(opti) == 0 ? [x] : [x, p]
-    objective = CasADiCodegen.Function("opti_objective", arguments, [C.f(opti)])
-    constrained = C.ng(opti) > 0
-    constraints = constrained ? CasADiCodegen.Function("opti_constraints", arguments, [C.g(opti)]) : nothing
+    x0 = numbers(x, casadi.initial(opti))
+    arguments = casadi.np(opti) == 0 ? [x] : [x, p]
+    objective = CasADiCodegen.Function("opti_objective", arguments, [casadi.f(opti)])
+    constrained = casadi.ng(opti) > 0
+    constraints = constrained ? CasADiCodegen.Function("opti_constraints", arguments, [casadi.g(opti)]) : nothing
     f = SciMLBase.OptimizationFunction(objective, constraints; hess, sparse, lag_h, chunk_size, split_above, optlevel, cache)
-    lcons, ucons = constrained ? (numbers(C.lbg(opti), given), numbers(C.ubg(opti), given)) : (nothing, nothing)
-    @ensures length(x0) == C.nx(opti) && (lcons === nothing || length(lcons) == length(ucons) == C.ng(opti)) "Opti: the values do not have the sizes of the problem"
+    lcons, ucons = constrained ? (numbers(casadi.lbg(opti), given), numbers(casadi.ubg(opti), given)) : (nothing, nothing)
+    @ensures length(x0) == casadi.nx(opti) && (lcons === nothing || length(lcons) == length(ucons) == casadi.ng(opti)) "Opti: the values do not have the sizes of the problem"
     SciMLBase.OptimizationProblem(f, x0, p0; lcons, ucons, options...)
 end
 

@@ -10,14 +10,14 @@ makes one. A call `d(arguments...)` takes one array per input and returns one ar
 output, as the out-of-place function of `build_function`.
 """
 struct Differentiable{G,O}
-    f::C.Function
+    f::casadi.Function
     value::G
     options::O
     derivatives::Dict{Symbol,Any}
     lock::ReentrantLock
 end
 (d::Differentiable)(arguments...) = d.value(arguments...)
-Base.show(io::IO, d::Differentiable) = print(io, "the differentiable function \"", C.name(d.f), "\"")
+Base.show(io::IO, d::Differentiable) = print(io, "the differentiable function \"", casadi.name(d.f), "\"")
 
 """
     differentiable(f::CasADiCodegen.Function; options...) -> Differentiable
@@ -48,7 +48,7 @@ julia> d([2.0, pi / 2])
  2.0
 ```
 """
-differentiable(f::C.Function; options...) =
+differentiable(f::casadi.Function; options...) =
     Differentiable(f, build_function(f; expression = Val{false}, options...)[1], values(options), Dict{Symbol,Any}(), ReentrantLock())
 
 """
@@ -66,15 +66,15 @@ function directional(d::Differentiable, kind::Symbol)
     lock(d.lock) do
         get!(d.derivatives, kind) do
             f = d.f
-            x = [MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
+            x = [MX.sym(casadi.name_in(f, i), casadi.sparsity_in(f, i)) for i in 0:casadi.n_in(f)-1]
             y = as_list(f(x...))
             g = if kind === :pushforward
-                changes = [MX.sym("d_" * C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
-                Front.Function(C.name(f) * "_pushforward", MX[x; changes],
+                changes = [MX.sym("d_" * casadi.name_in(f, i), casadi.sparsity_in(f, i)) for i in 0:casadi.n_in(f)-1]
+                Front.Function(casadi.name(f) * "_pushforward", MX[x; changes],
                                MX[y; [reduce(+, [Front.jtimes(r, a, da, false) for (a, da) in zip(x, changes)]) for r in y]])
             else
-                seeds = [MX.sym("adj_" * C.name_out(f, o), C.sparsity_out(f, o)) for o in 0:C.n_out(f)-1]
-                Front.Function(C.name(f) * "_pullback", MX[x; seeds],
+                seeds = [MX.sym("adj_" * casadi.name_out(f, o), casadi.sparsity_out(f, o)) for o in 0:casadi.n_out(f)-1]
+                Front.Function(casadi.name(f) * "_pullback", MX[x; seeds],
                                [reduce(+, [Front.jtimes(r, a, seed, true) for (r, seed) in zip(y, seeds)]) for a in x])
             end
             build_function(g; expression = Val{false}, d.options...)[1]

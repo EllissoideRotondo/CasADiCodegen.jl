@@ -20,9 +20,8 @@ using SparseArrays
 using OptimizationIpopt: IpoptOptimizer
 import SciMLBase
 
-C = CasADiCodegen.C                              # the module of the CasADi front end
-τ = C.collocation_points(3, "radau")
-slope, final, _ = Matrix.(C.collocation_coeff(τ))
+τ = casadi.collocation_points(3, "radau")
+slope, final, _ = Matrix.(casadi.collocation_coeff(τ))
 τ
 ```
 

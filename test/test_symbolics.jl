@@ -21,12 +21,12 @@ end
 @testset "array inputs and outputs keep their shape and names" begin
     mat = [p[1]*q[1, 1]+q[2, 1] p[2]^2; q[1, 2] p[1]*p[2]*q[2, 2]]
     f = casadi_function("m", [p, q], [mat, p[1] + p[2]]; input_names = ["p", "q"], output_names = ["m", "s"])
-    @test (C.size1(C.sparsity_out(f, 0)), C.size2(C.sparsity_out(f, 0))) == (2, 2)
-    @test C.name_in(f, 1) == "q" && C.name_out(f, 1) == "s"
+    @test (casadi.size1(casadi.sparsity_out(f, 0)), casadi.size2(casadi.sparsity_out(f, 0))) == (2, 2)
+    @test casadi.name_in(f, 1) == "q" && casadi.name_out(f, 1) == "s"
     pv, qv = [0.7, -1.1], [0.5 2.0; -0.4 1.3]
-    result = f(C.DM(pv), C.DM(qv))
+    result = f(casadi.DM(pv), casadi.DM(qv))
     @test Matrix(result[1]) ≈ [pv[1]*qv[1, 1]+qv[2, 1] pv[2]^2; qv[1, 2] pv[1]*pv[2]*qv[2, 2]]
-    @test only(C.nonzeros(result[2])) ≈ sum(pv)
+    @test only(casadi.nonzeros(result[2])) ≈ sum(pv)
 end
 
 @testset "supported operations agree with Julia" begin

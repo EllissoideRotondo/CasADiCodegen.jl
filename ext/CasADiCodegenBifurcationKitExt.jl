@@ -5,7 +5,7 @@ import CasADiCodegen
 import SciMLBase
 using CasADiCodegen.Codegen: @requires, @ensures
 
-const C = CasADiCodegen.C
+const casadi = CasADiCodegen.casadi
 const SII = SciMLBase.SymbolicIndexingInterface
 
 "The extension for SciMLBase.jl, whose `NonlinearFunction` and names this extension builds on."
@@ -115,12 +115,12 @@ Return `f(u, p)` itself, or for `f(u, p, t)` the function of `u` and `p` alone w
 results of `f`, which must not depend on the time.
 """
 function autonomous(f::CasADiCodegen.Function)
-    C.n_in(f) == 3 || return f
-    sx = C.is_a(f, "SXFunction")
-    inputs = [sx ? C.sx_in(f, i) : C.mx_in(f, i) for i in 0:2]
-    results = C.n_out(f) == 1 ? [f(inputs...)] : collect(f(inputs...))
-    @requires !C.depends_on(results[1], inputs[3]) "BifurcationProblem: the steady states of \"$(C.name(f))\" need a first result that does not depend on the time"
-    CasADiCodegen.Function(C.name(f), inputs[1:2], results, [C.name_in(f, i) for i in 0:1], [C.name_out(f, o) for o in 0:C.n_out(f)-1])
+    casadi.n_in(f) == 3 || return f
+    sx = casadi.is_a(f, "SXFunction")
+    inputs = [sx ? casadi.sx_in(f, i) : casadi.mx_in(f, i) for i in 0:2]
+    results = casadi.n_out(f) == 1 ? [f(inputs...)] : collect(f(inputs...))
+    @requires !casadi.depends_on(results[1], inputs[3]) "BifurcationProblem: the steady states of \"$(casadi.name(f))\" need a first result that does not depend on the time"
+    CasADiCodegen.Function(casadi.name(f), inputs[1:2], results, [casadi.name_in(f, i) for i in 0:1], [casadi.name_out(f, o) for o in 0:casadi.n_out(f)-1])
 end
 
 """
@@ -172,14 +172,14 @@ function BifurcationKit.BifurcationProblem(f::CasADiCodegen.Function, u0, p, par
                                            cache = false, options...)
     S = sciml()
     @requires S !== nothing "BifurcationProblem: the extension for SciMLBase.jl is not loaded"
-    @requires 2 <= C.n_in(f) <= 3 "BifurcationProblem: the function \"$(C.name(f))\" must have the arguments (u, p) or (u, p, t)"
+    @requires 2 <= casadi.n_in(f) <= 3 "BifurcationProblem: the function \"$(casadi.name(f))\" must have the arguments (u, p) or (u, p, t)"
     g = autonomous(f)
     codegen = S.codegen_options(; chunk_size, split_above, optlevel, cache)
     arguments, value, _ = S.vector_field("BifurcationProblem", g, 2)
-    n, m = C.numel(arguments[1]), C.numel(arguments[2])
+    n, m = casadi.numel(arguments[1]), casadi.numel(arguments[2])
     nf = SciMLBase.NonlinearFunction(g; jac, codegen...)
     sys = nf.sys
-    named(name) = (@requires sys !== nothing && !isempty(SII.all_symbols(sys)) "BifurcationProblem: the name $name needs distinct names for the symbols of the arguments of \"$(C.name(f))\""; true)
+    named(name) = (@requires sys !== nothing && !isempty(SII.all_symbols(sys)) "BifurcationProblem: the name $name needs distinct names for the symbols of the arguments of \"$(casadi.name(f))\""; true)
     state_index(name) = (named(name); @requires SII.is_variable(sys, name) "BifurcationProblem: $name is not a state"; SII.variable_index(sys, name))
     parameter_index(name) = (named(name); @requires SII.is_parameter(sys, name) "BifurcationProblem: $name is not a parameter"; SII.parameter_index(sys, name))
     x0 = values_by_name("u0", u0, n, i -> state_index(i))
@@ -209,14 +209,14 @@ and parameters) as keywords of `BifurcationKit.BifurcationProblem`: `jvp`, `d2F`
 """
 function jet_functions(S, arguments, value, k::Int, codegen)
     x, p = arguments
-    n = C.numel(x)
+    n = casadi.numel(x)
     T = typeof(x)
     dx = [T.sym("d$i", n) for i in 1:3]
-    first = C.jtimes(value, x, dx[1])
-    second = C.jtimes(first, x, dx[2])
-    third = C.jtimes(second, x, dx[3])
+    first = casadi.jtimes(value, x, dx[1])
+    second = casadi.jtimes(first, x, dx[2])
+    third = casadi.jtimes(second, x, dx[3])
     by_parameter = CasADiCodegen.densify(CasADiCodegen.jacobian(value, p)[:, k])
-    mixed = C.jtimes(by_parameter, x, dx[1])
+    mixed = casadi.jtimes(by_parameter, x, dx[1])
     generated(name, directions, expression) =
         Derivative(S.inplace("bifurcation_" * name, [x, p, dx[1:directions]...], CasADiCodegen.densify(expression); codegen...), n)
     d2F, d3F = generated("d2F", 2, second), generated("d3F", 3, third)

@@ -8,7 +8,7 @@ function check_smooth(width, kind::Symbol)
     if width isa Real
         @requires width > 0 "the width of a smooth switch must be positive; got $width"
     else
-        @requires width isa Symbolic && C.is_scalar(width) "the width of a smooth switch must be a positive number or a scalar SX or MX; got $(typeof(width))"
+        @requires width isa Symbolic && casadi.is_scalar(width) "the width of a smooth switch must be a positive number or a scalar SX or MX; got $(typeof(width))"
     end
 end
 
@@ -22,10 +22,10 @@ function symbolic_arguments(arguments...)
 end
 
 product(a::Real, b::Real) = a * b
-product(a::Symbolic, b::Symbolic) = C.times(a, b)
+product(a::Symbolic, b::Symbolic) = casadi.times(a, b)
 
 sign_value(s::Real, width::Real, kind::Symbol) = kind === :tanh ? tanh(s / width) : s / hypot(s, width)
-sign_value(s::Symbolic, width::Symbolic, kind::Symbol) = kind === :tanh ? C.tanh(C.rdivide(s, width)) : C.rdivide(s, C.hypot(s, width))
+sign_value(s::Symbolic, width::Symbolic, kind::Symbol) = kind === :tanh ? casadi.tanh(casadi.rdivide(s, width)) : casadi.rdivide(s, casadi.hypot(s, width))
 
 abs_value(s, width, kind) = product(s, sign_value(s, width, kind))
 max_value(a, b, width, kind) = (a + b + abs_value(a - b, width, kind)) / 2
@@ -158,7 +158,7 @@ soft(flag::UInt8) = flag & SOFT != 0
 truth(flag::UInt8) = flag & TRUTH != 0
 
 "The elements of the MX `a` as scalars, structural zeros included, in column order."
-elements(a::MX) = (v = C.vec(C.densify(a)); MX[v[k] for k in 1:C.numel(v)])
+elements(a::MX) = (v = casadi.vec(casadi.densify(a)); MX[v[k] for k in 1:casadi.numel(v)])
 
 """
     smooth_operation(op, operands, flags, width, s, T) -> (value, flag) or nothing
@@ -182,18 +182,18 @@ function smooth_operation(op::Symbol, operands::Vector, flags::Vector{UInt8}, wi
     elseif on && op === :OP_COPYSIGN
         product(abs_value(a, width, kind), sign_value(operands[2], width, kind)), SELECTED | SOFT
     elseif on && op === :OP_NORM1
-        C.sum1(C.vec(abs_value(a, width, kind))), SELECTED | SOFT
-    elseif on && op in (:OP_NORMINF, :OP_MMAX, :OP_MMIN) && C.numel(a) > 0
+        casadi.sum1(casadi.vec(abs_value(a, width, kind))), SELECTED | SOFT
+    elseif on && op in (:OP_NORMINF, :OP_MMAX, :OP_MMIN) && casadi.numel(a) > 0
         terms = elements(op === :OP_NORMINF ? abs_value(a, width, kind) : a)
         foldl((m, e) -> op === :OP_MMIN ? min_value(m, e, width, kind) : max_value(m, e, width, kind), terms), SELECTED | SOFT
     elseif op in (:OP_NOT, :OP_AND, :OP_OR) && any(truth, flags)
         @requires !any(f -> soft(f) && !truth(f), flags) "smoothed: $op of a condition and of a smoothed value that is not a condition; the value is never exactly 0, so the switch would move"
         # A plain operand is 0 or not 0, as a logical operation reads it.
-        c = [truth(f) ? v : C.binary(T, C.OP_NE, v, T(0.0)) for (v, f) in zip(operands, flags)]
+        c = [truth(f) ? v : casadi.binary(T, casadi.OP_NE, v, T(0.0)) for (v, f) in zip(operands, flags)]
         (op === :OP_NOT ? 1 - c[1] : op === :OP_AND ? product(c[1], c[2]) : c[1] + c[2] - product(c[1], c[2])), SELECTED | SOFT | TRUTH
     elseif op === :OP_IF_ELSE_ZERO && truth(flags[1])
         # Where the soft condition is exactly 0, the branch stays out, even when it is NaN.
-        C.binary(T, C.OP_IF_ELSE_ZERO, a, product(a, operands[2])), (flags[2] & SELECTED) | SELECTED | SOFT
+        casadi.binary(T, casadi.OP_IF_ELSE_ZERO, a, product(a, operands[2])), (flags[2] & SELECTED) | SELECTED | SOFT
     else
         return nothing
     end
@@ -226,8 +226,8 @@ end
 A symbolic SX input of the pattern `sparsity` whose nonzeros are the scalar symbols
 `nonzeros`, so that a replay of an SX function reads its nonzeros by place.
 """
-function scalar_symbols(name::AbstractString, sparsity::C.Sparsity)
-    n = C.nnz(sparsity)
+function scalar_symbols(name::AbstractString, sparsity::casadi.Sparsity)
+    n = casadi.nnz(sparsity)
     nonzeros = SX[SX.sym("$(name)_$j") for j in 0:n-1]
     (n == 0 ? SX.sym(name, sparsity) : SX(sparsity, vertcat(nonzeros))), nonzeros
 end
@@ -240,57 +240,57 @@ vector per input, with each switch replaced by its smooth form of width `width`.
 results with the sparsity patterns of `g`, and the flag of each. A value that `g` shares
 stays shared, since each work slot becomes one expression.
 """
-function smooth_scalar(g::C.Function, nonzeros::Vector{Vector{SX}}, flags_in::Vector{UInt8}, width::SX, s::Smoothing)
-    @requires length(nonzeros) == C.n_in(g) == length(flags_in) "smoothed: function \"$(C.name(g))\" has $(C.n_in(g)) inputs"
+function smooth_scalar(g::casadi.Function, nonzeros::Vector{Vector{SX}}, flags_in::Vector{UInt8}, width::SX, s::Smoothing)
+    @requires length(nonzeros) == casadi.n_in(g) == length(flags_in) "smoothed: function \"$(casadi.name(g))\" has $(casadi.n_in(g)) inputs"
     names = op_names()
-    work, flags = Vector{SX}(undef, C.sz_w(g)), zeros(UInt8, C.sz_w(g))
-    out = [Vector{SX}(undef, C.nnz_out(g, o)) for o in 0:C.n_out(g)-1]
-    out_flags = [UInt8[] for _ in 0:C.n_out(g)-1]
-    for k in 0:C.n_instructions(g)-1
+    work, flags = Vector{SX}(undef, casadi.sz_w(g)), zeros(UInt8, casadi.sz_w(g))
+    out = [Vector{SX}(undef, casadi.nnz_out(g, o)) for o in 0:casadi.n_out(g)-1]
+    out_flags = [UInt8[] for _ in 0:casadi.n_out(g)-1]
+    for k in 0:casadi.n_instructions(g)-1
         # Loop invariant: each slot written so far holds the smoothed value of the slot of `g`, and its flag.
-        id = C.instruction_id(g, k)
+        id = casadi.instruction_id(g, k)
         op = names[id]
-        i, o = C.instruction_input(g, k), C.instruction_output(g, k)
+        i, o = casadi.instruction_input(g, k), casadi.instruction_output(g, k)
         if op === :OP_INPUT
             work[o[1]+1], flags[o[1]+1] = nonzeros[i[1]+1][i[2]+1], flags_in[i[1]+1]
         elseif op === :OP_OUTPUT
             out[o[1]+1][o[2]+1] = work[i[1]+1]
             push!(out_flags[o[1]+1], flags[i[1]+1])
         elseif op === :OP_CONST
-            work[o[1]+1], flags[o[1]+1] = SX(C.instruction_constant(g, k)), 0x00
+            work[o[1]+1], flags[o[1]+1] = SX(casadi.instruction_constant(g, k)), 0x00
         else
-            @requires haskey(OPERATIONS, op) "smoothed: function \"$(C.name(g))\" has the operation $op, which the transform does not read"
+            @requires haskey(OPERATIONS, op) "smoothed: function \"$(casadi.name(g))\" has the operation $op, which the transform does not read"
             slots = OPERATIONS[op].arity == 2 ? [i[1] + 1, i[2] + 1] : [i[1] + 1]
             operands, operand_flags = work[slots], flags[slots]
             replaced = smooth_operation(op, operands, operand_flags, width, s, SX)
             work[o[1]+1], flags[o[1]+1] = replaced !== nothing ? replaced :
-                (length(slots) == 1 ? C.unary(SX, id, operands[1]) : C.binary(SX, id, operands[1], operands[2]), kept_operation!(op, operand_flags, s))
+                (length(slots) == 1 ? casadi.unary(SX, id, operands[1]) : casadi.binary(SX, id, operands[1], operands[2]), kept_operation!(op, operand_flags, s))
         end
     end
-    @ensures all(v -> all(k -> isassigned(v, k), eachindex(v)), out) "smoothed: function \"$(C.name(g))\": a nonzero of a result was not written"
-    results = [C.nnz_out(g, o) == 0 ? SX(C.size1_out(g, o), C.size2_out(g, o)) : SX(C.sparsity_out(g, o), vertcat(out[o+1])) for o in 0:C.n_out(g)-1]
+    @ensures all(v -> all(k -> isassigned(v, k), eachindex(v)), out) "smoothed: function \"$(casadi.name(g))\": a nonzero of a result was not written"
+    results = [casadi.nnz_out(g, o) == 0 ? SX(casadi.size1_out(g, o), casadi.size2_out(g, o)) : SX(casadi.sparsity_out(g, o), vertcat(out[o+1])) for o in 0:casadi.n_out(g)-1]
     results, [isempty(f) ? 0x00 : (reduce(|, f) & (SELECTED | SOFT)) | (all(truth, f) ? TRUTH : 0x00) for f in out_flags]
 end
 
-"The results of the MX function `g` as expressions of its inputs `C.mx_in(g)`."
-function defining_outputs(g::C.Function)
-    outputs = MX[MX(C.size1_out(g, o), C.size2_out(g, o)) for o in 0:C.n_out(g)-1]
-    for k in 0:C.n_instructions(g)-1
-        C.instruction_id(g, k) == C.OP_OUTPUT && (outputs[C.instruction_output(g, k)[1]+1] = C.dep(C.instruction_MX(g, k), 0))
+"The results of the MX function `g` as expressions of its inputs `casadi.mx_in(g)`."
+function defining_outputs(g::casadi.Function)
+    outputs = MX[MX(casadi.size1_out(g, o), casadi.size2_out(g, o)) for o in 0:casadi.n_out(g)-1]
+    for k in 0:casadi.n_instructions(g)-1
+        casadi.instruction_id(g, k) == casadi.OP_OUTPUT && (outputs[casadi.instruction_output(g, k)[1]+1] = casadi.dep(casadi.instruction_MX(g, k), 0))
     end
     outputs
 end
 
 "`value` with the sparsity pattern of `node`, which a substitution needs."
 fitted_to(value::MX, node::MX) =
-    sparsity_tuple(C.sparsity(value)) == sparsity_tuple(C.sparsity(node)) ? value : C.project(value, C.sparsity(node))
+    sparsity_tuple(casadi.sparsity(value)) == sparsity_tuple(casadi.sparsity(node)) ? value : casadi.project(value, casadi.sparsity(node))
 
 """
     smooth_graph(outputs, symbols, flags, width, s) -> (results, flags)
 
 Rewrite the switches in the MX expressions `outputs` of the symbols `symbols`, whose flags
 are `flags`, into smooth forms of width `width`. Each switch node gets its replacement, a
-call of an SX or MX function gets a call of its transform, and `C.graph_substitute` puts
+call of an SX or MX function gets a call of its transform, and `casadi.graph_substitute` puts
 the replacements in, so that the rest of the graph stays as it is.
 """
 function smooth_graph(outputs::Vector{MX}, symbols::Vector{MX}, flags_in::Vector{UInt8}, width::MX, s::Smoothing)
@@ -302,22 +302,22 @@ function smooth_graph(outputs::Vector{MX}, symbols::Vector{MX}, flags_in::Vector
     # from a substitution.
     nodes, replacements, placeholders, operand_nodes, levels = MX[], MX[], MX[], MX[], Int[]
     out_flags = zeros(UInt8, length(outputs))
-    for k in 0:C.n_instructions(g)-1
+    for k in 0:casadi.n_instructions(g)-1
         # Loop invariant: each slot written so far holds its flag, and the depth of nesting of the replacements it depends on.
-        op = names[C.instruction_id(g, k)]
-        i, o = C.instruction_input(g, k), C.instruction_output(g, k)
-        node = C.instruction_MX(g, k)
+        op = names[casadi.instruction_id(g, k)]
+        i, o = casadi.instruction_input(g, k), casadi.instruction_output(g, k)
+        node = casadi.instruction_MX(g, k)
         if op === :OP_OUTPUT
             out_flags[o[1]+1] = get(flags, i[1], 0x00)
             continue
         elseif op === :OP_INPUT
-            flags[o[1]], depth[o[1]] = flags_in[Int(C.info(node)["ind"])+1], 0
+            flags[o[1]], depth[o[1]] = flags_in[Int(casadi.info(node)["ind"])+1], 0
             continue
         end
         operand_flags = UInt8[get(flags, j, 0x00) for j in i]
         level = maximum((get(depth, j, 0) for j in i); init = 0)
-        operands = MX[C.dep(node, j) for j in 0:C.n_dep(node)-1]
-        stand_ins = MX[MX.sym("operand", C.sparsity(a)) for a in operands]
+        operands = MX[casadi.dep(node, j) for j in 0:casadi.n_dep(node)-1]
+        stand_ins = MX[MX.sym("operand", casadi.sparsity(a)) for a in operands]
         if op === :OP_CALL
             replaced, results = smooth_call(node, operand_flags, width, s; arguments = stand_ins)
             replaced === nothing || (append!(placeholders, stand_ins); append!(operand_nodes, operands))
@@ -325,7 +325,7 @@ function smooth_graph(outputs::Vector{MX}, symbols::Vector{MX}, flags_in::Vector
                 slot >= 0 || continue
                 flags[slot], depth[slot] = results[j], level
                 if replaced !== nothing
-                    push!(nodes, C.get_output(node, j - 1))
+                    push!(nodes, casadi.get_output(node, j - 1))
                     push!(replacements, fitted_to(replaced[j], nodes[end]))
                     push!(levels, level + 1)
                     depth[slot] = level + 1
@@ -354,13 +354,13 @@ function smooth_graph(outputs::Vector{MX}, symbols::Vector{MX}, flags_in::Vector
         # Loop invariant: `values` holds the final replacement of each node in `done`, the nodes of the levels below `level`.
         here = findall(==(level), levels)
         isempty(here) && continue
-        current = isempty(done) || isempty(operand_nodes) ? operand_nodes : as_list(C.graph_substitute(operand_nodes, done, values))
-        written = isempty(placeholders) ? replacements[here] : as_list(C.graph_substitute(replacements[here], placeholders, current))
+        current = isempty(done) || isempty(operand_nodes) ? operand_nodes : as_list(casadi.graph_substitute(operand_nodes, done, values))
+        written = isempty(placeholders) ? replacements[here] : as_list(casadi.graph_substitute(replacements[here], placeholders, current))
         append!(done, nodes[here])
         append!(values, written)
     end
     @ensures length(values) == length(nodes) "smoothed: a replacement of the graph was not written"
-    as_list(C.graph_substitute(outputs, done, values)), out_flags
+    as_list(casadi.graph_substitute(outputs, done, values)), out_flags
 end
 
 """
@@ -372,35 +372,35 @@ function, a `map` of one and the branches of a switch are transformed; the index
 switch and the point of a `linear` interpolant are kept; the body of any other function,
 such as a Julia callback, an external function or a solver, is not read.
 """
-function smooth_call(node::MX, flags::Vector{UInt8}, width::MX, s::Smoothing; arguments::Vector{MX} = MX[C.dep(node, j) for j in 0:C.n_dep(node)-1])
-    callee = C.which_function(node)
-    n = C.n_out(callee)
+function smooth_call(node::MX, flags::Vector{UInt8}, width::MX, s::Smoothing; arguments::Vector{MX} = MX[casadi.dep(node, j) for j in 0:casadi.n_dep(node)-1])
+    callee = casadi.which_function(node)
+    n = casadi.n_out(callee)
     union_flag = isempty(flags) ? 0x00 : reduce(|, flags) & (SELECTED | SOFT)
-    (any(selected, flags) && length(flags) == C.n_in(callee)) || return nothing, fill(union_flag, n)
-    class = C.class_name(callee)
-    if C.is_a(callee, "SXFunction") || C.is_a(callee, "MXFunction")
+    (any(selected, flags) && length(flags) == casadi.n_in(callee)) || return nothing, fill(union_flag, n)
+    class = casadi.class_name(callee)
+    if casadi.is_a(callee, "SXFunction") || casadi.is_a(callee, "MXFunction")
         h, changed, results = smoothed_callee(callee, flags, s)
-        changed ? (as_list(C.call(h, [arguments..., width], false, false)), results) : (nothing, results)
+        changed ? (as_list(casadi.call(h, [arguments..., width], false, false)), results) : (nothing, results)
     elseif class in ("Map", "ThreadMap", "OmpMap")
-        info = C.info(callee)
-        h, changed, results = smoothed_callee(info["f"]::C.Function, flags, s)
+        info = casadi.info(callee)
+        h, changed, results = smoothed_callee(info["f"]::casadi.Function, flags, s)
         count = Int(info["n"])
-        changed ? (as_list(C.call(C.map(h, count), [arguments; C.repmat(width, 1, count)], false, false)), results) : (nothing, results)
+        changed ? (as_list(casadi.call(casadi.map(h, count), [arguments; casadi.repmat(width, 1, count)], false, false)), results) : (nothing, results)
     elseif class == "Switch"
-        @requires !soft(flags[1]) "smoothed: the index of a switch (\"$(C.name(callee))\") is a smoothed value, so the switch would move"
+        @requires !soft(flags[1]) "smoothed: the index of a switch (\"$(casadi.name(callee))\") is a smoothed value, so the switch would move"
         selected(flags[1]) && push!(s.kept, :Switch)
-        info = C.info(callee)
-        transform(b) = b isa C.Function && !C.is_null(b) ? smoothed_callee(b, flags[2:end], s) : nothing
+        info = casadi.info(callee)
+        transform(b) = b isa casadi.Function && !casadi.is_null(b) ? smoothed_callee(b, flags[2:end], s) : nothing
         cases, default = [transform(b) for b in info["f"]], transform(info["f_def"])
         branches = filter(!isnothing, [cases; [default]])
         results = [reduce(|, (b[3][j] for b in branches); init = flags[1] & (SELECTED | SOFT)) & (SELECTED | SOFT) for j in 1:n]
         any(b -> b[2], branches) || return nothing, results
-        @requires default !== nothing && all(!isnothing, cases) "smoothed: switch \"$(C.name(callee))\" has a branch that is not a function"
-        switch = C.conditional(C.Function, C.name(callee) * "_smoothed", C.Function[b[1] for b in cases], default[1])
-        as_list(C.call(switch, [arguments..., width], false, false)), results
+        @requires default !== nothing && all(!isnothing, cases) "smoothed: switch \"$(casadi.name(callee))\" has a branch that is not a function"
+        switch = casadi.conditional(casadi.Function, casadi.name(callee) * "_smoothed", casadi.Function[b[1] for b in cases], default[1])
+        as_list(casadi.call(switch, [arguments..., width], false, false)), results
     else
         if class in ("LinearInterpolant", "LinearInterpolantJac")
-            @requires !soft(flags[1]) "smoothed: the point of the interpolant \"$(C.name(callee))\" is a smoothed value"
+            @requires !soft(flags[1]) "smoothed: the point of the interpolant \"$(casadi.name(callee))\" is a smoothed value"
             selected(flags[1]) && push!(s.kept, :LinearInterpolant)
         end
         nothing, fill(union_flag, n)
@@ -414,11 +414,11 @@ The transform `h` of the SX or MX function `g` whose inputs have the flags `flag
 inputs of `g` and the width at the end. `changed` tells whether a switch was rewritten.
 Each pair of a function and its flags is transformed once.
 """
-function smoothed_callee(g::C.Function, flags::Vector{UInt8}, s::Smoothing)
-    key = (C.__hash__(g), flags)
+function smoothed_callee(g::casadi.Function, flags::Vector{UInt8}, s::Smoothing)
+    key = (casadi.__hash__(g), flags)
     # The table keeps `g`, since CasADi gives the identity of a freed function to a later one.
     haskey(s.callees, key) && return s.callees[key][1]
-    entry = transformed_function(g, flags, s, C.name(g) * "_smoothed", "width")
+    entry = transformed_function(g, flags, s, casadi.name(g) * "_smoothed", "width")
     s.callees[key] = (entry, g)
     entry
 end
@@ -431,19 +431,19 @@ The function `name` with the inputs of the SX or MX function `g` and the scalar 
 inputs with the flag SELECTED rewritten. `changed` tells whether a switch was rewritten,
 and `flags` holds the flag of each result.
 """
-function transformed_function(g::C.Function, flags::Vector{UInt8}, s::Smoothing, name::AbstractString, input::AbstractString)
-    names_in = [C.name_in(g, i) for i in 0:C.n_in(g)-1]
-    names_out = [C.name_out(g, j) for j in 0:C.n_out(g)-1]
+function transformed_function(g::casadi.Function, flags::Vector{UInt8}, s::Smoothing, name::AbstractString, input::AbstractString)
+    names_in = [casadi.name_in(g, i) for i in 0:casadi.n_in(g)-1]
+    names_out = [casadi.name_out(g, j) for j in 0:casadi.n_out(g)-1]
     before = s.rewrites
-    if C.is_a(g, "SXFunction")
+    if casadi.is_a(g, "SXFunction")
         width = SX.sym(input)
-        symbols = [scalar_symbols(names_in[i+1], C.sparsity_in(g, i)) for i in 0:C.n_in(g)-1]
+        symbols = [scalar_symbols(names_in[i+1], casadi.sparsity_in(g, i)) for i in 0:casadi.n_in(g)-1]
         results, out_flags = smooth_scalar(g, [last(x) for x in symbols], flags, width, s)
         h = Front.Function(name, [SX[first(x) for x in symbols]..., width], results, [names_in; input], names_out)
     else
-        @requires C.is_a(g, "MXFunction") "smoothed: function \"$(C.name(g))\" is not an SX or MX function"
+        @requires casadi.is_a(g, "MXFunction") "smoothed: function \"$(casadi.name(g))\" is not an SX or MX function"
         width = MX.sym(input)
-        symbols = MX[x for x in C.mx_in(g)]
+        symbols = MX[x for x in casadi.mx_in(g)]
         results, out_flags = smooth_graph(defining_outputs(g), symbols, flags, width, s)
         h = Front.Function(name, [symbols..., width], results, [names_in; input], names_out)
     end
@@ -452,8 +452,8 @@ end
 
 function check_width(ex, width, kind::Symbol)
     @requires kind in SMOOTH_KINDS "smoothed: the kind must be :tanh or :algebraic; got $(repr(kind))"
-    @requires C.is_symbolic(width) && C.is_scalar(width) "smoothed: the width must be a scalar symbol"
-    @requires !C.depends_on(ex, width) "smoothed: the expression already depends on the width"
+    @requires casadi.is_symbolic(width) && casadi.is_scalar(width) "smoothed: the width must be a scalar symbol"
+    @requires !casadi.depends_on(ex, width) "smoothed: the expression already depends on the width"
 end
 
 """
@@ -462,9 +462,9 @@ end
 Check that the switches that `nonsmooth_operations` finds in `h` on the inputs `places` are
 switches that the transform kept.
 """
-function ensure_smoothed(h::C.Function, places, s::Smoothing)
+function ensure_smoothed(h::casadi.Function, places, s::Smoothing)
     left = setdiff(first.(nonsmooth_operations(h; inputs = places)), s.kept)
-    @ensures isempty(left) "smoothed: function \"$(C.name(h))\" still switches at $(join(left, ", "))"
+    @ensures isempty(left) "smoothed: function \"$(casadi.name(h))\" still switches at $(join(left, ", "))"
     nothing
 end
 
@@ -476,7 +476,7 @@ end
 Rewrite each switch of an SX or MX function or expression into its smooth form of width
 `width`, with the forms of [`smooth_step`](@ref) of the kind `kind`.
 
-The function form returns the function named `C.name(f) * "_smoothed"`, with the inputs and
+The function form returns the function named `casadi.name(f) * "_smoothed"`, with the inputs and
 the outputs of `f` and one more scalar input named `input`, the width, at the end. The
 expression form returns an expression of the symbols of `ex` and of `width`, the form for a
 model dictionary: `"ode" => smoothed(ode, width; inputs = x)`, with `width` among the
@@ -523,13 +523,13 @@ julia> CasADiCodegen.smoothed(sign(x - 1), width)
 SX(tanh(((x-1)/width)))
 ```
 """
-function smoothed(f::C.Function; kind::Symbol = :tanh, input::AbstractString = "width", inputs = nothing)
+function smoothed(f::casadi.Function; kind::Symbol = :tanh, input::AbstractString = "width", inputs = nothing)
     @requires kind in SMOOTH_KINDS "smoothed: the kind must be :tanh or :algebraic; got $(repr(kind))"
-    @requires C.is_a(f, "SXFunction") || C.is_a(f, "MXFunction") "smoothed: function \"$(C.name(f))\" is not an SX or MX function"
-    @requires !(input in [C.name_in(f, i) for i in 0:C.n_in(f)-1]) "smoothed: function \"$(C.name(f))\" already has an input named \"$input\"; choose another with the keyword `input`"
+    @requires casadi.is_a(f, "SXFunction") || casadi.is_a(f, "MXFunction") "smoothed: function \"$(casadi.name(f))\" is not an SX or MX function"
+    @requires !(input in [casadi.name_in(f, i) for i in 0:casadi.n_in(f)-1]) "smoothed: function \"$(casadi.name(f))\" already has an input named \"$input\"; choose another with the keyword `input`"
     places = input_places(f, inputs)
     s = Smoothing(kind)
-    h, _, _ = transformed_function(f, UInt8[i in places ? SELECTED : 0x00 for i in 1:C.n_in(f)], s, C.name(f) * "_smoothed", input)
+    h, _, _ = transformed_function(f, UInt8[i in places ? SELECTED : 0x00 for i in 1:casadi.n_in(f)], s, casadi.name(f) * "_smoothed", input)
     ensure_smoothed(h, places, s)
     h
 end
@@ -538,12 +538,12 @@ end
 function chosen_symbols(symbols, inputs, ::Type{T}) where {T}
     inputs === nothing && return collect(eachindex(symbols))
     @requires inputs isa T "smoothed: `inputs` must be an expression of the type of the expression, $T"
-    findall(v -> C.depends_on(inputs, v), symbols)
+    findall(v -> casadi.depends_on(inputs, v), symbols)
 end
 
 function smoothed(ex::SX, width::SX; kind::Symbol = :tanh, inputs = nothing)
     check_width(ex, width, kind)
-    symbols = SX[v for v in C.symvar(ex)]
+    symbols = SX[v for v in casadi.symvar(ex)]
     places = chosen_symbols(symbols, inputs, SX)
     s = Smoothing(kind)
     flags = UInt8[k in places ? SELECTED : 0x00 for k in eachindex(symbols)]
@@ -554,7 +554,7 @@ end
 
 function smoothed(ex::MX, width::MX; kind::Symbol = :tanh, inputs = nothing)
     check_width(ex, width, kind)
-    symbols = MX[v for v in C.symvar(ex)]
+    symbols = MX[v for v in casadi.symvar(ex)]
     places = chosen_symbols(symbols, inputs, MX)
     s = Smoothing(kind)
     flags = UInt8[k in places ? SELECTED : 0x00 for k in eachindex(symbols)]

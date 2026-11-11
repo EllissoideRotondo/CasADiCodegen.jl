@@ -2,17 +2,17 @@
 # function on vectors of nonzeros; all of them run the same sub-functions.
 
 "Linear indices, in the matrix shape, of the structural nonzeros of the pattern."
-function nonzero_indices(sp::C.Sparsity)
+function nonzero_indices(sp::casadi.Sparsity)
     nrow, ncol, colptr, rowval = sparsity_tuple(sp)
     [(c - 1) * nrow + rowval[k] for c in 1:ncol for k in colptr[c]:colptr[c+1]-1]
 end
 
-dimensions(sp::C.Sparsity) = C.size2(sp) == 1 ? (C.size1(sp),) : (C.size1(sp), C.size2(sp))
+dimensions(sp::casadi.Sparsity) = casadi.size2(sp) == 1 ? (casadi.size1(sp),) : (casadi.size1(sp), casadi.size2(sp))
 
 "The size of the array of an output: that of `dimensions`, or always two sizes without `vector_columns`."
-output_dimensions(sp::C.Sparsity, vector_columns::Bool) = vector_columns ? dimensions(sp) : (C.size1(sp), C.size2(sp))
+output_dimensions(sp::casadi.Sparsity, vector_columns::Bool) = vector_columns ? dimensions(sp) : (casadi.size1(sp), casadi.size2(sp))
 
-is_dense(sp::C.Sparsity) = C.nnz(sp) == C.size1(sp) * C.size2(sp)
+is_dense(sp::casadi.Sparsity) = casadi.nnz(sp) == casadi.size1(sp) * casadi.size2(sp)
 
 """
     outofplace_name(name) -> Symbol
@@ -52,7 +52,7 @@ of the function. `check(kind, k)` is the expression for the `Helpers.PatternChec
 input or output `k`, which holds the indices of its nonzeros.
 """
 function nonzero_call(alg, core, check, ref)
-    part(array, kind, k, sp) = is_dense(sp) ? :($array[$k]) : C.nnz(sp) == 0 ? :(()) :
+    part(array, kind, k, sp) = is_dense(sp) ? :($array[$k]) : casadi.nnz(sp) == 0 ? :(()) :
                                :($(ref(:Helpers, :stored))($array[$k], $(check(kind, k))))
     arguments = [part(:arg, :in, i, sp) for (i, sp) in enumerate(alg.sparsity_in)]
     results = [part(:res, :out, j, sp) for (j, sp) in enumerate(alg.sparsity_out)]
@@ -97,7 +97,7 @@ function inplace_function(alg, signature, frame, core, index, check, ref, key)
         sparse..., zero_fills(alg)..., body..., :(return res)))
 end
 
-argument_names(alg) = [Symbol(:arg, i) for i in eachindex(alg.sparsity_in::Vector{C.Sparsity})]
+argument_names(alg) = [Symbol(:arg, i) for i in eachindex(alg.sparsity_in::Vector{casadi.Sparsity})]
 
 returned(results) = length(results) == 1 ? only(results) : Expr(:tuple, results...)
 
@@ -152,7 +152,7 @@ end
 "Inputs and outputs that need a table of indices: `(kind, k) => indices`."
 index_tables(alg) = [(kind, k) => nonzero_indices(sp)
                      for (kind, patterns) in ((:in, alg.sparsity_in), (:out, alg.sparsity_out))
-                     for (k, sp) in enumerate(patterns) if !is_dense(sp) && C.nnz(sp) > 0]
+                     for (k, sp) in enumerate(patterns) if !is_dense(sp) && casadi.nnz(sp) > 0]
 
 core_name(name::Symbol) = Symbol(outofplace_name(name), :_nonzeros!)
 

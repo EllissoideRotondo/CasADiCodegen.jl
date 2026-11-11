@@ -53,7 +53,7 @@ end
     @test J == [3.0 1.0; 0.0 2.0] && f.jac([1.0, 2.0], [0.5, 1.0]) == J
     solution = SciMLBase.solve(SciMLBase.NonlinearProblem(f, [1.0, 1.0], [9.0, 2.0]), SimpleNewtonRaphson(); abstol = 1e-12)
     @test solution.u ≈ [2.0, 1.0]
-    @test_throws ArgumentError SciMLBase.NonlinearFunction(CasADiCodegen.Function("w", [z], [CasADiCodegen.C.transpose(z)]))
+    @test_throws ArgumentError SciMLBase.NonlinearFunction(CasADiCodegen.Function("w", [z], [casadi.transpose(z)]))
 end
 
 @testset "sparse = true gives the Jacobian a sparse prototype" begin
@@ -208,7 +208,7 @@ end
 # constructors of the SciML problems take the object, so that the user solves
 # the problem with a solver of the SciML ecosystem.
 using OrdinaryDiffEqRosenbrock: Rodas5P
-const CC = CasADiCodegen.C
+const CC = CasADiCodegen.casadi
 
 # The tests check the problems, not the code of the solver, which AutoSpecialize compiles once for all of them.
 # The set still takes more than 15 s, because each callback and each mass matrix compiles a solver of its own,
@@ -503,7 +503,7 @@ end
     # A parameter symbol of several elements, here the values of an interpolant, is also one
     # parameter with its name (bug: the parameters of `vcat(s, w)` had no names).
     w, s, t = MX.sym("w", 12), MX.sym("s"), MX.sym("t")
-    data = CasADiCodegen.Function("data", [MX.sym("y"), vcat(s, w), t], [s * C.interpolant("table", "linear", [collect(0.0:11.0)], 1)(t, w)])
+    data = CasADiCodegen.Function("data", [MX.sym("y"), vcat(s, w), t], [s * casadi.interpolant("table", "linear", [collect(0.0:11.0)], 1)(t, w)])
     problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(data), [0.0], (0.0, 11.0), [2.0; ones(12)])
     @test problem.ps[:w] == ones(12) && problem.ps[:w_11] == 1.0 && problem.ps[:s] == 2.0
     # Bug: `remake` wrote the vector and then the former value of each element, in the order of a Dict.
@@ -601,7 +601,7 @@ end
     problem = SciMLBase.SDEProblem(drift, diagonal, u0, (0.0, 1.0), p0)
     @test problem.noise_rate_prototype === nothing && problem.ps[:b] == 0.5
     # A matrix of noise has one column per Wiener process; the problem gets its prototype, dense or sparse.
-    o = C.SX(1, 1)                              # a structural zero
+    o = casadi.SX(1, 1)                              # a structural zero
     matrix = CasADiCodegen.Function("matrix", [u, p, t], [[b * x o 0.1; o b * y t]])
     G = [0.5 0.0 0.1; 0.0 1.0 0.25]
     dense = SciMLBase.SDEProblem(drift, matrix, u0, (0.0, 1.0), p0)

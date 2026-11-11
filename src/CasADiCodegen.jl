@@ -4,8 +4,8 @@
 Julia code generation for CasADi functions.
 
 The package works with CasADiNative.jl, the official Julia front end of CasADi, and
-exports its names (`SX`, `MX`, `jacobian`, ...); `CasADiCodegen.C` is the generated module
-of the front end. `build_function` and `generate_julia` turn a CasADi `Function` into
+exports its names (`SX`, `MX`, `jacobian`, ...) and its module `casadi`, which holds every
+function of CasADi. `build_function` and `generate_julia` turn a CasADi `Function` into
 plain Julia code.
 """
 module CasADiCodegen
@@ -15,18 +15,24 @@ using CasADiNative
 import LinearAlgebra
 using PrecompileTools: @compile_workload
 
-"The generated module of the front end, with every function and type of CasADi."
-const C = CasADiNative.C
+"""
+    casadi
+
+The module of the CasADi front end, with every function and type of CasADi under its
+Python name, such as `casadi.sumsqr`, `casadi.set_value` and `casadi.integrator`.
+"""
+const casadi = CasADiNative.casadi
 const Function = CasADiNative.Function
-const CasadiFunction = C.Function
+const CasadiFunction = casadi.Function
 
 for name in names(CasADiNative)
     name === :CasADiNative || @eval export $name
 end
-# The other names of the front end, for qualified access: `CasADiCodegen.densify`.
+# The other names of the front end, for qualified access: `CasADiCodegen.densify`. The
+# front end's alias `C` of `casadi` is left out.
 for name in names(CasADiNative; all = true)
     text = string(name)
-    (isempty(text) || text[1] in ('_', '#', '@') || name in (:eval, :include) || isdefined(@__MODULE__, name)) && continue
+    (isempty(text) || text[1] in ('_', '#', '@') || name in (:eval, :include, :C) || isdefined(@__MODULE__, name)) && continue
     @eval const $name = CasADiNative.$name
 end
 
@@ -71,7 +77,7 @@ f = casadi_function("f", [x, y], [sin(x) * y, Symbolics.gradient(sin(x) * y, [x,
 """
 function casadi_function end
 
-export build_function, generate_julia, CasadiFunction, casadi_function
+export build_function, generate_julia, CasadiFunction, casadi_function, casadi
 
 include("precompile.jl")
 

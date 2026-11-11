@@ -72,7 +72,7 @@ one forward sensitivity per input.
 
 ```@example ode
 A = integrator("A", Vern9(), model, 0.0, 3.0; adjoint = true, abstol = 1e-13, reltol = 1e-13)
-cost = CasadiFunction("cost", [x0, p], [gradient(CasADiCodegen.C.sumsqr(A(x0, p)), vcat(x0, p))])
+cost = CasadiFunction("cost", [x0, p], [gradient(casadi.sumsqr(A(x0, p)), vcat(x0, p))])
 build_function(cost; expression = Val{false})[1]([1.0, 0.0, 0.0, 1.0], [1.0])
 ```
 
@@ -135,7 +135,7 @@ initial states with `map` of CasADi:
 
 ```julia
 X = MX.sym("X", 4, 20)
-ends = CasADiCodegen.C.map(F, 20)(X, CasADiCodegen.C.repmat(p, 1, 20))
+ends = casadi.map(F, 20)(X, casadi.repmat(p, 1, 20))
 f = CasadiFunction("shoot", [X, p], [ends, jacobian(ends, X)])
 ```
 

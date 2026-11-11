@@ -1,7 +1,7 @@
 # Interpolated data in a model
 
-In this tutorial, we put interpolated data in a model with the interpolants of CasADi,
-which are in the module `CasADiCodegen.C`, and replace the data and the grid through the
+In this tutorial, we put interpolated data in a model with `casadi.interpolant`, and
+replace the data and the grid through the
 parameters without generating code again. We end with smooth interpolation and with
 DataInterpolations.jl, called through
 [`CasADiCodegen.callback`](@ref CasADiCodegen.callback(::Any, ::AbstractString, ::Tuple, ::Tuple)).
@@ -10,7 +10,6 @@ DataInterpolations.jl, called through
 using CasADiCodegen, StaticArrays
 import SciMLBase, DataInterpolations
 using OrdinaryDiffEqTsit5: Tsit5
-C = CasADiCodegen.C
 nothing # hide
 ```
 
@@ -18,13 +17,13 @@ nothing # hide
 
 We take ``x' = d(t)``, ``x(0) = 0``, where ``d`` interpolates ``t_k^2`` linearly on
 ``t_k = 0, 0.1, \ldots, 10``; the trapezoidal rule gives the exact ``x(1) = 0.335``.
-`C.interpolant(name, "linear", grids, values)` takes one increasing grid per dimension. An
+`casadi.interpolant(name, "linear", grids, values)` takes one increasing grid per dimension. An
 interpolant can only be called on MX symbols, and the empty `MX(0, 1)` stands for the
 missing parameters:
 
 ```@example callable
 grid = collect(0.0:0.1:10.0)
-table = C.interpolant("table", "linear", [grid], grid .^ 2)
+table = casadi.interpolant("table", "linear", [grid], grid .^ 2)
 x, t = MX.sym("x"), MX.sym("t")
 rhs = CasadiFunction("rhs", [x, MX(0, 1), t], [table(t)])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [0.0], (0.0, 1.0))
@@ -45,7 +44,7 @@ CasADi gives zero as that derivative, so the parameter Jacobian and the sensitiv
 the data are zero with no error:
 
 ```@example callable
-table = C.interpolant("table", "linear", [grid], 1, Dict("inline" => true))
+table = casadi.interpolant("table", "linear", [grid], 1, Dict("inline" => true))
 data = MX.sym("data", length(grid))
 rhs = CasadiFunction("rhs", [x, data, t], [table(t, data)])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [0.0], (0.0, 1.0), grid .^ 2)
@@ -79,7 +78,7 @@ number of points, here ``\sin \pi t`` on ``(0, 1)``, whose integral is
 ``2/\pi = 0.63662``:
 
 ```@example callable
-table = C.interpolant("table", "linear", [length(grid)], 1, Dict("inline" => true))
+table = casadi.interpolant("table", "linear", [length(grid)], 1, Dict("inline" => true))
 points = MX.sym("points", length(grid))
 rhs = CasadiFunction("rhs", [x, vcat(points, data), t], [table(t, points, data)])
 problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [0.0], (0.0, 1.0), [grid; grid .^ 2])
@@ -98,13 +97,13 @@ the solver needs no `tstops`. Through ``t_k^2`` it is ``t^2`` itself, and
 ``x(1) = 1/3`` up to the tolerance:
 
 ```@example callable
-smooth = C.interpolant("smooth", "bspline", [grid], grid .^ 2)
+smooth = casadi.interpolant("smooth", "bspline", [grid], grid .^ 2)
 rhs = CasadiFunction("rhs", [x, MX(0, 1), t], [smooth(t)])
 SciMLBase.solve(SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [0.0], (0.0, 1.0)), Tsit5()).u[end]
 ```
 
 A B-spline can also take its values as an argument, with
-`C.interpolant("smooth", "bspline", [grid], 1, Dict("inline" => true))`; its generated code
+`casadi.interpolant("smooth", "bspline", [grid], 1, Dict("inline" => true))`; its generated code
 then fits the spline coefficients at each call, which costs far more than the
 interpolation (see the table below). Outside the grid, a B-spline with `inline` continues
 its end polynomials, and one without `inline`, such as `smooth`, is zero.

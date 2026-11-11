@@ -26,7 +26,7 @@ _, g! = build_function(f; expression = Val{false})
 g!((J,), ([2.0, 3.0],))                             # J is now [4.0 0.0; 3.0 2.0]
 ```
 """
-function SparseArrays.SparseMatrixCSC(sparsity::CasADiCodegen.C.Sparsity)
+function SparseArrays.SparseMatrixCSC(sparsity::CasADiCodegen.casadi.Sparsity)
     nrow, ncol, colptr, rowval = CasADiCodegen.Codegen.sparsity_tuple(sparsity)
     SparseArrays.SparseMatrixCSC(nrow, ncol, colptr, rowval, zeros(length(rowval)))
 end

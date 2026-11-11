@@ -33,7 +33,7 @@ Return the type of a dense array with the shape of `sp`, as source text: ordinar
 A pattern of one column is a vector, or a matrix of one column without `vector_columns`.
 """
 function array_type(sp, static::Bool; vector_columns::Bool = true)
-    rows, columns = C.size1(sp), C.size2(sp)
+    rows, columns = casadi.size1(sp), casadi.size2(sp)
     vector = vector_columns && columns == 1
     static && return vector ? "StaticArrays.SVector{$rows,Float64}" : "StaticArrays.SMatrix{$rows,$columns,Float64,$(rows * columns)}"
     vector ? "Vector{Float64}" : "Matrix{Float64}"
@@ -56,7 +56,7 @@ function precompile_statements(alg, name::Symbol, nonzeros::Bool, force_SA::Bool
         results = ("Vector{Vector{Float64}}", tuple_type(fill("Vector{Float64}", length(alg.nnz_out))))
         return String["precompile(Generated.$(core_name(name)), ($result, $arguments))" for result in results]
     end
-    sparsity_in, sparsity_out = alg.sparsity_in::Vector{C.Sparsity}, alg.sparsity_out::Vector{C.Sparsity}
+    sparsity_in, sparsity_out = alg.sparsity_in::Vector{casadi.Sparsity}, alg.sparsity_out::Vector{casadi.Sparsity}
     inputs, outputs = [array_type(sp, false) for sp in sparsity_in], [array_type(sp, false; vector_columns) for sp in sparsity_out]
     given = force_SA ? [array_type(sp, true) for sp in sparsity_in] : inputs
     String["precompile(Generated.$name, ($(tuple_type(outputs)), $(tuple_type(inputs))))",

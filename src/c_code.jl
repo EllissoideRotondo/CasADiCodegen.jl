@@ -30,10 +30,10 @@ Generate the C code of `f` and read its tables and its statements. CasADi must
 be able to generate C code for `f`. CasADi leaves out the zeros at the end of a
 table, so each table is padded to the length of its declaration.
 """
-function c_source(f::C.Function)
-    generator = C.CodeGenerator("code", Dict("with_header" => false))
-    C.add(generator, f)
-    text = C.dump(generator)
+function c_source(f::casadi.Function)
+    generator = casadi.CodeGenerator("code", Dict("with_header" => false))
+    casadi.add(generator, f)
+    text = casadi.dump(generator)
     ints, reals = Dict{String,Vector{Int}}(), Dict{String,Vector{Float64}}()
     for found in eachmatch(r"static const casadi_(int|real) (\w+)\[(\d+)\] =\s*\{([^}]*)\};", text)
         kind, name, count, list = found.captures
@@ -44,7 +44,7 @@ function c_source(f::C.Function)
     end
     # The entry point is the function `casadi_f0`; the functions that it calls follow it.
     start = findfirst("static int casadi_f0(", text)
-    @requires start !== nothing "CasADi generated no C code for function \"$(C.name(f))\""
+    @requires start !== nothing "CasADi generated no C code for function \"$(casadi.name(f))\""
     stop = findnext("\n}\n", text, last(start))
     CSource(text[last(start):first(stop)], ints, reals)
 end
@@ -71,8 +71,8 @@ end
 Return the serial form of `f` with the names of its fields. CasADi gives it as
 text, in which each byte is two letters, `a` to `p`, for its two halves.
 """
-function serial_bytes(f::C.Function)
-    code = codeunits(C.serialize(f, Dict("debug" => true)))
+function serial_bytes(f::casadi.Function)
+    code = codeunits(casadi.serialize(f, Dict("debug" => true)))
     UInt8[(code[k+1] - 0x61) << 4 | (code[k] - 0x61) & 0x0f for k in 1:2:length(code)-1]
 end
 

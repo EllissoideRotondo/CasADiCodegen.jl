@@ -87,7 +87,7 @@ function nan_trace(f, arguments...)
     values = map(eachindex(arguments)) do i
         argument, sp = arguments[i], alg.sparsity_in[i]
         length(argument) == alg.nnz_in[i] && return Float64[argument...]
-        @requires length(argument) == C.size1(sp) * C.size2(sp) "$(alg.name): argument $i ($(alg.names_in[i])) needs $(C.size1(sp) * C.size2(sp)) elements or $(alg.nnz_in[i]) nonzeros, got $(length(argument))"
+        @requires length(argument) == casadi.size1(sp) * casadi.size2(sp) "$(alg.name): argument $i ($(alg.names_in[i])) needs $(casadi.size1(sp) * casadi.size2(sp)) elements or $(alg.nnz_in[i]) nonzeros, got $(length(argument))"
         Float64[argument[k] for k in nonzero_indices(sp)]
     end
     w = zeros(alg.nwork)

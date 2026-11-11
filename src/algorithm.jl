@@ -43,16 +43,16 @@ struct Algorithm
     nwork::Int
     nnz_in::Vector{Int}
     nnz_out::Vector{Int}
-    sparsity_in::Vector{C.Sparsity}
-    sparsity_out::Vector{C.Sparsity}
+    sparsity_in::Vector{casadi.Sparsity}
+    sparsity_out::Vector{casadi.Sparsity}
     names_in::Vector{String}
     names_out::Vector{String}
     function Algorithm(name, instructions, nwork, sparsity_in, sparsity_out, names_in, names_out)
         @requires length(names_in) == length(sparsity_in) "one name per input is required"
         @requires length(names_out) == length(sparsity_out) "one name per output is required"
         alg = new(String(name), collect(Instruction, instructions), nwork,
-                  Int[C.nnz(sp) for sp in sparsity_in], Int[C.nnz(sp) for sp in sparsity_out],
-                  collect(C.Sparsity, sparsity_in), collect(C.Sparsity, sparsity_out),
+                  Int[casadi.nnz(sp) for sp in sparsity_in], Int[casadi.nnz(sp) for sp in sparsity_out],
+                  collect(casadi.Sparsity, sparsity_in), collect(casadi.Sparsity, sparsity_out),
                   collect(String, names_in), collect(String, names_out))
         check_algorithm(alg)
         alg

@@ -72,12 +72,12 @@ rhs = CasADiCodegen.traced_function("brusselator", original)
 
 Each equation depends on its own grid point, its four neighbors and the other species,
 so each row of the Jacobian has six structural nonzeros. We call `rhs` on symbols and
-ask CasADi (module `CasADiCodegen.C`) for the pattern: 768 nonzeros in 128 rows:
+ask CasADi for the pattern: 768 nonzeros in 128 rows:
 
 ```@example bruss
 u, q, t = SX.sym("u", 2N^2), SX.sym("p", 4), SX.sym("t")
-pattern = CasADiCodegen.C.jacobian_sparsity(rhs(u, q, t), u)
-CasADiCodegen.C.nnz(pattern), CasADiCodegen.C.size1(pattern)
+pattern = casadi.jacobian_sparsity(rhs(u, q, t), u)
+casadi.nnz(pattern), casadi.size1(pattern)
 ```
 
 ## Make the problem with a sparse Jacobian

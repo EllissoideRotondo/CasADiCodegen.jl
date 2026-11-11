@@ -31,15 +31,15 @@ function mode_model(name::AbstractString, dae, modes::Pair; gate::Bool = false)
     T = typeof(x)
     m = modes.first
     S = modes.second isa Real ? T(Float64(modes.second)) : modes.second
-    @requires m isa T && column(m) && size(m, 1) >= 1 && C.is_valid_input(m) "integrator \"$name\": the modes must be a dense column of symbols of the type of the state, $T"
+    @requires m isa T && column(m) && size(m, 1) >= 1 && casadi.is_valid_input(m) "integrator \"$name\": the modes must be a dense column of symbols of the type of the state, $T"
     for key in ("x", "p", "t")
-        @requires !haskey(dae, key) || !C.depends_on(dae[key], m) "integrator \"$name\": a mode must not be a symbol of \"$key\""
+        @requires !haskey(dae, key) || !casadi.depends_on(dae[key], m) "integrator \"$name\": a mode must not be a symbol of \"$key\""
     end
     @requires S isa T && size(S) == size(m) "integrator \"$name\": the switching functions must be a column of $T with one element per mode"
     S = Front.densify(S)
-    @requires !C.depends_on(S, m) "integrator \"$name\": a switching function must not depend on the modes; a surface that moves with the mode needs two event functions"
+    @requires !casadi.depends_on(S, m) "integrator \"$name\": a switching function must not depend on the modes; a surface that moves with the mode needs two event functions"
     for key in ("zero", "transition")
-        @requires !haskey(dae, key) || !C.depends_on(dae[key], m) "integrator \"$name\": \"$key\" must not depend on the modes"
+        @requires !haskey(dae, key) || !casadi.depends_on(dae[key], m) "integrator \"$name\": \"$key\" must not depend on the modes"
     end
     n, k = size(x, 1), size(m, 1)
     counter = gate ? T[T.sym("events_left")] : T[]
@@ -50,8 +50,8 @@ function mode_model(name::AbstractString, dae, modes::Pair; gate::Bool = false)
     user = haskey(dae, "zero") ? Front.densify(dae["zero"]) : nothing
     nu = user === nothing ? 0 : size(user, 1)
     # An event function of the user stays at 1, with no change of sign, when no event is left to count.
-    gated = gate ? C.if_else(counter[1] > 0.5, user, casadi_matrix(T, ones(nu))) : user
-    surfaces = C.times(m, S)
+    gated = gate ? casadi.if_else(counter[1] > 0.5, user, casadi_matrix(T, ones(nu))) : user
+    surfaces = casadi.times(m, S)
     augmented["zero"] = nu == 0 ? surfaces : vertcat([gated, surfaces])
 
     columns = T[]
@@ -64,7 +64,7 @@ function mode_model(name::AbstractString, dae, modes::Pair; gate::Bool = false)
     end
     for j in 1:k
         flip = casadi_matrix(T, [i == j ? -1.0 : 1.0 for i in 1:k])
-        push!(columns, vertcat([x, C.times(m, flip), counter...]))
+        push!(columns, vertcat([x, casadi.times(m, flip), counter...]))
     end
     augmented["transition"] = horzcat(columns)
     @ensures size(augmented["x"], 1) == n + k + length(counter) && size(augmented["transition"], 2) == size(augmented["zero"], 1) "integrator \"$name\": the model with modes has the wrong size"
@@ -109,7 +109,7 @@ function switched_events(name::AbstractString, parts; events::Integer, terminal:
     for search in 1:searches
         # Loop invariant: `state` at the time `start` follows the events found so far, each with its transition;
         # `users` and `switched` count the events of the user and the switches among them.
-        horizon = terminal && wanted > 0 ? C.if_else(done, start, tf) : tf
+        horizon = terminal && wanted > 0 ? casadi.if_else(done, start, tf) : tf
         # The guess carries the place of the event at `start`, so that the search does not find it again.
         found = event_time(vertcat([horizon, previous]), state, q..., start, horizon)
         te, place = found[1], found[2]
@@ -117,35 +117,35 @@ function switched_events(name::AbstractString, parts; events::Integer, terminal:
         result = arc(state, q..., start, te)
         has_quad && push!(sums, result[2])
         state, start = has_quad ? result[1] : result, te
-        is_user, is_switch = C.logic_and(place > 0.5, place < nu + 0.5), place > nu + 0.5
+        is_user, is_switch = casadi.logic_and(place > 0.5, place < nu + 0.5), place > nu + 0.5
         users, switched = users + is_user, switched + is_switch
         for j in 1:wanted
-            mask = C.logic_and(is_user, C.eq(users, number(j)))
+            mask = casadi.logic_and(is_user, casadi.eq(users, number(j)))
             user_time[j], user_place[j], user_hit[j] = user_time[j] + mask * te, user_place[j] + mask * place, user_hit[j] + mask
         end
         for j in 1:switches
-            mask = C.logic_and(is_switch, C.eq(switched, number(j)))
+            mask = casadi.logic_and(is_switch, casadi.eq(switched, number(j)))
             switch_time[j], switch_place[j], switch_hit[j] = switch_time[j] + mask * te, switch_place[j] + mask * (place - nu), switch_hit[j] + mask
         end
         if search == searches
-            state = C.attachAssert(state, C.logic_not(is_switch), "integrator \"$name\": more than $switches switches before the final time; raise switches")
+            state = casadi.attachAssert(state, casadi.logic_not(is_switch), "integrator \"$name\": more than $switches switches before the final time; raise switches")
             break
         end
         if guard !== nothing
             value = guard[1](state, p_value, te, place)
-            state = C.attachAssert(state, C.logic_or(C.logic_not(is_switch), value > 0), guard[2])
+            state = casadi.attachAssert(state, casadi.logic_or(casadi.logic_not(is_switch), value > 0), guard[2])
         end
         if jump !== nothing
             after = jump(state, p_value, te)
             size(after, 2) > 1 && (after = Front.mtimes(after, one_hot(place)))
             # The last event of the user with `terminal` ends the integration before its transition.
-            apply = terminal && wanted > 0 ? C.logic_or(is_switch, C.logic_and(is_user, users < wanted - 0.5)) : place > 0.5
-            state = C.if_else(apply, after, state)
+            apply = terminal && wanted > 0 ? casadi.logic_or(is_switch, casadi.logic_and(is_user, users < wanted - 0.5)) : place > 0.5
+            state = casadi.if_else(apply, after, state)
         end
-        terminal && wanted > 0 && (done = C.logic_or(done, C.logic_and(is_user, C.eq(users, number(wanted)))))
+        terminal && wanted > 0 && (done = casadi.logic_or(done, casadi.logic_and(is_user, casadi.eq(users, number(wanted)))))
     end
     exact && wanted > 0 &&
-        (state = C.attachAssert(state, users > wanted - 0.5, "integrator \"$name\": fewer than $wanted events between the initial and the final time"))
+        (state = casadi.attachAssert(state, users > wanted - 0.5, "integrator \"$name\": fewer than $wanted events between the initial and the final time"))
     outputs, names = Front.MX[state], ["xf"]
     has_quad && (push!(outputs, reduce(+, sums)); push!(names, "qf"))
     if wanted > 0
@@ -169,8 +169,8 @@ switching function on the augmented state `X = [x; m; ...]`, `∂S/∂x ẋ + �
 sizes `n` of the state, `k` of the modes and `extra` of the counter after them.
 """
 struct ModeFunctions
-    surface::C.Function
-    rate::C.Function
+    surface::casadi.Function
+    rate::casadi.Function
     n::Int
     k::Int
     extra::Int
@@ -207,17 +207,17 @@ flow leaves on both sides, or on neither. A mode carries no derivative.
 function initial_mode(f::ModeFunctions, name::AbstractString, x0, p, t0, direction)
     number(v) = Front.MX(Float64(v))
     S0 = f.surface(x0, p, t0)
-    off = C.abs(S0) > sqrt(eps()) * (1 + C.abs(S0))
-    base = C.sign(S0)
+    off = casadi.abs(S0) > sqrt(eps()) * (1 + casadi.abs(S0))
+    base = casadi.sign(S0)
     modes = map(1:f.k) do j
         with(v) = augmented_state(f, x0, vertcat([i == j ? number(v) : base[i] for i in 1:f.k]))
         leaves_up = direction * f.rate(with(1), p, t0)[j] > 0
         leaves_down = direction * f.rate(with(-1), p, t0)[j] < 0
-        mode = C.if_else(off[j], base[j], C.if_else(leaves_up, number(1), number(-1)))
+        mode = casadi.if_else(off[j], base[j], casadi.if_else(leaves_up, number(1), number(-1)))
         on = "integrator \"$name\": switching function $j is zero at the initial time, and"
-        mode = C.attachAssert(mode, C.logic_or(off[j], C.logic_not(C.logic_and(leaves_up, leaves_down))),
+        mode = casadi.attachAssert(mode, casadi.logic_or(off[j], casadi.logic_not(casadi.logic_and(leaves_up, leaves_down))),
                               "$on the flow leaves its surface on both sides, so the initial mode is not defined; start off the surface")
-        C.attachAssert(mode, C.logic_or(off[j], C.logic_or(leaves_up, leaves_down)),
+        casadi.attachAssert(mode, casadi.logic_or(off[j], casadi.logic_or(leaves_up, leaves_down)),
                        "$on the flow leaves its surface on neither side: it slides on the surface or touches it; start off the surface, or smooth the switch")
     end
     vertcat(modes)
@@ -233,13 +233,13 @@ that the flow on the far side points back to the surface: a sliding arc.
 """
 function switch_guard(f::ModeFunctions, nu::Integer)
     na = f.n + f.k + f.extra
-    X, P, τ, place = Front.MX.sym("x", na), Front.MX.sym("p", C.size1(C.sparsity_in(f.rate, 1))), Front.MX.sym("t"), Front.MX.sym("place")
+    X, P, τ, place = Front.MX.sym("x", na), Front.MX.sym("p", casadi.size1(casadi.sparsity_in(f.rate, 1))), Front.MX.sym("t"), Front.MX.sym("place")
     before = f.rate(X, P, τ)
     value = place < nu + 0.5
     for j in 1:f.k
-        flip = Front.MX(C.DM([i == f.n + j ? -1.0 : 1.0 for i in 1:na]))
-        after = f.rate(C.times(X, flip), P, τ)
-        value = value + C.eq(place, Front.MX(Float64(nu + j))) * before[j] * after[j]
+        flip = Front.MX(casadi.DM([i == f.n + j ? -1.0 : 1.0 for i in 1:na]))
+        after = f.rate(casadi.times(X, flip), P, τ)
+        value = value + casadi.eq(place, Front.MX(Float64(nu + j))) * before[j] * after[j]
     end
     Front.Function("switch_guard", [X, P, τ, place], [value])
 end
@@ -253,8 +253,8 @@ a mode does not match the sign of its switching function there.
 function checked_modes(f::ModeFunctions, name::AbstractString, X, p, t)
     x, m = X[1:f.n], X[f.n+1:f.n+f.k]
     S = f.surface(x, p, t)
-    agree = C.mmin(C.times(m, S) + sqrt(eps()) * (1 + C.abs(S))) >= 0
-    C.attachAssert(x, agree, "integrator \"$name\": a mode does not match the sign of its switching function at an output time. " *
+    agree = casadi.mmin(casadi.times(m, S) + sqrt(eps()) * (1 + casadi.abs(S))) >= 0
+    casadi.attachAssert(x, agree, "integrator \"$name\": a mode does not match the sign of its switching function at an output time. " *
                              "Two switching functions changed their sign in one step of the event search, as two on one surface do, one changed its sign at an output time, " *
                              "or the flow slides on a surface")
 end
@@ -303,7 +303,7 @@ function mode_integrator(name::AbstractString, dae, modes, make_solver, make_eve
              "a model with modes cannot follow a sliding arc: smooth the switch with CasADiCodegen.smooth_sign or CasADiCodegen.smoothed"
     G = ode_event(name, augmented, make_solver, make_event; adjoint, events, terminal, exact, mass = full, nonsmooth = :ignore,
                   switching = k, switches, guard = (switch_guard(f, nu), slides))
-    names_out = [C.name_out(G, i) for i in 0:C.n_out(G)-1]
+    names_out = [casadi.name_out(G, i) for i in 0:casadi.n_out(G)-1]
 
     n, has_p, has_quad = size(dae["x"], 1), haskey(dae, "p"), haskey(dae, "quad")
     x0 = Front.MX.sym("x0", n)
@@ -315,7 +315,7 @@ function mode_integrator(name::AbstractString, dae, modes, make_solver, make_eve
 
     if !grid
         from, to = free ? (Front.MX.sym("t0"), Front.MX.sym("tf")) : (Front.MX(t0), Front.MX(times[1]))
-        direction = free ? C.if_else(from <= to, Front.MX(1.0), Front.MX(-1.0)) : Front.MX(sign(times[1] - t0))
+        direction = free ? casadi.if_else(from <= to, Front.MX(1.0), Front.MX(-1.0)) : Front.MX(sign(times[1] - t0))
         r = run(start(from, direction), from, to)
         ends = terminal && nu > 0 ? r["te"][Int(events)] : to
         kept = ["xf"; filter(key -> key in ("qf", "te", "ie", "ne") || (switch_times && key in ("ts", "is", "ns")), names_out[2:end])]
@@ -330,7 +330,7 @@ function mode_integrator(name::AbstractString, dae, modes, make_solver, make_eve
     for (side, direction) in ((>, 1.0), (<, -1.0))
         stops = sort!(unique(Float64[time for time in times if side(time, t0)]); by = time -> abs(time - t0))
         isempty(stops) && continue
-        X, from, total = start(Front.MX(t0), Front.MX(direction)), t0, Front.MX(C.DM(zeros(nq)))
+        X, from, total = start(Front.MX(t0), Front.MX(direction)), t0, Front.MX(casadi.DM(zeros(nq)))
         for stop in stops
             # Loop invariant: `X` is the augmented state at the time `from`, and `total` the quadratures from t0 to it.
             r = run(X, Front.MX(from), Front.MX(stop))
@@ -340,7 +340,7 @@ function mode_integrator(name::AbstractString, dae, modes, make_solver, make_eve
             foreach(i -> times[i] == stop && (columns[i] = at), eachindex(times))
         end
     end
-    initial = has_quad ? vertcat([x0, Front.MX(C.DM(zeros(nq)))]) : x0
+    initial = has_quad ? vertcat([x0, Front.MX(casadi.DM(zeros(nq)))]) : x0
     foreach(i -> times[i] == t0 && (columns[i] = initial), eachindex(times))
     M = horzcat(columns)
     Front.Function(String(name), [x0, q...], has_quad ? [M[1:n, :], M[n+1:n+nq, :]] : [M], names_in, has_quad ? ["xf", "qf"] : ["xf"])

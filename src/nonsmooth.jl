@@ -54,13 +54,13 @@ CasADi can expand it; else the scan reads its matrix nodes, and a set then holds
 of the whole matrix. The body of a Julia callback, an external function or a solver object
 is not scanned: each of its results depends on all its arguments.
 """
-function nonsmooth_findings(f::C.Function; expand::Bool = true)
-    @requires C.is_a(f, "SXFunction") || C.is_a(f, "MXFunction") "function \"$(C.name(f))\" is not an SX or MX function"
-    sets = [BitSet(i) for i in 1:C.n_in(f)]
+function nonsmooth_findings(f::casadi.Function; expand::Bool = true)
+    @requires casadi.is_a(f, "SXFunction") || casadi.is_a(f, "MXFunction") "function \"$(casadi.name(f))\" is not an SX or MX function"
+    sets = [BitSet(i) for i in 1:casadi.n_in(f)]
     found = Switching[]
-    expanded = expand && C.is_a(f, "MXFunction") ? scalar_function(f) : nothing
+    expanded = expand && casadi.is_a(f, "MXFunction") ? scalar_function(f) : nothing
     scan_function!(found, expanded === nothing ? f : expanded, sets, Dict{Any,Any}())
-    @ensures all(s -> issubset(s.inputs, 1:C.n_in(f)), found) "function \"$(C.name(f))\": a switching surface depends on an input that the function does not have"
+    @ensures all(s -> issubset(s.inputs, 1:casadi.n_in(f)), found) "function \"$(casadi.name(f))\": a switching surface depends on an input that the function does not have"
     found
 end
 
@@ -71,14 +71,14 @@ The expansion of the MX function `f` to an SX function, or `nothing` when CasADi
 expand it, or when the expansion still calls a function (an interpolant, for example),
 whose body the scalar scan cannot read.
 """
-function scalar_function(f::C.Function)
+function scalar_function(f::casadi.Function)
     g = try
-        C.expand(f)
+        casadi.expand(f)
     catch err
         err isa InterruptException && rethrow()
         return nothing
     end
-    any(k -> C.instruction_id(g, k) == C.OP_CALL, 0:C.n_instructions(g)-1) ? nothing : g
+    any(k -> casadi.instruction_id(g, k) == casadi.OP_CALL, 0:casadi.n_instructions(g)-1) ? nothing : g
 end
 
 """
@@ -97,33 +97,33 @@ depend on the inputs `sets`, one set per argument, and return the set of each re
 are read once. `truth` tells that the first argument is a truth (see `TRUTHS`); a `Switch`
 then does not count its index again.
 """
-function scan_function!(found::Vector{Switching}, g::C.Function, sets::Vector{BitSet}, cache::Dict{Any,Any}; truth::Bool = false)
-    key = (C.__hash__(g), sets, truth)
+function scan_function!(found::Vector{Switching}, g::casadi.Function, sets::Vector{BitSet}, cache::Dict{Any,Any}; truth::Bool = false)
+    key = (casadi.__hash__(g), sets, truth)
     if haskey(cache, key)
         inner, results = cache[key]
         append!(found, inner)
         return results
     end
     inner = Switching[]
-    class = C.class_name(g)
-    results = if C.is_a(g, "SXFunction")
+    class = casadi.class_name(g)
+    results = if casadi.is_a(g, "SXFunction")
         scan_scalar!(inner, g, sets)
-    elseif C.is_a(g, "MXFunction")
+    elseif casadi.is_a(g, "MXFunction")
         scan_matrix!(inner, g, sets, cache)
     elseif class == "Switch"
         # The index selects a branch: a jump, unless the comparison that gives it is counted. Each branch is scanned with the other arguments.
         index, arguments = sets[1], sets[2:end]
         truth || isempty(index) || push!(inner, (op = :Switch, kind = :jump, inputs = index))
-        info = C.info(g)
-        branches = [b for b in [info["f"]; info["f_def"]] if b isa C.Function && !C.is_null(b)]
+        info = casadi.info(g)
+        branches = [b for b in [info["f"]; info["f_def"]] if b isa casadi.Function && !casadi.is_null(b)]
         outcomes = [scan_function!(inner, b, arguments, cache) for b in branches]
-        [joined([[index]; [o[j] for o in outcomes]]) for j in 1:C.n_out(g)]
+        [joined([[index]; [o[j] for o in outcomes]]) for j in 1:casadi.n_out(g)]
     elseif class in ("Map", "ThreadMap", "OmpMap")
-        scan_function!(inner, C.info(g)["f"]::C.Function, sets, cache; truth)
+        scan_function!(inner, casadi.info(g)["f"]::casadi.Function, sets, cache; truth)
     else
         class in ("LinearInterpolant", "LinearInterpolantJac") && !isempty(sets[1]) &&
             push!(inner, (op = :LinearInterpolant, kind = :kink, inputs = sets[1]))
-        fill(joined(sets), C.n_out(g))
+        fill(joined(sets), casadi.n_out(g))
     end
     cache[key] = (inner, results)
     append!(found, inner)
@@ -131,14 +131,14 @@ function scan_function!(found::Vector{Switching}, g::C.Function, sets::Vector{Bi
 end
 
 "Scan the instructions of the SX function `g` (see `scan_function!`)."
-function scan_scalar!(found::Vector{Switching}, g::C.Function, sets::Vector{BitSet})
+function scan_scalar!(found::Vector{Switching}, g::casadi.Function, sets::Vector{BitSet})
     names = op_names()
-    work = fill(NO_INPUTS, C.sz_w(g))
-    results = fill(NO_INPUTS, C.n_out(g))
-    for k in 0:C.n_instructions(g)-1
+    work = fill(NO_INPUTS, casadi.sz_w(g))
+    results = fill(NO_INPUTS, casadi.n_out(g))
+    for k in 0:casadi.n_instructions(g)-1
         # Loop invariant: each slot of `work` written so far holds the inputs on which its value depends.
-        op = names[C.instruction_id(g, k)]
-        i, o = C.instruction_input(g, k), C.instruction_output(g, k)
+        op = names[casadi.instruction_id(g, k)]
+        i, o = casadi.instruction_input(g, k), casadi.instruction_output(g, k)
         if op === :OP_INPUT
             work[o[1]+1] = sets[i[1]+1]
         elseif op === :OP_CONST
@@ -156,26 +156,26 @@ function scan_scalar!(found::Vector{Switching}, g::C.Function, sets::Vector{BitS
 end
 
 "Scan the instructions of the MX function `g`, one set per matrix value (see `scan_function!`)."
-function scan_matrix!(found::Vector{Switching}, g::C.Function, sets::Vector{BitSet}, cache::Dict{Any,Any})
+function scan_matrix!(found::Vector{Switching}, g::casadi.Function, sets::Vector{BitSet}, cache::Dict{Any,Any})
     names = op_names()
     work = Dict{Int,BitSet}()
     truths = Set{Int}()                     # the slots of `work` that hold a truth
-    results = fill(NO_INPUTS, C.n_out(g))
-    for k in 0:C.n_instructions(g)-1
+    results = fill(NO_INPUTS, casadi.n_out(g))
+    for k in 0:casadi.n_instructions(g)-1
         # Loop invariant: each slot of `work` written so far holds the inputs on which its matrix depends, and `truths` those that hold a truth.
-        op = names[C.instruction_id(g, k)]
-        i, o = C.instruction_input(g, k), C.instruction_output(g, k)
+        op = names[casadi.instruction_id(g, k)]
+        i, o = casadi.instruction_input(g, k), casadi.instruction_output(g, k)
         if op === :OP_OUTPUT
             results[o[1]+1] = joined((results[o[1]+1], work[i[1]]))
         elseif op === :OP_INPUT
-            work[o[1]] = sets[Int(C.info(C.instruction_MX(g, k))["ind"])+1]
+            work[o[1]] = sets[Int(casadi.info(casadi.instruction_MX(g, k))["ind"])+1]
             delete!(truths, o[1])
         else
             operands = BitSet[get(work, s, NO_INPUTS) for s in i]
             if op === :OP_CALL
-                callee = C.which_function(C.instruction_MX(g, k))
+                callee = casadi.which_function(casadi.instruction_MX(g, k))
                 truth = !isempty(i) && i[1] in truths
-                called = length(operands) == C.n_in(callee) ? scan_function!(found, callee, operands, cache; truth) : fill(joined(operands), length(o))
+                called = length(operands) == casadi.n_in(callee) ? scan_function!(found, callee, operands, cache; truth) : fill(joined(operands), length(o))
                 foreach(((j, s),) -> s >= 0 && (work[s] = called[j]; delete!(truths, s)), enumerate(o))
             else
                 record_switch!(found, op, operands)
@@ -188,17 +188,17 @@ function scan_matrix!(found::Vector{Switching}, g::C.Function, sets::Vector{BitS
 end
 
 "The places from 1 of the inputs `inputs` of `f`: all with `nothing`, else given by place or by name, one or a collection."
-function input_places(f::C.Function, inputs)
-    n = C.n_in(f)
+function input_places(f::casadi.Function, inputs)
+    n = casadi.n_in(f)
     inputs === nothing && return collect(1:n)
-    names = [C.name_in(f, i) for i in 0:n-1]
+    names = [casadi.name_in(f, i) for i in 0:n-1]
     map(inputs isa Union{AbstractString,Symbol,Integer} ? [inputs] : collect(inputs)) do input
         if input isa Union{AbstractString,Symbol}
             place = findfirst(==(String(input)), names)
-            @requires place !== nothing "function \"$(C.name(f))\" has no input \"$input\"; its inputs are $(join(repr.(names), ", "))"
+            @requires place !== nothing "function \"$(casadi.name(f))\" has no input \"$input\"; its inputs are $(join(repr.(names), ", "))"
             place
         else
-            @requires input isa Integer && 1 <= input <= n "function \"$(C.name(f))\" has $n inputs; the input $(repr(input)) is not one of them"
+            @requires input isa Integer && 1 <= input <= n "function \"$(casadi.name(f))\" has $n inputs; the input $(repr(input)) is not one of them"
             Int(input)
         end
     end
@@ -245,7 +245,7 @@ julia> CasADiCodegen.nonsmooth_operations(f; inputs = ["x"])
  :OP_SIGN => 1
 ```
 """
-function nonsmooth_operations(f::C.Function; inputs = nothing, expand::Bool = true)
+function nonsmooth_operations(f::casadi.Function; inputs = nothing, expand::Bool = true)
     places = input_places(f, inputs)
     counts = Dict{Symbol,Int}()
     for s in nonsmooth_findings(f; expand)
@@ -260,10 +260,10 @@ end
 An MX function with the inputs of `f` whose results are the results `places` of `f`, from
 0, with their names.
 """
-function with_outputs(f::C.Function, places)
-    inputs = MX[MX.sym(C.name_in(f, i), C.sparsity_in(f, i)) for i in 0:C.n_in(f)-1]
-    results = as_list(C.call(f, inputs, false, false))
-    Front.Function(C.name(f), inputs, results[collect(places).+1], [C.name_in(f, i) for i in 0:C.n_in(f)-1], [C.name_out(f, o) for o in places])
+function with_outputs(f::casadi.Function, places)
+    inputs = MX[MX.sym(casadi.name_in(f, i), casadi.sparsity_in(f, i)) for i in 0:casadi.n_in(f)-1]
+    results = as_list(casadi.call(f, inputs, false, false))
+    Front.Function(casadi.name(f), inputs, results[collect(places).+1], [casadi.name_in(f, i) for i in 0:casadi.n_in(f)-1], [casadi.name_out(f, o) for o in places])
 end
 
 const NONSMOOTH_SETTINGS = (:warn, :error, :ignore)
@@ -294,21 +294,21 @@ from 1. A switching surface counts when its operand depends on a state, or on bo
 time and a parameter; a surface at a fixed time does not move. The places in `exclude` do
 not count. `nonsmooth` is `:warn`, `:error` or `:ignore`, which does not scan.
 """
-function check_nonsmooth(label::AbstractString, f::C.Function, states, times, parameters; nonsmooth::Symbol,
+function check_nonsmooth(label::AbstractString, f::casadi.Function, states, times, parameters; nonsmooth::Symbol,
                          exclude = Int[], remedy::AbstractString = JULIA_REMEDY)
     check_setting(label, nonsmooth)
     nonsmooth === :ignore && return nothing
     moves(inputs) = (s = setdiff(inputs, exclude); any(in(states), s) || (any(in(times), s) && any(in(parameters), s)))
     parts, total, any_jump, any_kink, on_state = String[], 0, false, false, false
-    for o in 0:C.n_out(f)-1
-        C.nnz_out(f, o) == 0 && continue
-        kept = filter(s -> moves(s.inputs), nonsmooth_findings(C.n_out(f) == 1 ? f : with_outputs(f, [o])))
+    for o in 0:casadi.n_out(f)-1
+        casadi.nnz_out(f, o) == 0 && continue
+        kept = filter(s -> moves(s.inputs), nonsmooth_findings(casadi.n_out(f) == 1 ? f : with_outputs(f, [o])))
         isempty(kept) && continue
         total += length(kept)
         any_jump |= any(s -> s.kind === :jump, kept)
         any_kink |= any(s -> s.kind === :kink, kept)
         on_state |= any(s -> any(in(states), setdiff(s.inputs, exclude)), kept)
-        push!(parts, "\"$(C.name_out(f, o))\" at $(plural(length(kept), "surface")) ($(surface_counts(kept)))")
+        push!(parts, "\"$(casadi.name_out(f, o))\" at $(plural(length(kept), "surface")) ($(surface_counts(kept)))")
     end
     total == 0 && return nothing
     consequence = any_jump ?
@@ -353,11 +353,11 @@ Run `check_nonsmooth` on the DAE function `dae` of an integrator of CasADi, whos
 are named `"t"`, `"x"`, `"z"`, `"p"` and `"u"`, and whose results `"ode"`, `"alg"` and
 `"quad"` are scanned.
 """
-function check_casadi_model(label::AbstractString, dae::C.Function; nonsmooth::Symbol, remedy::AbstractString)
+function check_casadi_model(label::AbstractString, dae::casadi.Function; nonsmooth::Symbol, remedy::AbstractString)
     check_setting(label, nonsmooth)
     nonsmooth === :ignore && return nothing
-    names_in = [C.name_in(dae, i) for i in 0:C.n_in(dae)-1]
+    names_in = [casadi.name_in(dae, i) for i in 0:casadi.n_in(dae)-1]
     place(keys...) = findall(in(keys), names_in)
-    outputs = [o for o in 0:C.n_out(dae)-1 if C.name_out(dae, o) in ("ode", "alg", "quad")]
+    outputs = [o for o in 0:casadi.n_out(dae)-1 if casadi.name_out(dae, o) in ("ode", "alg", "quad")]
     check_nonsmooth(label, with_outputs(dae, outputs), place("x", "z"), place("t"), place("p", "u"); nonsmooth, remedy)
 end

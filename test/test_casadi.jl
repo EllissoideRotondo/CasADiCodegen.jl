@@ -83,13 +83,13 @@ end
 # ---------------------------------------------------------------------------
 # copysign is left out: it exposes the sign bit of a NaN (for example from
 # fmod(0, 0)), which IEEE 754 leaves open and which differs between C and Julia.
-const TREE_UNARY = [x -> -x, x -> C.sqrt(x), x -> x^2, x -> 2 * x, x -> C.abs(x), x -> C.sign(x),
-    x -> C.floor(x), x -> C.ceil(x), x -> 1 / x, x -> C.logic_not(x)]
+const TREE_UNARY = [x -> -x, x -> casadi.sqrt(x), x -> x^2, x -> 2 * x, x -> casadi.abs(x), x -> casadi.sign(x),
+    x -> casadi.floor(x), x -> casadi.ceil(x), x -> 1 / x, x -> casadi.logic_not(x)]
 const TREE_BINARY = [(x, y) -> x + y, (x, y) -> x - y, (x, y) -> x * y, (x, y) -> x / y,
-    (x, y) -> C.lt(x, y), (x, y) -> C.le(x, y), (x, y) -> C.eq(x, y), (x, y) -> C.ne(x, y),
-    (x, y) -> C.logic_and(x, y), (x, y) -> C.logic_or(x, y), (x, y) -> C.fmod(x, y),
-    (x, y) -> C.fmin(x, y), (x, y) -> C.fmax(x, y),
-    (x, y) -> C.if_else(x, y, SX(0.0)), (x, y) -> C.remainder(x, y)]
+    (x, y) -> casadi.lt(x, y), (x, y) -> casadi.le(x, y), (x, y) -> casadi.eq(x, y), (x, y) -> casadi.ne(x, y),
+    (x, y) -> casadi.logic_and(x, y), (x, y) -> casadi.logic_or(x, y), (x, y) -> casadi.fmod(x, y),
+    (x, y) -> casadi.fmin(x, y), (x, y) -> casadi.fmax(x, y),
+    (x, y) -> casadi.if_else(x, y, SX(0.0)), (x, y) -> casadi.remainder(x, y)]
 
 function tree_function(steps, constant)
     x = SX.sym("x", 3)
@@ -136,7 +136,7 @@ end
     alg = Algorithm(f)
     @test alg.names_in == ["x"] && alg.names_out == ["f", "g", "H"]
     @test alg.nnz_out == [1, 3, 5]                 # the Hessian has 5 structural nonzeros
-    @test (C.colind(alg.sparsity_out[3]), C.row(alg.sparsity_out[3])) == ([0, 2, 4, 5], [0, 1, 0, 1, 2])
+    @test (casadi.colind(alg.sparsity_out[3]), casadi.row(alg.sparsity_out[3])) == ([0, 2, 4, 5], [0, 1, 0, 1, 2])
     xv = [-1.2, 1.0, 0.7]
     @test isequal(casadi_eval(f, xv), emitted_eval(alg, xv))
     source = sprint(io -> generate_julia(f, io; module_name = :Rosen))
@@ -147,7 +147,7 @@ end
 @testset "large function is split into chunks" begin
     n, chunk_size = 60, 100
     x = SX.sym("x", n)
-    terms = [(x[i] - x[i+1])^2 / (1 + C.abs(x[i])) for i in 1:n-1]
+    terms = [(x[i] - x[i+1])^2 / (1 + casadi.abs(x[i])) for i in 1:n-1]
     y = vcat(terms...)
     f = CasADiCodegen.Function("big", [x], [y, jacobian(y, x)])
     alg = Algorithm(f)
@@ -170,11 +170,11 @@ end
 @testset "a written module imports only what it uses" begin
     x, y = SX.sym("x"), SX.sym("y")
     source(expr) = sprint(io -> generate_julia(CasADiCodegen.Function("s", [x, y], [expr]), io))
-    @test occursin("import SpecialFunctions", source(C.erf(x)))
-    @test occursin("erfinv(x) =", source(C.erfinv(x)))
+    @test occursin("import SpecialFunctions", source(casadi.erf(x)))
+    @test occursin("erfinv(x) =", source(casadi.erfinv(x)))
     @test occursin("import NaNMath", source(sin(x)))
-    @test occursin("fmin(x, y) =", source(C.fmin(x, y)))
-    @test occursin("fmin(x, y) =", sprint(io -> generate_julia(CasADiCodegen.Function("s", [x, y], [C.fmin(x, y)]), io; nanmath = false)))
+    @test occursin("fmin(x, y) =", source(casadi.fmin(x, y)))
+    @test occursin("fmin(x, y) =", sprint(io -> generate_julia(CasADiCodegen.Function("s", [x, y], [casadi.fmin(x, y)]), io; nanmath = false)))
     plain = source(x * y + 2)
     @test count("import", plain) == 1 && occursin("import StaticArraysCore", plain) && !occursin("fmin", plain)
 end
@@ -184,13 +184,13 @@ end
     v = MX.sym("v", 2)
     a = SX.sym("a", 2)
     h = CasADiCodegen.Function("h", [a], [vcat(a[1] * a[2], a[1] - a[2])])
-    f = CasADiCodegen.Function("m", [X, v], [C.mtimes(X, v) + h(v)])
+    f = CasADiCodegen.Function("m", [X, v], [casadi.mtimes(X, v) + h(v)])
     alg = CasADiCodegen.Codegen.algorithm(f)               # CasADi expands it to SX
     Xv, vv = [1.0, 2.0, 3.0, 4.0], [0.5, -1.5]
     @test isequal(casadi_eval(f, reshape(Xv, 2, 2), vv), emitted_eval(alg, Xv, vv))
 
     # CasADi cannot expand a linear solve, so the matrix emitter takes the function.
-    g = CasADiCodegen.Function("lin", [X, v], [C.solve(X, v)])
+    g = CasADiCodegen.Function("lin", [X, v], [casadi.solve(X, v)])
     solved = build_function(g; nonzeros = true, expression = Val{false})([zeros(2)], (Xv, vv))
     @test solved[1] ≈ reshape(Xv, 2, 2) \ vv
 end
@@ -208,7 +208,7 @@ const NORM_PS = (2, 1, Inf, -Inf, 0, 3, 1//2, -0.5, -1.5)
 @testset "norm and opnorm of symbols as on numbers, $T" for T in (SX, MX)
     M = T.sym("M", 2, 3)
     d = T.sym("d", 3)
-    D = C.diag(d)                                           # structural zeros count as elements
+    D = casadi.diag(d)                                           # structural zeros count as elements
     outputs = [[LinearAlgebra.norm(M, p) for p in NORM_PS]; [LinearAlgebra.norm(D, p) for p in NORM_PS];
                [LinearAlgebra.norm([M[1, 1], M[2, 2], M[1, 3]], p) for p in NORM_PS];
                [LinearAlgebra.norm([M[:, 1], M[:, 2]], 1), LinearAlgebra.opnorm(M, 1), LinearAlgebra.opnorm(M, Inf),
@@ -222,7 +222,7 @@ const NORM_PS = (2, 1, Inf, -Inf, 0, 3, 1//2, -0.5, -1.5)
                     [LinearAlgebra.norm([Mv[1, 1], Mv[2, 2], Mv[1, 3]], p) for p in NORM_PS];
                     LinearAlgebra.norm([Mv[:, 1], Mv[:, 2]], 1); LinearAlgebra.opnorm(Mv, 1); LinearAlgebra.opnorm(Mv, Inf);
                     LinearAlgebra.opnorm(Mv[:, 1:1]); LinearAlgebra.opnorm(Mv[1:1, :])]
-        @test all(map((a, b) -> isequal(a, b) || a ≈ b, [only(Matrix(r)) for r in f(C.DM(Mv), C.DM(dv))], expected))
+        @test all(map((a, b) -> isequal(a, b) || a ≈ b, [only(Matrix(r)) for r in f(casadi.DM(Mv), casadi.DM(dv))], expected))
     end
     @test Float64(LinearAlgebra.norm(T(2, 0), 3)) == LinearAlgebra.norm(zeros(2, 0), 3)
     @test_throws ArgumentError LinearAlgebra.opnorm(M)

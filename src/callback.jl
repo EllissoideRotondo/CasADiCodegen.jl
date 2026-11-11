@@ -25,7 +25,7 @@ struct JuliaCall
 end
 
 "A callback that has a record: `call` is the record and `evaluate` takes every argument."
-abstract type RecordedCallback <: C.Callback end
+abstract type RecordedCallback <: casadi.Callback end
 
 # The CasADi side of a Julia function. `evaluate` takes every argument;
 # `derivative` is `nothing`, or the Julia function that gives the Jacobian
@@ -46,34 +46,34 @@ shape(dims::Tuple{Integer}) = (Int(dims[1]),)
 shape(dims::Tuple{Integer,Integer}) = (Int(dims[1]), Int(dims[2]))
 shape(other) = throw(ArgumentError("a size must be an integer or a tuple (rows, columns), got $(repr(other))"))
 
-dense(dims) = C.Sparsity.dense(dims[1], length(dims) == 2 ? dims[2] : 1)
-pattern(dims, n) = n == 0 ? C.Sparsity(dims[1], length(dims) == 2 ? dims[2] : 1) : dense(dims)
+dense(dims) = casadi.Sparsity.dense(dims[1], length(dims) == 2 ? dims[2] : 1)
+pattern(dims, n) = n == 0 ? casadi.Sparsity(dims[1], length(dims) == 2 ? dims[2] : 1) : dense(dims)
 shaped(values, dims) = length(dims) == 1 ? values : reshape(values, dims)
 results(y) = y isa Tuple ? y : (y,)
 
 # The virtual methods of the callback; CasADi counts the arguments and results from 0.
-C.get_n_in(cb::RecordedCallback) = length(cb.call.shapes_in)
-C.get_n_out(cb::RecordedCallback) = length(cb.call.shapes_out)
-C.get_sparsity_in(cb::RecordedCallback, i) = pattern(cb.call.shapes_in[i+1], cb.call.nnz_in[i+1])
-C.get_sparsity_out(cb::RecordedCallback, i) = pattern(cb.call.shapes_out[i+1], cb.call.nnz_out[i+1])
+casadi.get_n_in(cb::RecordedCallback) = length(cb.call.shapes_in)
+casadi.get_n_out(cb::RecordedCallback) = length(cb.call.shapes_out)
+casadi.get_sparsity_in(cb::RecordedCallback, i) = pattern(cb.call.shapes_in[i+1], cb.call.nnz_in[i+1])
+casadi.get_sparsity_out(cb::RecordedCallback, i) = pattern(cb.call.shapes_out[i+1], cb.call.nnz_out[i+1])
 
-function C.eval_(cb::RecordedCallback, arg)
+function casadi.eval_(cb::RecordedCallback, arg)
     call = cb.call
     # An input that is a structural zero has no values to shape; no function reads it.
-    y = results(cb.evaluate((n == 0 ? Float64[] : shaped(C.nonzeros(a), dims)
+    y = results(cb.evaluate((n == 0 ? Float64[] : shaped(casadi.nonzeros(a), dims)
                              for (a, dims, n) in zip(arg, call.shapes_in, call.nnz_in))...))
     returned = 0        # the function returns the results that are not structural zeros
     map(call.shapes_out, call.nnz_out) do dims, n
-        n == 0 ? C.DM(pattern(dims, 0)) : C.DM(dense(dims), C.DM(Vector{Float64}(vec(y[returned += 1]))))
+        n == 0 ? casadi.DM(pattern(dims, 0)) : casadi.DM(dense(dims), casadi.DM(Vector{Float64}(vec(y[returned += 1]))))
     end
 end
 
-C.has_jacobian(cb::JuliaCallback) = cb.derivative !== nothing
+casadi.has_jacobian(cb::JuliaCallback) = cb.derivative !== nothing
 
 # CasADi asks for the function (inputs..., results...) -> one Jacobian block
 # per pair of result and input, ordered by result first. A block is a
 # structural zero when the result is one or when the input is not an argument.
-function C.get_jacobian(cb::JuliaCallback, name, names_in, names_out, options)
+function casadi.get_jacobian(cb::JuliaCallback, name, names_in, names_out, options)
     call = cb.call
     pairs = [(o, i) for o in eachindex(call.shapes_out) for i in eachindex(call.shapes_in)]
     shapes = Tuple{Vararg{Int}}[(prod(call.shapes_out[o]), prod(call.shapes_in[i])) for (o, i) in pairs]
@@ -132,7 +132,7 @@ Make the callback `cb` a CasADi function with the name of its record and the Cas
 function recorded_function(cb::RecordedCallback; options...)
     proxy = Front.callback(cb, cb.call.name, Dict{String,Any}(string(k) => v for (k, v) in options))
     F = Front.Function(proxy)
-    JULIA_CALLS[C.__hash__(F)] = (cb.call, proxy)
+    JULIA_CALLS[casadi.__hash__(F)] = (cb.call, proxy)
     F
 end
 

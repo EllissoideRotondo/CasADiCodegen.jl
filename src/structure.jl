@@ -21,21 +21,19 @@ those of CasADi, plus one.
 ```jldoctest
 julia> using CasADiCodegen
 
-julia> C = CasADiCodegen.C;
-
-julia> pattern = C.triplet(C.Sparsity, 3, 3, [0, 1, 1, 2], [0, 0, 1, 2]);
+julia> pattern = casadi.triplet(casadi.Sparsity, 3, 3, [0, 1, 1, 2], [0, 0, 1, 2]);
 
 julia> CasADiCodegen.block_triangular_form(pattern).blocks
 3
 ```
 """
-function block_triangular_form(sparsity::C.Sparsity)
-    blocks, vectors... = C.btf(sparsity)
+function block_triangular_form(sparsity::casadi.Sparsity)
+    blocks, vectors... = casadi.btf(sparsity)
     parts = map(v -> Int.(v) .+ 1, vectors)
     rowperm, colperm, rowblock, colblock, coarse_rowblock, coarse_colblock = parts
-    @ensures isperm(rowperm) && length(rowperm) == C.size1(sparsity) &&
-             isperm(colperm) && length(colperm) == C.size2(sparsity) "block_triangular_form: the result of CasADi is not a permutation"
-    rows, cols = C.get_triplet(sparsity)
+    @ensures isperm(rowperm) && length(rowperm) == casadi.size1(sparsity) &&
+             isperm(colperm) && length(colperm) == casadi.size2(sparsity) "block_triangular_form: the result of CasADi is not a permutation"
+    rows, cols = casadi.get_triplet(sparsity)
     rowof, colof = invperm(rowperm), invperm(colperm)
     @ensures all(searchsortedlast(rowblock, rowof[i+1]) >= searchsortedlast(colblock, colof[j+1]) for (i, j) in zip(rows, cols)) "block_triangular_form: the permuted pattern is not block lower triangular"
     (; blocks = Int(blocks), rowperm, colperm, rowblock, colblock, coarse_rowblock, coarse_colblock)
@@ -73,34 +71,34 @@ The result of `g` has the size of `z`. The matrices are those of the model at a 
 conditions: they are not checked, and at a point where `g ≠ 0` the matrices do not describe
 the model.
 """
-function linearization_function(f::C.Function, h::C.Function; sparse::Bool = false)
+function linearization_function(f::casadi.Function, h::casadi.Function; sparse::Bool = false)
     check_linearization_arguments((f, h), ("x", "u", "p"))
-    @requires C.size1_out(f, 0) == C.size1_in(f, 0) "linearization: the result of \"$(C.name(f))\" must have the size of x"
+    @requires casadi.size1_out(f, 0) == casadi.size1_in(f, 0) "linearization: the result of \"$(casadi.name(f))\" must have the size of x"
     x, u, p = linearization_symbols((f, h), 3)
     dx, y = f(x, u, p), h(x, u, p)
     matrix(J) = sparse ? J : Front.densify(J)
     jacobians = [matrix(Front.jacobian(e, v)) for (e, v) in ((dx, x), (dx, u), (y, x), (y, u))]
     lin = Front.Function("linearization", [x, u, p], jacobians, ["x", "u", "p"], ["A", "B", "C", "D"])
-    @ensures C.size_out(lin, 0) == (C.size1_in(f, 0), C.size1_in(f, 0)) "linearization: A must be square"
+    @ensures casadi.size_out(lin, 0) == (casadi.size1_in(f, 0), casadi.size1_in(f, 0)) "linearization: A must be square"
     lin
 end
 
-function linearization_function(f::C.Function, g::C.Function, h::C.Function; sparse::Bool = false)
+function linearization_function(f::casadi.Function, g::casadi.Function, h::casadi.Function; sparse::Bool = false)
     check_linearization_arguments((f, g, h), ("x", "z", "u", "p"))
-    @requires C.size1_out(f, 0) == C.size1_in(f, 0) "linearization: the result of \"$(C.name(f))\" must have the size of x"
-    @requires C.size1_out(g, 0) == C.size1_in(g, 1) "linearization: the result of \"$(C.name(g))\" must have the size of z"
+    @requires casadi.size1_out(f, 0) == casadi.size1_in(f, 0) "linearization: the result of \"$(casadi.name(f))\" must have the size of x"
+    @requires casadi.size1_out(g, 0) == casadi.size1_in(g, 1) "linearization: the result of \"$(casadi.name(g))\" must have the size of z"
     x, z, u, p = linearization_symbols((f, g, h), 4)
     dx, residual, y = f(x, z, u, p), g(x, z, u, p), h(x, z, u, p)
     J = Front.jacobian
     # The sensitivities of z: dz = -M [dx; du], from 0 = ∂g/∂z dz + ∂g/∂x dx + ∂g/∂u du.
-    M = C.solve(Front.densify(J(residual, z)), Front.densify(horzcat([J(residual, x), J(residual, u)])))
-    nx, nu = C.size1_in(f, 0), C.size1_in(f, 2)
-    reduced(e) = horzcat([J(e, x), J(e, u)]) - C.mtimes(J(e, z), M)
+    M = casadi.solve(Front.densify(J(residual, z)), Front.densify(horzcat([J(residual, x), J(residual, u)])))
+    nx, nu = casadi.size1_in(f, 0), casadi.size1_in(f, 2)
+    reduced(e) = horzcat([J(e, x), J(e, u)]) - casadi.mtimes(J(e, z), M)
     AB, CD = reduced(dx), reduced(y)
     matrix(J) = sparse ? J : Front.densify(J)
     blocks = [matrix(AB[:, 1:nx]), matrix(AB[:, nx+1:nx+nu]), matrix(CD[:, 1:nx]), matrix(CD[:, nx+1:nx+nu])]
     lin = Front.Function("linearization", [x, z, u, p], blocks, ["x", "z", "u", "p"], ["A", "B", "C", "D"])
-    @ensures C.size_out(lin, 0) == (nx, nx) && C.size_out(lin, 1) == (nx, nu) "linearization: A must be square and B have one column per input"
+    @ensures casadi.size_out(lin, 0) == (nx, nx) && casadi.size_out(lin, 1) == (nx, nu) "linearization: A must be square and B have one column per input"
     lin
 end
 
@@ -108,16 +106,16 @@ end
 function check_linearization_arguments(fs, names)
     n = length(names)
     for g in fs
-        @requires C.n_in(g) == n && C.n_out(g) == 1 && all(C.size2_in(g, i) == 1 for i in 0:n-1) && C.size2_out(g, 0) == 1 "linearization: \"$(C.name(g))\" must take the arguments ($(join(names, ", "))) as column vectors and return one column vector"
+        @requires casadi.n_in(g) == n && casadi.n_out(g) == 1 && all(casadi.size2_in(g, i) == 1 for i in 0:n-1) && casadi.size2_out(g, 0) == 1 "linearization: \"$(casadi.name(g))\" must take the arguments ($(join(names, ", "))) as column vectors and return one column vector"
     end
-    @requires all(C.size1_in(g, i) == C.size1_in(first(fs), i) for g in fs for i in 0:n-1) "linearization: \"$(join(map(C.name, fs), "\", \""))\" must take arguments of the same sizes"
+    @requires all(casadi.size1_in(g, i) == casadi.size1_in(first(fs), i) for g in fs for i in 0:n-1) "linearization: \"$(join(map(casadi.name, fs), "\", \""))\" must take arguments of the same sizes"
     nothing
 end
 
 "New symbols of the `n` arguments of `fs[1]`: SX when every function of `fs` is an SX function, MX otherwise."
 function linearization_symbols(fs, n)
-    T = all(g -> C.is_a(g, "SXFunction"), fs) ? SX : MX
-    Tuple(T.sym(C.name_in(fs[1], i), C.size1_in(fs[1], i)) for i in 0:n-1)
+    T = all(g -> casadi.is_a(g, "SXFunction"), fs) ? SX : MX
+    Tuple(T.sym(casadi.name_in(fs[1], i), casadi.size1_in(fs[1], i)) for i in 0:n-1)
 end
 
 """
@@ -164,12 +162,12 @@ julia> A
  -4.0  0.0
 ```
 """
-function linearization(f::C.Function, h::C.Function; sparse::Bool = false, expression = Val{false}, options...)
+function linearization(f::casadi.Function, h::casadi.Function; sparse::Bool = false, expression = Val{false}, options...)
     @requires !haskey(options, :vector_columns) "linearization returns matrices, so it sets vector_columns = false itself"
     build_function(linearization_function(f, h; sparse); expression, vector_columns = false, options...)
 end
 
-function linearization(f::C.Function, g::C.Function, h::C.Function; sparse::Bool = false, expression = Val{false}, options...)
+function linearization(f::casadi.Function, g::casadi.Function, h::casadi.Function; sparse::Bool = false, expression = Val{false}, options...)
     @requires !haskey(options, :vector_columns) "linearization returns matrices, so it sets vector_columns = false itself"
     build_function(linearization_function(f, g, h; sparse); expression, vector_columns = false, options...)
 end

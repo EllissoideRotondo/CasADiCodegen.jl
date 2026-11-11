@@ -196,15 +196,15 @@ functions. The options are read from the serial form of `f` (see
 `serial_value`). The option `constraints` is not read: the Newton method of
 CasADi does not use it.
 """
-function newton_call(f::C.Function)
+function newton_call(f::casadi.Function)
     bytes = serial_bytes(f)
     field(name; kwargs...) = serial_value(bytes, name; kwargs...)
     emitted(g) = Emitted(build_function(g; nonzeros = true, expression = Val{false}), g, :nonzeros)
-    jacobian = C.get_function(f, "jac_g_x")
-    rows, columns = positions(C.sparsity_out(jacobian, 0))
-    nnz_in, nnz_out = [C.nnz_in(f, i) for i in 0:C.n_in(f)-1], [C.nnz_out(f, o) for o in 0:C.n_out(f)-1]
-    call = NewtonCall(C.name(f), emitted(jacobian), emitted(C.get_function(f, "g")), field("Rootfinder::n"), rows, columns,
+    jacobian = casadi.get_function(f, "jac_g_x")
+    rows, columns = positions(casadi.sparsity_out(jacobian, 0))
+    nnz_in, nnz_out = [casadi.nnz_in(f, i) for i in 0:casadi.n_in(f)-1], [casadi.nnz_out(f, o) for o in 0:casadi.n_out(f)-1]
+    call = NewtonCall(casadi.name(f), emitted(jacobian), emitted(casadi.get_function(f, "g")), field("Rootfinder::n"), rows, columns,
                       field("Rootfinder::iin") + 1, field("Rootfinder::iout") + 1, nnz_in, nnz_out, field("Newton::max_iter"), field("Newton::abstol"),
                       field("Newton::abstolStep"), field("Newton::line_search"), field("ProtoFunction::error_on_fail"; first = true))
-    JuliaCall(C.name(f), call, length(nnz_in), Tuple{Vararg{Int}}[(n,) for n in nnz_in], Tuple{Vararg{Int}}[(n,) for n in nnz_out], nnz_in, nnz_out)
+    JuliaCall(casadi.name(f), call, length(nnz_in), Tuple{Vararg{Int}}[(n,) for n in nnz_in], Tuple{Vararg{Int}}[(n,) for n in nnz_out], nnz_in, nnz_out)
 end

@@ -4,7 +4,7 @@ include("ode_helpers.jl")
 
 @testset "an integrator is a CasADi function" begin
     F = two_body_integrator(; specialize = SciMLBase.FullSpecialize)        # the default
-    @test (C.n_in(F), C.n_out(F)) == (2, 1)
+    @test (casadi.n_in(F), casadi.n_out(F)) == (2, 1)
     ours = casadi_eval(F, ODE_X0, ODE_MU)
     reference = casadi_eval(with_derivatives(cvodes_call(two_body_cvodes()), 0), ODE_X0, ODE_MU)
     @test closeto(ours, reference, 1e-9)
@@ -24,7 +24,7 @@ end
     F = two_body_integrator()
     with_derivatives(F, 2)
     record(integration) = only(call for (call, _) in values(CasADiCodegen.Codegen.JULIA_CALLS) if call.f === integration)
-    first_order = CasADiCodegen.Codegen.JULIA_CALLS[C.__hash__(F)][1].f.sensitivity[]
+    first_order = CasADiCodegen.Codegen.JULIA_CALLS[casadi.__hash__(F)][1].f.sensitivity[]
     second_order = first_order.sensitivity[]
     # 4 states and 1 parameter: 4 * (1 + 4 + 1) states, then 24 * (1 + 4 + 1).
     @test record(first_order).nnz_in == [4, 1] && record(first_order).nnz_out == [24]
@@ -54,7 +54,7 @@ end
 
     y = SX.sym("y", 2)
     D = integrator("D", Vern9(), Dict("x" => y, "ode" => vcat(-y[1], 2 * y[2])), 0.0, 1.0; TIGHT...)
-    @test C.n_in(D) == 1
+    @test casadi.n_in(D) == 1
     y0 = MX.sym("y0", 2)
     d = CasADiCodegen.Function("d", [y0], [D(y0), jacobian(D(y0), y0), jacobian(jacobian(D(y0), y0), y0)])
     expected = [[exp(-1) * 3, exp(2) * 0.5], [exp(-1), 0.0, 0.0, exp(2)], zeros(8)]
@@ -96,7 +96,7 @@ end
 
 @testset "the state comes from the integration of the sensitivities" begin
     F = two_body_integrator()
-    run = CasADiCodegen.Codegen.JULIA_CALLS[C.__hash__(F)][1].f
+    run = CasADiCodegen.Codegen.JULIA_CALLS[casadi.__hash__(F)][1].f
     @test run.sensitivity[] === nothing
     f = with_derivatives(F, 1)
     sibling = run.sensitivity[]
@@ -130,23 +130,23 @@ end
     redirect_stderr(devnull) do
         @test_throws ErrorException h(res, (far, ODE_MU))
     end
-    short_memo = CasADiCodegen.Codegen.memo(CasADiCodegen.Codegen.JULIA_CALLS[C.__hash__(short)][1].f.sensitivity[], Float64)
+    short_memo = CasADiCodegen.Codegen.memo(CasADiCodegen.Codegen.JULIA_CALLS[casadi.__hash__(short)][1].f.sensitivity[], Float64)
     @test short_memo.head > short_memo.count
 end
 
 @testset "arcs in a map: one integration for each arc" begin
     F = two_body_integrator()
-    run = CasADiCodegen.Codegen.JULIA_CALLS[C.__hash__(F)][1].f
+    run = CasADiCodegen.Codegen.JULIA_CALLS[casadi.__hash__(F)][1].f
     arcs = 3
     X, p = MX.sym("X", 4, arcs), MX.sym("p", 1)
-    ends = C.map(F, arcs)(X, C.repmat(p, 1, arcs))
+    ends = casadi.map(F, arcs)(X, casadi.repmat(p, 1, arcs))
     f = CasADiCodegen.Function("shoot", [X, p], [ends, jacobian(ends, X)])
     g = build_function(f; nonzeros = true, expression = Val{false})
     starts = vec([ODE_X0[i] * (1 + 0.01k) for i in 1:4, k in 1:arcs])
     # Integrators with equal content share the state of the solver, so the calls are counted.
     calls() = (state = get(task_local_storage(), (run.solver, Float64), nothing); state === nothing ? 0 : state.stats.nf)
     before = calls()
-    res = g([zeros(4 * arcs), zeros(C.nnz_out(f, 1))], (starts, ODE_MU))
+    res = g([zeros(4 * arcs), zeros(casadi.nnz_out(f, 1))], (starts, ODE_MU))
     @test calls() == before                                        # the state alone was not integrated
     @test closeto(res, casadi_eval(f, reshape(starts, 4, arcs), ODE_MU), 1e-10)
     sibling = run.sensitivity[]
@@ -155,8 +155,8 @@ end
 
 @testset "free initial and final times" begin
     F = integrator("G", Vern9(), two_body(); TIGHT...)
-    @test C.n_in(F) == 4 && C.n_out(F) == 1
-    @test [C.name_in(F, i) for i in 0:3] == ["x0", "p", "t0", "tf"]
+    @test casadi.n_in(F) == 4 && casadi.n_out(F) == 1
+    @test [casadi.name_in(F, i) for i in 0:3] == ["x0", "p", "t0", "tf"]
     x0, p, t0, tf = MX.sym("x0", 4), MX.sym("p", 1), MX.sym("t0"), MX.sym("tf")
     xf = F(x0, p, t0, tf)
     f = CasADiCodegen.Function("f", [x0, p, t0, tf], [xf, jacobian(xf, x0), jacobian(xf, p), jacobian(xf, t0), jacobian(xf, tf)])
@@ -182,7 +182,7 @@ end
     # Time in the right side and no parameter: x' = t x, so x(tf) = x0 exp((tf^2 - t0^2) / 2).
     y, t = SX.sym("y", 1), SX.sym("t")
     T = integrator("T2", Vern9(), Dict("x" => y, "t" => t, "ode" => t * y); TIGHT...)
-    @test C.n_in(T) == 3
+    @test casadi.n_in(T) == 3
     y0 = MX.sym("y0", 1)
     yf = T(y0, t0, tf)
     first_order = [jacobian(yf, v) for v in (y0, t0, tf)]
@@ -203,7 +203,7 @@ end
     # Arcs with their own times in a map.
     arcs = 3
     X, T0, T1 = MX.sym("X", 4, arcs), MX.sym("T0", 1, arcs), MX.sym("T1", 1, arcs)
-    ends = C.map(F, arcs)(X, C.repmat(p, 1, arcs), T0, T1)
+    ends = casadi.map(F, arcs)(X, casadi.repmat(p, 1, arcs), T0, T1)
     shoot = CasADiCodegen.Function("shoot", [X, p, T0, T1], [ends, jacobian(ends, T1)])
     starts = repeat(ODE_X0, arcs)
     res = ode_emitted(shoot, (starts, ODE_MU, [0.0, 0.0, 1.5], [3.0, 1.0, 4.5]))
@@ -214,8 +214,8 @@ end
 @testset "states on a grid of times" begin
     grid = [1.0, 3.0, 3.0, 2.0]
     F = integrator("K", Vern9(), two_body(), 0.0, grid; TIGHT...)
-    @test (C.n_in(F), C.n_out(F)) == (2, 1)
-    @test (C.size1(C.sparsity_out(F, 0)), C.size2(C.sparsity_out(F, 0))) == (4, 4)
+    @test (casadi.n_in(F), casadi.n_out(F)) == (2, 1)
+    @test (casadi.size1(casadi.sparsity_out(F, 0)), casadi.size2(casadi.sparsity_out(F, 0))) == (4, 4)
     x0, p = MX.sym("x0", 4), MX.sym("p", 1)
     X = F(x0, p)
     f = CasADiCodegen.Function("f", [x0, p], [X, jacobian(X[:, 2], x0), jacobian(X[:, 2], p)])
@@ -230,7 +230,7 @@ end
     # No parameter, and wrong use.
     y = SX.sym("y", 1)
     D = integrator("KD", Vern9(), Dict("x" => y, "ode" => -y), 0.0, [1.0, 2.0]; TIGHT...)
-    @test C.n_in(D) == 1
+    @test casadi.n_in(D) == 1
     @test closeto(casadi_eval(D, [3.0]), [[3 * exp(-1), 3 * exp(-2)]], 1e-11)
     # One integration gives the three distinct times after the initial time; the solver does not restart at each.
     record = only(call for (call, _) in values(CasADiCodegen.Codegen.JULIA_CALLS) if call.name == "K")
@@ -252,8 +252,8 @@ end
     decay(T) = exp(-k * T)
     area(T) = a * (1 - decay(T)) / k
     F = integrator("Q", Vern9(), dae, 0.0, 2.0; TIGHT...)
-    @test (C.n_in(F), C.n_out(F)) == (2, 2)
-    @test [C.name_out(F, j) for j in 0:1] == ["xf", "qf"]
+    @test (casadi.n_in(F), casadi.n_out(F)) == (2, 2)
+    @test [casadi.name_out(F, j) for j in 0:1] == ["xf", "qf"]
     x0, q = MX.sym("x0", 1), MX.sym("q", 1)
     both = F(x0, q)
     f = CasADiCodegen.Function("f", [x0, q], [both[1], both[2], jacobian(both[2], x0), jacobian(both[2], q)])
@@ -269,7 +269,7 @@ end
     xT = a * decay(1.5)
     @test closeto(ode_emitted(g, ([a], [k], [0.5], [2.0])), [[xT], [area(1.5), 3.75], [xT, 4.0], [-xT, -1.0]], 1e-9)
     K = integrator("QK", Vern9(), dae, 0.0, [1.0, 2.0]; TIGHT...)
-    @test C.n_out(K) == 2
+    @test casadi.n_out(K) == 2
     @test closeto(casadi_eval(K, [a], [k]), [[a * decay(1.0), a * decay(2.0)], [area(1.0), 1.0, area(2.0), 4.0]], 1e-10)
     @test_throws ArgumentError integrator("Q", Vern9(), merge(dae, Dict("quad" => SX.sym("m", 2, 2))), 0.0, 1.0)
 end
@@ -280,8 +280,8 @@ end
     x, g, t = SX.sym("x", 2), SX.sym("g", 1), SX.sym("t")
     fall = Dict("x" => x, "p" => g, "ode" => vcat(x[2], -g[1]), "zero" => x[1], "quad" => x[2])
     F = integrator("fall", Vern9(), fall; TIGHT...)
-    @test [C.name_in(F, j) for j in 0:3] == ["x0", "p", "t0", "tf"]
-    @test [C.name_out(F, j) for j in 0:2] == ["xf", "qf", "te"]
+    @test [casadi.name_in(F, j) for j in 0:3] == ["x0", "p", "t0", "tf"]
+    @test [casadi.name_out(F, j) for j in 0:2] == ["xf", "qf", "te"]
     landing(v) = v[4] + (v[2] + sqrt(v[2]^2 + 2 * v[3] * v[1])) / v[3]          # v = (h0, v0, g, t0)
     final(v) = [0 * v[1], v[2] - v[3] * (landing(v) - v[4])]
     x0, q, t0, tf = MX.sym("x0", 2), MX.sym("q", 1), MX.sym("t0"), MX.sym("tf")
@@ -308,7 +308,7 @@ end
     r3 = (y[1]^2 + y[2]^2)^1.5
     orbit = Dict("x" => y, "ode" => vcat(y[3], y[4], -y[1] / r3, -y[2] / r3), "zero" => y[1] * y[3] + y[2] * y[4])
     A = integrator("apsis", Vern9(), orbit; TIGHT...)
-    @test C.n_in(A) == 3 && [C.name_out(A, j) for j in 0:1] == ["xf", "te"]
+    @test casadi.n_in(A) == 3 && [casadi.name_out(A, j) for j in 0:1] == ["xf", "te"]
     half(v) = π * (1 / (2 / v[1] - v[4]^2))^1.5                                 # v = (x, y, vx, vy) at an apsis on the x axis
     s0 = MX.sym("s0", 4)
     reached = A(s0, MX(0.0), MX(100.0))
@@ -330,7 +330,7 @@ end
     both = CasADiCodegen.Function("both", [s0], [reached[1], jacobian(reached[1], s0), jacobian(reached[2], s0)])
     count(f, arguments) = begin
         g = build_function(f; nonzeros = true, expression = Val{false})
-        result = [zeros(C.nnz_out(f, j - 1)) for j in 1:C.n_out(f)]
+        result = [zeros(casadi.nnz_out(f, j - 1)) for j in 1:casadi.n_out(f)]
         g(result, arguments)                                       # the first call makes the solvers
         before = evaluations("plain") + evaluations("apsis")
         g(result, arguments)
@@ -387,7 +387,7 @@ end
     ball = Dict("x" => x, "p" => p, "ode" => vcat(x[2], -p[1]), "zero" => x[1], "quad" => SX(1.0),
                 "transition" => vcat(x[1], -p[2] * x[2]))
     F = integrator("ball", Vern9(), ball; events = 2, terminal = false, direction = -1, TIGHT...)
-    @test [C.name_out(F, j) for j in 0:2] == ["xf", "qf", "te"] && C.size1(C.sparsity_out(F, 2)) == 2
+    @test [casadi.name_out(F, j) for j in 0:2] == ["xf", "qf", "te"] && casadi.size1(casadi.sparsity_out(F, 2)) == 2
     # From the height h with no speed: the ground at t1 = sqrt(2 h / g) and at t1 (1 + 2 e), then up with the speed e^2 g t1.
     times(v) = (t1 = sqrt(2 * v[1] / v[2]); [t1, t1 * (1 + 2 * v[3])])       # v = (h, g, e)
     final(v, T) = (t1 = sqrt(2 * v[1] / v[2]); d = T - t1 * (1 + 2 * v[3]); up = v[3]^2 * v[2] * t1;
@@ -447,7 +447,7 @@ end
     walls = Dict("x" => x, "p" => e, "t" => τ, "ode" => vcat(x[2], SX(0.0)), "zero" => vcat(x[1], 1 - x[1], τ - 3),
                  "transition" => hcat(vcat(x[1], -e[2] * x[2]), vcat(x[1], -e[1] * x[2]), -x))
     F = integrator("walls", Vern9(), walls; events = 4, exact = false, terminal = false, direction = -1, TIGHT...)
-    @test [C.name_out(F, j) for j in 0:3] == ["xf", "te", "ie", "ne"]
+    @test [casadi.name_out(F, j) for j in 0:3] == ["xf", "te", "ie", "ne"]
     # From the position a in (0, 1) with the speed w > 0, up to the final time T; v = (a, w, e1, e2, T).
     function flight(v)
         position, speed, t, times, hits = v[1], v[2], zero(eltype(v)), eltype(v)[], Float64[]
@@ -488,7 +488,7 @@ end
     # An elastic ball from the height 2 under the gravity 1 lands at 2 and at 6.
     fall = Dict("x" => x, "p" => e, "ode" => vcat(x[2], -e[1]), "zero" => x[1], "transition" => vcat(x[1], -x[2]))
     G = integrator("fall_upto", Vern9(), fall; events = 2, exact = false, direction = -1, TIGHT...)
-    @test [C.name_out(G, j) for j in 0:2] == ["xf", "te", "ne"]
+    @test [casadi.name_out(G, j) for j in 0:2] == ["xf", "te", "ne"]
     @test closeto(casadi_eval(G, [2.0, 0.0], [1.0, 0.0], 0.0, 5.0), [[1.5, -1.0], [2.0, 5.0], [1.0]], 1e-9)
     # Regression: a search that the solver stopped short of the final time counted as no event. Here 30
     # event functions t - c cross in the direction that `direction = -1` ignores, and each one ends a
@@ -546,7 +546,7 @@ end
     times = [1.0, 3.0, 0.5, 2.0]
     function sampled(F)
         states, sums = F(x0, q)
-        cost = states[1, 2] * states[2, 2] + 3 * sums[2] + C.sumsqr(states) + C.sumsqr(sums)
+        cost = states[1, 2] * states[2, 2] + 3 * sums[2] + casadi.sumsqr(states) + casadi.sumsqr(sums)
         CasADiCodegen.Function("grid", [x0, q], [gradient(cost, x0), gradient(cost, q), jacobian(gradient(cost, q), vcat(x0, q))])
     end
     grid = sampled(integrator("AG", Vern9(), dae, 0.5, times; adjoint = true, TIGHT...))
@@ -576,7 +576,7 @@ end
     reference = integrator("LR", Vern9(), lotka, 0.0, times; TIGHT...)
     data = reshape(casadi_eval(reference, u0, θ)[1], 2, :) .+ [0.01 * sin(7.0 * i + 3.0 * k) for i in 1:2, k in eachindex(times)]
     function fit(F)
-        cost = C.sumsqr(MX(C.DM(data)) - F(MX(C.DM(u0)), q)) / length(data)
+        cost = casadi.sumsqr(MX(casadi.DM(data)) - F(MX(casadi.DM(u0)), q)) / length(data)
         CasADiCodegen.Function("fit", [q], [gradient(cost, q)])
     end
     exact = only(casadi_eval(fit(reference), θ))
@@ -602,7 +602,7 @@ end
     for (order, limit) in ((0, 1024), (1, 8192))
         f = with_derivatives(two_body_integrator(), order)
         g = build_function(f; nonzeros = true, expression = Val{false})
-        res = [zeros(C.nnz_out(f, i - 1)) for i in 1:C.n_out(f)]
+        res = [zeros(casadi.nnz_out(f, i - 1)) for i in 1:casadi.n_out(f)]
         arg = (ODE_X0, ODE_MU)
         g(res, arg); g(res, arg)
         @test (@allocated g(res, arg)) <= limit

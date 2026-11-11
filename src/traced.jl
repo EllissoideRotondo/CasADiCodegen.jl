@@ -37,7 +37,7 @@ for f in (:+, :-, :*, :/, :^, :atan, :hypot, :min, :max, :&, :|)
     @eval Base.$f(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}($f(a.value, b.value))
 end
 for (f, c) in ((:<, :lt), (:<=, :le), (:(==), :eq))
-    @eval Base.$f(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(C.$c(a.value, b.value))
+    @eval Base.$f(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.$c(a.value, b.value))
 end
 Base.:^(a::Traced{S}, n::Integer) where {S<:Symbolic} = Traced{S}(a.value^n)
 
@@ -54,35 +54,35 @@ for f in (:&, :|)
 end
 
 # `floor`, `ceil` and `trunc` of a real number call `round` with a rounding mode.
-Base.round(x::Traced{S}, ::RoundingMode{:Down}) where {S<:Symbolic} = Traced{S}(C.floor(x.value))
-Base.round(x::Traced{S}, ::RoundingMode{:Up}) where {S<:Symbolic} = Traced{S}(C.ceil(x.value))
+Base.round(x::Traced{S}, ::RoundingMode{:Down}) where {S<:Symbolic} = Traced{S}(casadi.floor(x.value))
+Base.round(x::Traced{S}, ::RoundingMode{:Up}) where {S<:Symbolic} = Traced{S}(casadi.ceil(x.value))
 Base.round(x::Traced{S}, ::RoundingMode{:ToZero}) where {S<:Symbolic} =
-    Traced{S}(C.if_else(C.lt(x.value, S(0.0)), C.ceil(x.value), C.floor(x.value)))
-Base.rem(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(C.fmod(a.value, b.value))
+    Traced{S}(casadi.if_else(casadi.lt(x.value, S(0.0)), casadi.ceil(x.value), casadi.floor(x.value)))
+Base.rem(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.fmod(a.value, b.value))
 # As in Julia, the result of `mod` has the sign of `b`.
 Base.mod(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = a - b * floor(a / b)
-Base.copysign(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(C.copysign(a.value, b.value))
-Base.cbrt(a::Traced{S}) where {S<:Symbolic} = Traced{S}(C.sign(a.value) * C.power(C.abs(a.value), S(1 / 3)))
+Base.copysign(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.copysign(a.value, b.value))
+Base.cbrt(a::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.sign(a.value) * casadi.power(casadi.abs(a.value), S(1 / 3)))
 
 # The factorizations of LinearAlgebra choose pivots by comparing values, which a trace
 # cannot do; CasADi forms the determinant, the inverse and the solution from the graph.
 function casadi_matrix(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic}
-    C.reshape(vertcat(S[x.value for x in vec(collect(A))]), size(A, 1), size(A, 2))
+    casadi.reshape(vertcat(S[x.value for x in vec(collect(A))]), size(A, 1), size(A, 2))
 end
 casadi_column(::Type{S}, b::AbstractVector) where {S<:Symbolic} = vertcat(S[convert(Traced{S}, x).value for x in collect(b)])
 square_traced(A) = (@requires size(A, 1) == size(A, 2) "the matrix must be square; got the size $(size(A))"; A)
 
-LinearAlgebra.det(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic} = Traced{S}(C.det(casadi_matrix(square_traced(A))))
+LinearAlgebra.det(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic} = Traced{S}(casadi.det(casadi_matrix(square_traced(A))))
 function traced_inverse(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic}
     n = size(square_traced(A), 1)
-    reshape(traced(C.reshape(C.inv(casadi_matrix(A)), n * n, 1)), n, n)
+    reshape(traced(casadi.reshape(casadi.inv(casadi_matrix(A)), n * n, 1)), n, n)
 end
 # LinearAlgebra has a method for strided matrices of any element type.
 LinearAlgebra.inv(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic} = traced_inverse(A)
 LinearAlgebra.inv(A::StridedMatrix{Traced{S}}) where {S<:Symbolic} = traced_inverse(A)
 function Base.:\(A::AbstractMatrix{Traced{S}}, b::AbstractVector{<:Real}) where {S<:Symbolic}
     @requires size(square_traced(A), 1) == length(b) "the matrix has $(size(A, 1)) rows and the vector $(length(b)) elements"
-    traced(C.solve(casadi_matrix(A), casadi_column(S, b)))
+    traced(casadi.solve(casadi_matrix(A), casadi_column(S, b)))
 end
 
 """
@@ -92,7 +92,7 @@ Return the traced selection: `a` where `condition` is not zero, else `b`. Both v
 in the graph, as with CasADi `if_else`, and the derivative is that of the selected value.
 """
 Base.ifelse(condition::Traced{S}, a::Real, b::Real) where {S<:Symbolic} =
-    Traced{S}(C.if_else(condition.value, convert(Traced{S}, a).value, convert(Traced{S}, b).value))
+    Traced{S}(casadi.if_else(condition.value, convert(Traced{S}, a).value, convert(Traced{S}, b).value))
 
 # The norms of LinearAlgebra and StaticArrays compare values to avoid overflow, which a trace cannot do.
 LinearAlgebra.norm(v::AbstractArray{<:Traced}) = sqrt(sum(abs2, v))

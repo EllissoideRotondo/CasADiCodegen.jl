@@ -11,6 +11,7 @@ makedocs(;
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://orbitology.github.io/CasADiCodegen.jl",
         edit_link = "main",
+        collapselevel = 1,
     ),
     # The front end exports names with docstrings of its own, which are not part of this manual.
     checkdocs = :none,

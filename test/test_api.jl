@@ -11,6 +11,8 @@ function build()
     x, y = model()
     CasadiFunction("f", [x], [y, jacobian(y, x)])
 end
+# The functions of CasADi without an export of their own are in the exported module `casadi`.
+sumsqr_function() = (x = SX.sym("x", 2); CasadiFunction("s", [x], [casadi.sumsqr(x)]))
 end
 
 "Evaluate a scalar expression in the symbols `args` at the numbers `values`."
@@ -25,6 +27,12 @@ end
     res = g([zeros(2), zeros(3)], ([0.3, 1.7],))
     @test res[1] == [sin(0.3) * 1.7, 0.3^2]
     @test res[2] == [cos(0.3) * 1.7, 2 * 0.3, sin(0.3)]
+end
+
+@testset "the module casadi holds the other functions of CasADi" begin
+    g = build_function(ApiUser.sumsqr_function(); expression = Val{false})[1]
+    @test g([3.0, 4.0])[1] == 25.0
+    @test !isdefined(CasADiCodegen, :C)
 end
 
 @testset "Base functions work on symbols" begin
@@ -82,7 +90,7 @@ end
     for T in (SX, MX)
         w, A = T.sym("w", 3), T.sym("A", 2, 2)
         n = CasADiCodegen.Function("n", [w, A], [LinearAlgebra.norm(w), LinearAlgebra.norm(A)])
-        values = C.nonzeros.(n(C.DM(a), C.DM([1.0 2.0; 3.0 4.0])))
+        values = casadi.nonzeros.(n(casadi.DM(a), casadi.DM([1.0 2.0; 3.0 4.0])))
         @test values[1][1] ≈ LinearAlgebra.norm(a) && values[2][1] ≈ sqrt(30)
     end
 end
@@ -90,7 +98,7 @@ end
 "The value of the expression `e`, a CasADi matrix or a Julia vector of symbols, at the numbers `values` of `symbols`, as a matrix."
 function numeric(e, symbols, values)
     f = CasADiCodegen.Function("t", collect(symbols), [e isa AbstractVector ? reduce(vcat, e) : e])
-    Matrix(f(map(C.DM, values)...))
+    Matrix(f(map(casadi.DM, values)...))
 end
 
 # The oracle is the same Julia code on numbers.
@@ -154,10 +162,10 @@ end
 
 @testset "a DM is a matrix of numbers to Julia code" begin
     Mv = [1.0 -2.0 0.5; 3.0 0.25 -1.0]
-    d = C.DM(Mv)
+    d = casadi.DM(Mv)
     @test [a for a in d] == Mv && sum(d) == sum(Mv) && sum(abs2, d) == sum(abs2, Mv)
     @test sum(d; dims = 1) == sum(Mv; dims = 1)
-    @test [C.DM([1.0, 2.0]); [7.0, 8.0]] isa C.DM && vec(Matrix([C.DM([1.0, 2.0]); [7.0, 8.0]])) == [1.0, 2.0, 7.0, 8.0]
+    @test [casadi.DM([1.0, 2.0]); [7.0, 8.0]] isa casadi.DM && vec(Matrix([casadi.DM([1.0, 2.0]); [7.0, 8.0]])) == [1.0, 2.0, 7.0, 8.0]
 end
 
 @testset "a function takes Julia arrays of numbers" begin
@@ -165,8 +173,8 @@ end
     x, M = SX.sym("x", 2), SX.sym("M", 2, 2)
     f = CasadiFunction("f", [x, M, SX.sym("s")], [M * x, x[1]], ["x", "M", "s"], ["y", "first"])
     y, first = f([1.0, 2.0], [1.0 2.0; 3.0 4.0], 0.5)
-    @test y isa C.DM && vec(Matrix(y)) == [5.0, 11.0] && only(first) == 1.0
-    @test vec(Matrix(f([1, 2], C.DM([1.0 2.0; 3.0 4.0]), 1)[1])) == [5.0, 11.0]
+    @test y isa casadi.DM && vec(Matrix(y)) == [5.0, 11.0] && only(first) == 1.0
+    @test vec(Matrix(f([1, 2], casadi.DM([1.0 2.0; 3.0 4.0]), 1)[1])) == [5.0, 11.0]
 end
 
 @testset "numbers as the value of substitute and the point of taylor, $T" for T in (SX, MX)
@@ -175,10 +183,10 @@ end
     e = sin(x) * y
     @test vec(numeric(substitute(e, x, 0.5), (y,), ([2.0, 3.0],))) ≈ sin(0.5) .* [2.0, 3.0]
     @test vec(numeric(substitute(e, y, [2, 3]), (x,), (0.5,))) ≈ sin(0.5) .* [2.0, 3.0]
-    @test vec(numeric(substitute(e, y, C.DM([2.0, 3.0])), (x,), (0.5,))) ≈ sin(0.5) .* [2.0, 3.0]
+    @test vec(numeric(substitute(e, y, casadi.DM([2.0, 3.0])), (x,), (0.5,))) ≈ sin(0.5) .* [2.0, 3.0]
     if T === SX                     # CasADi has Taylor series of SX only
-        @test only(numeric(C.taylor(exp(x), x, 0, 2), (x,), (0.1,))) ≈ 1 + 0.1 + 0.1^2 / 2
-        @test only(numeric(C.mtaylor(y[1] * y[2], y, [1, 2], 1), (y,), ([1.5, 2.5],))) ≈ 2 + 2 * 0.5 + 1 * 0.5
+        @test only(numeric(casadi.taylor(exp(x), x, 0, 2), (x,), (0.1,))) ≈ 1 + 0.1 + 0.1^2 / 2
+        @test only(numeric(casadi.mtaylor(y[1] * y[2], y, [1, 2], 1), (y,), ([1.5, 2.5],))) ≈ 2 + 2 * 0.5 + 1 * 0.5
     end
 end
 
@@ -189,17 +197,17 @@ end
     @test histogram isa Vector{Pair{Symbol,Int}}
     @test Dict(histogram)[:OP_INPUT] == 3 && Dict(histogram)[:OP_SQRT] == 1 && Dict(histogram)[:OP_OUTPUT] == 2
     @test issorted(last.(histogram); rev = true)
-    @test sum(last, histogram) == C.n_instructions(f)
+    @test sum(last, histogram) == casadi.n_instructions(f)
     # No NaN, then the square root of a negative number, then a NaN in an argument.
     @test CasADiCodegen.nan_trace(f, [2.0, 3.0], 1.0) === nothing
     found = CasADiCodegen.nan_trace(f, [2.0, 3.0], 5.0)
     @test found.operation === :OP_SQRT && found.operands == (-3.0,) && isnan(found.result)
-    @test C.instruction_id(f, found.instruction - 1) == C.OP_SQRT
+    @test casadi.instruction_id(f, found.instruction - 1) == casadi.OP_SQRT
     @test occursin("sqrt", found.text)
     given = CasADiCodegen.nan_trace(f, [NaN, 3.0], 1.0)
     @test given.operation === :OP_INPUT && given.text == "nonzero 1 of argument 1 (i0)"
     # A matrix function is expanded, and an argument with a sparse pattern is given whole or by its nonzeros.
-    A = MX.sym("A", C.Sparsity.diag(2))
+    A = MX.sym("A", casadi.Sparsity.diag(2))
     g = CasADiCodegen.Function("g", [A], [log(A[1, 1]) + A[2, 2]])
     @test CasADiCodegen.nan_trace(g, [-1.0 0.0; 0.0 2.0]).operation === :OP_LOG
     @test CasADiCodegen.nan_trace(g, [1.0, 2.0]) === nothing
@@ -223,57 +231,57 @@ end
 @testset "options of CasADi keep their numbers" begin
     x = MX.sym("x")
     # Integer: seven steps of the classic Runge-Kutta method on x' = -x, against its exact formula.
-    rk = C.integrator("rk", "rk", Dict("x" => x, "ode" => -x), 0.0, 1.0, Dict("number_of_finite_elements" => 7))
+    rk = casadi.integrator("rk", "rk", Dict("x" => x, "ode" => -x), 0.0, 1.0, Dict("number_of_finite_elements" => 7))
     h = 1 / 7
-    @test Float64(rk(Dict("x0" => C.DM(1.0)))["xf"]) ≈ (1 - h + h^2 / 2 - h^3 / 6 + h^4 / 24)^7 rtol = 1e-14
+    @test Float64(rk(Dict("x0" => casadi.DM(1.0)))["xf"]) ≈ (1 - h + h^2 / 2 - h^3 / 6 + h^4 / 24)^7 rtol = 1e-14
     # A whole Float64: the eigenvalue -1 is clipped to the margin 2.
     H = MX.sym("H")
-    clip = CasADiCodegen.Function("clip", [H], [C.convexify(H, Dict("strategy" => "eigen-clip", "margin" => 2.0))])
-    @test Float64(clip(C.DM(-1.0))) == 2.0
+    clip = CasADiCodegen.Function("clip", [H], [casadi.convexify(H, Dict("strategy" => "eigen-clip", "margin" => 2.0))])
+    @test Float64(clip(casadi.DM(-1.0))) == 2.0
     # A Dict in a Dict: the Newton method of collocation needs more than one iteration.
     stiff = Dict("rootfinder" => "newton", "rootfinder_options" => Dict("max_iter" => 50, "error_on_fail" => true))
-    cubic = C.integrator("cubic", "collocation", Dict("x" => x, "ode" => -x^3), 0.0, 1.0, stiff)
-    @test Float64(cubic(Dict("x0" => C.DM(2.0)))["xf"]) ≈ 2 / sqrt(1 + 8) rtol = 1e-4
+    cubic = casadi.integrator("cubic", "collocation", Dict("x" => x, "ode" => -x^3), 0.0, 1.0, stiff)
+    @test Float64(cubic(Dict("x0" => casadi.DM(2.0)))["xf"]) ≈ 2 / sqrt(1 + 8) rtol = 1e-4
     # Vectors of integers and of whole Float64: the constraint z <= 0 selects the root -2 of z^2 = 4.
     z = MX.sym("z", 2)
-    negative = C.rootfinder("negative", "kinsol", CasADiCodegen.Function("g", [z], [z .^ 2 .- 4]),
+    negative = casadi.rootfinder("negative", "kinsol", CasADiCodegen.Function("g", [z], [z .^ 2 .- 4]),
                             Dict("constraints" => [-1, -1], "u_scale" => [1.0, 2.0]))
-    @test C.nonzeros(negative(C.DM([-1.0, -1.0]))) ≈ [-2.0, -2.0] rtol = 1e-6
+    @test casadi.nonzeros(negative(casadi.DM([-1.0, -1.0]))) ≈ [-2.0, -2.0] rtol = 1e-6
 end
 
 # Regression: the front end called the const overload of `DaeBuilder::der`, which cannot
 # make the derivative of a variable, so `eq(der(x), ...)` declared no state.
 @testset "der of a DaeBuilder declares a differential state" begin
-    dae = C.DaeBuilder("decay")
-    x, a = C.add(dae, "x", "local", "continuous"), C.add(dae, "a", "parameter", "tunable")
-    C.eq(dae, C.der(dae, x), -a * x)
-    @test C.x(dae) == ["x"]
-    f = C.create(dae, "f", ["x", "p"], ["ode"])
-    @test Float64(f(C.DM(2.0), C.DM(3.0))) == -6.0
+    dae = casadi.DaeBuilder("decay")
+    x, a = casadi.add(dae, "x", "local", "continuous"), casadi.add(dae, "a", "parameter", "tunable")
+    casadi.eq(dae, casadi.der(dae, x), -a * x)
+    @test casadi.x(dae) == ["x"]
+    f = casadi.create(dae, "f", ["x", "p"], ["ode"])
+    @test Float64(f(casadi.DM(2.0), casadi.DM(3.0))) == -6.0
 end
 
 # Regression: with no LP64 BLAS behind libblastrampoline, as when Ipopt.jl is not loaded,
 # the Ipopt of CasADi printed "no BLAS/LAPACK library loaded for dcopy_()" and returned garbage.
 @testset "the Ipopt of CasADi solves with no other package loaded" begin
     x = SX.sym("x", 2)
-    solver = C.nlpsol("nearest", "ipopt", Dict("x" => x, "f" => (x[1] - 1)^2 + (x[2] - 2)^2, "g" => x[1] + x[2]),
+    solver = casadi.nlpsol("nearest", "ipopt", Dict("x" => x, "f" => (x[1] - 1)^2 + (x[2] - 2)^2, "g" => x[1] + x[2]),
                       Dict("ipopt.print_level" => 0, "print_time" => false))
-    @test C.nonzeros(solver(; x0 = [0.0, 0.0], lbg = 0.0, ubg = 1.0)["x"]) ≈ [0.0, 1.0] atol = 1e-7
+    @test casadi.nonzeros(solver(; x0 = [0.0, 0.0], lbg = 0.0, ubg = 1.0)["x"]) ≈ [0.0, 1.0] atol = 1e-7
 end
 
 @testset "block-triangular form of a sparsity pattern" begin
     # Rows are equations, columns unknowns: unknowns 3 and 1 form a loop, 4 needs 3, and 2 needs 4.
     rows, cols = [3, 3, 1, 1, 0, 0, 2, 2], [2, 0, 2, 0, 2, 3, 3, 1]
-    pattern = C.triplet(C.Sparsity, 4, 4, rows, cols)
+    pattern = casadi.triplet(casadi.Sparsity, 4, 4, rows, cols)
     form = CasADiCodegen.block_triangular_form(pattern)
-    @test form.blocks == first(C.btf(pattern)) == 3
+    @test form.blocks == first(casadi.btf(pattern)) == 3
     @test form.rowblock == form.colblock
     # The permuted matrix is block lower triangular, so the loop {1, 3} comes first, then 4, then 2.
     rowof, colof = invperm(form.rowperm), invperm(form.colperm)
     block(offsets, k) = searchsortedlast(offsets, k)
     @test [block(form.colblock, colof[j]) for j in 1:4] == [1, 3, 1, 2]
     @test all(block(form.rowblock, rowof[i+1]) >= block(form.colblock, colof[j+1]) for (i, j) in zip(rows, cols))
-    @test CasADiCodegen.block_triangular_form(C.Sparsity(0, 0)).blocks == 0
+    @test CasADiCodegen.block_triangular_form(casadi.Sparsity(0, 0)).blocks == 0
 end
 
 @testset "linearization of a state-space model" begin
@@ -293,7 +301,7 @@ end
     lin!(out, (x0, u0, p0))
     @test out[1] ≈ A && out[4] ≈ D
     _, sparse! = CasADiCodegen.linearization(f, h; sparse = true)
-    S = map(i -> SparseMatrixCSC(C.sparsity_out(CasADiCodegen.linearization_function(f, h; sparse = true), i)), (0, 1, 2, 3))
+    S = map(i -> SparseMatrixCSC(casadi.sparsity_out(CasADiCodegen.linearization_function(f, h; sparse = true), i)), (0, 1, 2, 3))
     sparse!(S, (x0, u0, p0))
     @test nnz(S[1]) == 2 && Matrix(S[1]) ≈ A && Matrix(S[4]) ≈ D
     g = CasadiFunction("g", [x, p], [x])
@@ -316,7 +324,7 @@ end
     @test all(map(≈, first(CasADiCodegen.linearization(model(MX)...))(point...), expected))
     _, sparse! = CasADiCodegen.linearization(model(SX)...; sparse = true)
     lin_casadi = CasADiCodegen.linearization_function(model(SX)...; sparse = true)
-    out = map(i -> SparseMatrixCSC(C.sparsity_out(lin_casadi, i)), (0, 1, 2, 3))
+    out = map(i -> SparseMatrixCSC(casadi.sparsity_out(lin_casadi, i)), (0, 1, 2, 3))
     sparse!(out, point)
     @test all(map((S, E) -> Matrix(S) ≈ E, out, expected))
     f, g, h = model(SX)
@@ -329,8 +337,8 @@ end
 # independent of the package, and compared with an exact or an independent solution.
 "The state and algebraic state at `tf` of the CasADi integrator IDAS on `dae` from `x0` (`z0` a guess)."
 function idas_final(dae, x0, z0, p, tf)
-    F = C.integrator("F", "idas", dae, 0.0, tf, Dict("abstol" => 1e-10, "reltol" => 1e-10))
-    result = F(Dict("x0" => C.DM(x0), "z0" => C.DM(z0), "p" => C.DM(p)))
+    F = casadi.integrator("F", "idas", dae, 0.0, tf, Dict("abstol" => 1e-10, "reltol" => 1e-10))
+    result = F(Dict("x0" => casadi.DM(x0), "z0" => casadi.DM(z0), "p" => casadi.DM(p)))
     (vec(Matrix(result["xf"])), vec(Matrix(result["zf"])))
 end
 
@@ -346,14 +354,14 @@ end
     x0 = [L * sin(θ0), -L * cos(θ0), 0.0, 0.0]
     xf, _ = idas_final(reduced.dae, x0, [0.0], [g, L], tf)
     θ, ω = SX.sym("θ"), SX.sym("ω")
-    angle = C.integrator("A", "cvodes", Dict("x" => vcat(θ, ω), "ode" => vcat(ω, -g / L * sin(θ))), 0.0, tf,
+    angle = casadi.integrator("A", "cvodes", Dict("x" => vcat(θ, ω), "ode" => vcat(ω, -g / L * sin(θ))), 0.0, tf,
                          Dict("abstol" => 1e-12, "reltol" => 1e-12))
-    θf = Float64(angle(Dict("x0" => C.DM([θ0, 0.0])))["xf"][1])
+    θf = Float64(angle(Dict("x0" => casadi.DM([θ0, 0.0])))["xf"][1])
     @test xf[1:2] ≈ [L * sin(θf), -L * cos(θf)] atol = 1e-6
     # The invariants: the length constraint and its time derivative.
     invariants = CasadiFunction("I", [reduced.dae["x"], reduced.dae["z"], p], [reduced.invariants])
     @test size(reduced.invariants) == (2, 1)
-    @test maximum(abs, Matrix(invariants(C.DM(xf), C.DM([0.0]), C.DM([g, L])))) < 1e-6
+    @test maximum(abs, Matrix(invariants(casadi.DM(xf), casadi.DM([0.0]), casadi.DM([g, L])))) < 1e-6
     # A Baumgarte pole draws a start off the circle back to it.
     stabilized = CasADiCodegen.reduce_index(pendulum; baumgarte_pole = -10.0)
     xs, _ = idas_final(stabilized.dae, [1.01 * x0[1]; x0[2:4]], [0.0], [g, L], tf)
@@ -375,7 +383,7 @@ end
     dae = Dict("x" => x, "z" => z, "ode" => -z, "alg" => z - x^2)
     reduced = CasADiCodegen.reduce_index(dae)
     @test reduced.index == 1 && reduced.differentiations == [0] && size(reduced.invariants, 1) == 0
-    @test all(C.is_equal(reduced.dae[k], dae[k]) for k in keys(dae)) && keys(reduced.dae) == keys(dae)
+    @test all(casadi.is_equal(reduced.dae[k], dae[k]) for k in keys(dae)) && keys(reduced.dae) == keys(dae)
     # z2 enters no equation, so no number of differentiations determines it.
     w = SX.sym("w", 2)
     singular = Dict("x" => x, "z" => w, "ode" => w[1], "alg" => vcat(w[1] - x, w[1] + x))

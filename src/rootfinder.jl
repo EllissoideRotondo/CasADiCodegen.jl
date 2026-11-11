@@ -21,14 +21,14 @@ The root does not depend on the guess. Its derivative by a parameter `p` is the
 solution of `(df/dz) X = -df/dp` at the root, which CasADi differentiates again
 for the higher orders.
 """
-function root_function(name::AbstractString, f::C.Function, make_solver)
+function root_function(name::AbstractString, f::casadi.Function, make_solver)
     @requires Base.isidentifier(name) "\"$name\" is not a valid function name"
-    @requires C.n_in(f) >= 1 && C.n_out(f) == 1 "rootfinder \"$name\": the function must have the unknown as its first argument and the residual as its only result"
-    patterns = [C.sparsity_in(f, i) for i in 0:C.n_in(f)-1]
-    n = C.size1(patterns[1])
-    @requires C.size2(patterns[1]) == 1 && n > 0 "rootfinder \"$name\": the unknown must be a column vector that is not empty"
-    @requires all(C.is_dense, patterns) "rootfinder \"$name\": the arguments must be dense"
-    @requires (C.size1(C.sparsity_out(f, 0)), C.size2(C.sparsity_out(f, 0))) == (n, 1) "rootfinder \"$name\": the residual must have the size of the unknown"
+    @requires casadi.n_in(f) >= 1 && casadi.n_out(f) == 1 "rootfinder \"$name\": the function must have the unknown as its first argument and the residual as its only result"
+    patterns = [casadi.sparsity_in(f, i) for i in 0:casadi.n_in(f)-1]
+    n = casadi.size1(patterns[1])
+    @requires casadi.size2(patterns[1]) == 1 && n > 0 "rootfinder \"$name\": the unknown must be a column vector that is not empty"
+    @requires all(casadi.is_dense, patterns) "rootfinder \"$name\": the arguments must be dense"
+    @requires (casadi.size1(casadi.sparsity_out(f, 0)), casadi.size2(casadi.sparsity_out(f, 0))) == (n, 1) "rootfinder \"$name\": the residual must have the size of the unknown"
 
     symbols(prefix) = [MX.sym("$prefix$i", sp) for (i, sp) in enumerate(patterns)]
     arguments = symbols("a")
@@ -47,14 +47,14 @@ Return the CasADi function of `root_function` for the Julia function
 `solve(z0, p1, p2, ...) -> root`, which finds the root of `f` by any means.
 This function does not check `f`; the caller does (see `root_function`).
 """
-function implicit_function(name::AbstractString, f::C.Function, solve)
-    patterns = [C.sparsity_in(f, i) for i in 0:C.n_in(f)-1]
-    n = C.size1(patterns[1])
+function implicit_function(name::AbstractString, f::casadi.Function, solve)
+    patterns = [casadi.sparsity_in(f, i) for i in 0:casadi.n_in(f)-1]
+    n = casadi.size1(patterns[1])
     symbols(prefix) = [MX.sym("$prefix$i", sp) for (i, sp) in enumerate(patterns)]
     # The blocks of the Jacobian as one function of the root and the parameters. With scalar
     # (SX) symbols the linear system is solved in symbols, so that CasADi can expand the code
     # around the rootfinder; a function that CasADi cannot expand keeps a linear solve.
-    scalar = expanded_algorithm(f) === nothing ? nothing : C.expand(f)
+    scalar = expanded_algorithm(f) === nothing ? nothing : casadi.expand(f)
     kind = scalar === nothing ? MX : SX
     at = [kind.sym("a$i", sp) for (i, sp) in enumerate(patterns)]
     g = Front.densify((scalar === nothing ? f : scalar)(at...))
@@ -68,7 +68,7 @@ function implicit_function(name::AbstractString, f::C.Function, solve)
         Front.Function(jacobian_name, [inputs..., root], blocks, Dict("always_inline" => true))
     end
 
-    shapes_in = [C.size2(sp) == 1 ? (C.size1(sp),) : (C.size1(sp), C.size2(sp)) for sp in patterns]
+    shapes_in = [casadi.size2(sp) == 1 ? (casadi.size1(sp),) : (casadi.size1(sp), casadi.size2(sp)) for sp in patterns]
     call = JuliaCall(String(name), solve, length(shapes_in), shapes_in, [(n,)], map(prod, shapes_in), [n])
     recorded_function(SymbolicCallback(call, solve, jacobian))
 end
