@@ -5,12 +5,14 @@ A real number that records the operations on it as a CasADi expression of type `
 is `SX` or `MX`, so that generic Julia code traces into a CasADi graph.
 
 Arithmetic, the elementary functions, `min`, `max`, `clamp`, `ifelse`, `floor`, `ceil`,
-`trunc`, `rem`, `mod`, `copysign`, `cbrt` and `norm` give `Traced` values; a plain number
-promotes to `Traced`. `det`, `inv` and `A \\ b` of a square matrix of `Traced` values are
+`trunc`, `rem`, `mod`, `copysign`, `cbrt`, `norm` and `SpecialFunctions.erf`, `erfc` and
+`erfinv` give `Traced` values; a plain number promotes to `Traced`, a `BigFloat` as a
+`Float64`. `det`, `inv` and `A \\ b` of a square matrix of `Traced` values are
 formed by CasADi, since the factorizations of LinearAlgebra choose pivots by comparing
 values. A comparison gives a traced condition, not a `Bool`, so an `if`, `&&` or `? :` on
-traced values throws a `TypeError` instead of following one branch. Use `ifelse`, `min`, `max` or `clamp` for a choice that
-depends on the input, or [`CasADiCodegen.callback`](@ref "Call a Julia function from the model") for a Julia function with branches.
+traced values throws a `TypeError` instead of following one branch. A condition times a
+value gives the value or zero, as a `Bool` does: `(x <= 0) * Inf` is zero for a positive
+`x`. Use `ifelse`, `min`, `max` or `clamp` for a choice that depends on the input, or [`CasADiCodegen.callback`](@ref "Call a Julia function from the model") for a Julia function with branches.
 
 See [`CasADiCodegen.traced`](@ref traced) and [`CasADiCodegen.untraced`](@ref untraced).
 """
@@ -25,6 +27,10 @@ Traced{S}(x::Real) where {S<:Symbolic} = Traced{S}(convert(S, Float64(x)))
 Base.convert(::Type{Traced{S}}, x::Real) where {S<:Symbolic} = Traced{S}(x)
 Base.convert(::Type{Traced{S}}, x::Traced{S}) where {S<:Symbolic} = x
 Base.promote_rule(::Type{Traced{S}}, ::Type{<:Real}) where {S<:Symbolic} = Traced{S}
+# BigFloat promotes every real type to BigFloat; without these rules the two directions
+# disagree and the promotion recurses. The constant becomes a Float64 in the graph.
+Base.promote_rule(::Type{Traced{S}}, ::Type{BigFloat}) where {S<:Symbolic} = Traced{S}
+Base.promote_rule(::Type{BigFloat}, ::Type{Traced{S}}) where {S<:Symbolic} = Traced{S}
 
 Base.zero(::Type{Traced{S}}) where {S<:Symbolic} = Traced{S}(0.0)
 Base.one(::Type{Traced{S}}) where {S<:Symbolic} = Traced{S}(1.0)
@@ -33,8 +39,26 @@ Base.one(x::Traced) = one(typeof(x))
 Base.float(x::Traced) = x
 Base.show(io::IO, x::Traced) = print(io, "Traced(", x.value, ")")
 
-for f in (:+, :-, :*, :/, :^, :atan, :hypot, :min, :max, :&, :|)
+for f in (:+, :-, :/, :^, :atan, :hypot, :min, :max, :&, :|)
     @eval Base.$f(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}($f(a.value, b.value))
+end
+
+const CONDITION_OPS = (casadi.OP_LT, casadi.OP_LE, casadi.OP_EQ, casadi.OP_NE, casadi.OP_NOT, casadi.OP_AND, casadi.OP_OR)
+"""
+    is_condition(x::Symbolic) -> Bool
+
+Whether the scalar expression `x` is a traced condition: a comparison, a logical
+operation, or the product of two conditions.
+"""
+is_condition(x::Symbolic) = casadi.op(x) in CONDITION_OPS ||
+    (casadi.op(x) == casadi.OP_IF_ELSE_ZERO && is_condition(casadi.dep(x, 1)))
+
+# A condition times a value is the value or zero, as `false * Inf == 0` in Julia, where a
+# `Bool` is a strong zero; CasADi would give `0 * Inf == NaN`.
+function Base.:*(a::Traced{S}, b::Traced{S}) where {S<:Symbolic}
+    is_condition(a.value) && return Traced{S}(casadi.if_else(a.value, b.value, S(0.0)))
+    is_condition(b.value) && return Traced{S}(casadi.if_else(b.value, a.value, S(0.0)))
+    Traced{S}(a.value * b.value)
 end
 for (f, c) in ((:<, :lt), (:<=, :le), (:(==), :eq))
     @eval Base.$f(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.$c(a.value, b.value))
@@ -63,6 +87,11 @@ Base.rem(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.fmod
 Base.mod(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = a - b * floor(a / b)
 Base.copysign(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.copysign(a.value, b.value))
 Base.cbrt(a::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.sign(a.value) * casadi.power(casadi.abs(a.value), S(1 / 3)))
+SpecialFunctions.erf(a::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.erf(a.value))
+SpecialFunctions.erfinv(a::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.erfinv(a.value))
+# CasADi has no complementary error function; `1 - erf` loses the relative accuracy of
+# `erfc` where it is small, for `x` above about 5.
+SpecialFunctions.erfc(a::Traced{S}) where {S<:Symbolic} = Traced{S}(1.0 - casadi.erf(a.value))
 
 # The factorizations of LinearAlgebra choose pivots by comparing values, which a trace
 # cannot do; CasADi forms the determinant, the inverse and the solution from the graph.

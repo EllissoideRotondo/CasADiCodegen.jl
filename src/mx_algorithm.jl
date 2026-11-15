@@ -191,6 +191,8 @@ function check_algorithm(alg::MXAlgorithm)
                 @requires (data.coefficients === nothing ? size_in[2] : length(data.coefficients)) == count "$at: wrong number of coefficients"
             elseif op === :OP_EINSTEIN
                 @requires size_out[1] == size_in[1] && all(t -> 1 <= t[1] <= size_out[1] && 1 <= t[2] <= size_in[2] && 1 <= t[3] <= size_in[3], data.terms) "$at: term out of range"
+            elseif op === :OP_KRON_CONTRACT && data.dims === nothing
+                @requires all(t -> 1 <= t[1] <= size_out[1] && 1 <= t[2] <= size_in[1] && 1 <= t[3] <= size_in[2], data.terms) "$at: term out of range"
             elseif op === :OP_KRON_CONTRACT
                 ma, na, mb, nb = data.dims
                 @requires size_in[1] == ma * na * mb * nb && size_in[2] == (data.inner ? mb * nb : ma * na) &&
@@ -537,7 +539,7 @@ Return the data that the emitter needs for an operation of `TABLE_OPERATIONS`.
 |---------------------|-------------------------------------------------------------------------|
 | `:OP_BSPLINE`       | see `bspline_data`                                                      |
 | `:OP_EINSTEIN`      | `terms`: nonzero `kz` of the result receives `x[kx] * y[ky]`, in the order of CasADi |
-| `:OP_KRON_CONTRACT` | `inner`, and `dims = (ma, na, mb, nb)`: `na` by `nb` blocks of `ma` by `mb` elements (see the helper `kron_inner!`) |
+| `:OP_KRON_CONTRACT` | `inner`, and `dims = (ma, na, mb, nb)`: `na` by `nb` blocks of `ma` by `mb` elements (see the helper `kron_inner!`); with a sparse operand, `dims = nothing` and `terms`: nonzero `ky` of the result receives `m[km] * x[kx]` (see `kron_contract_terms`) |
 | `:OP_HORZREPSUM`    | `n`: the number of blocks that are added                                |
 | `:OP_FIND`          | `rows`: the row of each nonzero, from zero, and `last`: the number of rows |
 | `:OP_CONVEXIFY`     | see `convexify_data`                                                    |
@@ -572,10 +574,45 @@ function table_data(op::Symbol, node, slots)
     else
         inner = c_call(source, "kron_contract_inner_dense")
         a = inner === nothing ? c_call(source, "kron_contract_outer_dense") : inner
+        a === nothing && return kron_contract_terms(node, evaluate, sizes)
         # The routines take the sizes of the result first: those of a block of blocks (inner), or of a block (outer).
         first_dims, second_dims = (parse(Int, a[2]), parse(Int, a[3])), (parse(Int, a[5]), parse(Int, a[6]))
         (; inner = inner !== nothing, dims = inner !== nothing ? (first_dims..., second_dims...) : (second_dims..., first_dims...))
     end
+end
+
+"""
+    kron_contract_terms(node, evaluate, sizes) -> NamedTuple
+
+The data of a contracted Kronecker product `kron_contract(M, X, inner)` with a sparse
+operand, for which CasADi has no dense routine. `M` has `mA` by `nA` blocks of `mB` by
+`nB` elements in the notation of CasADi; the inner product gives
+`Y[i, j] = sum(M[i*mB + r, j*nB + s] * X[r, s])` with `X` of the size of a block, and the
+outer product `Y[r, s] = sum(X[i, j] * M[i*mB + r, j*nB + s])` with one element of `X` per
+block. Each stored element of `M` makes one term `(ky, km, kx)` when the element of `X`
+that it multiplies is stored. The terms are checked on an evaluation.
+"""
+function kron_contract_terms(node, evaluate, sizes)
+    m, x, y = casadi.sparsity(casadi.dep(node, 0)), casadi.sparsity(casadi.dep(node, 1)), casadi.sparsity(node)
+    inner = endswith(string(node), "inner)")
+    @ensures inner || endswith(string(node), "outer)") "kron_contract must be inner or outer, got $(string(node))"
+    places(sp) = (r = casadi.get_triplet(sp); Dict((i, j) => k for (k, (i, j)) in enumerate(zip(r...))))
+    in_x, in_y = places(x), places(y)
+    mb, nb = inner ? (casadi.size1(x), casadi.size2(x)) : (casadi.size1(m) ÷ casadi.size1(x), casadi.size2(m) ÷ casadi.size2(x))
+    terms = NTuple{3,Int}[]
+    for (km, (row, col)) in enumerate(zip(casadi.get_triplet(m)...))
+        (i, r), (j, s) = divrem(row, mb), divrem(col, nb)
+        kx = get(in_x, inner ? (r, s) : (i, j), 0)
+        kx == 0 && continue
+        ky = get(in_y, inner ? (i, j) : (r, s), 0)
+        @ensures ky != 0 "kron_contract: a product falls outside the pattern of the result"
+        push!(terms, (ky, km, kx))
+    end
+    values = [[0.37 * k + 0.11 * d + 1.3 for k in 1:n] for (d, n) in enumerate(sizes)]
+    model = zeros(casadi.nnz(y))
+    foreach(((ky, km, kx),) -> model[ky] += values[1][km] * values[2][kx], terms)
+    @ensures isapprox(model, only(evaluate(values)); rtol = 1e-12) "the terms of kron_contract must reproduce CasADi"
+    (; inner, dims = nothing, terms)
 end
 
 """
@@ -811,16 +848,21 @@ function rebuilt_function(node, operands)
 end
 
 """
-    copy_maps(node, slots, adding) -> maps
+    copy_maps(node, slots, adding) -> (slots, maps)
 
-Return the maps of a copy operation (see `MXInstruction`), found by evaluation.
-The node is rebuilt on fresh symbols, and each operand nonzero carries its own
-number as its value, so every result nonzero tells where it came from.
+Return the operand slots and the maps of a copy operation (see `MXInstruction`),
+found by evaluation. The node is rebuilt on fresh symbols, and each operand
+nonzero carries its own number as its value, so every result nonzero tells
+where it came from.
 
 `slots` gives the work slot of each operand. When one value is an operand more
 than once, the maps name its first place only. With `adding`, a result nonzero
 can be the sum of two operands, so each operand has an evaluation of its own.
-The maps are checked on a second, random evaluation.
+It can also be the sum of several nonzeros of one operand, as in the adjoint of
+an indexing that names an element twice; a map holds one nonzero per place, so
+such an operand gets one more map for each further nonzero, and its slot is
+repeated at the end of the returned slots. The maps are checked on a second,
+random evaluation.
 """
 function copy_maps(node, slots, adding::Bool)
     distinct = [d for d in eachindex(slots) if findfirst(==(slots[d]), slots) == d]
@@ -828,11 +870,35 @@ function copy_maps(node, slots, adding::Bool)
     sizes = [casadi.nnz(casadi.sparsity(x)) for x in operands]
     evaluate = rebuild(node, operands)
     base = cumsum(sizes) .- sizes            # operand d carries the tags base[d]+1 : base[d]+sizes[d]
+    layer_of = Int[]                         # the operand of each map after the first one of each operand
     maps = if adding
         # One evaluation per operand, because a result nonzero can hold the sum of two tags.
-        columns = [evaluate([e == d ? collect(1.0:sizes[e]) : zeros(sizes[e]) for e in eachindex(operands)])
-                   for d in eachindex(operands)]
-        [[round.(Int, columns[d][o]) for d in eachindex(operands)] for o in eachindex(first(columns))]
+        only_d(d, v) = [e == d ? v : zeros(sizes[e]) for e in eachindex(operands)]
+        layers = map(eachindex(operands)) do d
+            counts = evaluate(only_d(d, ones(sizes[d])))
+            if all(c -> all(<=(1), c), counts)
+                [[round.(Int, t)] for t in evaluate(only_d(d, collect(1.0:sizes[d])))]
+            else
+                # Some result nonzero sums several nonzeros of `d`: find them one at a time.
+                sources = [[Int[] for _ in c] for c in counts]
+                for i in 1:sizes[d]
+                    hot = zeros(sizes[d]); hot[i] = 1.0
+                    for (o, r) in enumerate(evaluate(only_d(d, hot))), k in eachindex(r)
+                        append!(sources[o][k], fill(i, round(Int, r[k])))
+                    end
+                end
+                depth = maximum(length, Iterators.flatten(sources))
+                [[[length(s) >= l ? s[l] : 0 for s in sources[o]] for l in 1:depth] for o in eachindex(sources)]
+            end
+        end
+        depth = [maximum(length, layers[d]) for d in eachindex(operands)]
+        for d in eachindex(operands), _ in 2:depth[d]
+            push!(layer_of, d)
+        end
+        n_out = length(first(layers))
+        pad(o, d, l) = l <= length(layers[d][o]) ? layers[d][o][l] : zeros(Int, length(first(layers[d][o])))
+        [[[pad(o, d, 1) for d in eachindex(operands)]; [pad(o, d, l) for d in eachindex(operands) for l in 2:depth[d]]]
+         for o in 1:n_out]
     else
         tagged = evaluate([collect(base[d] .+ (1.0:sizes[d])) for d in eachindex(operands)])
         map(tagged) do tags
@@ -845,17 +911,21 @@ function copy_maps(node, slots, adding::Bool)
             found
         end
     end
+    owner = [collect(eachindex(operands)); layer_of]     # the operand that each map reads
     values = [rand(n) .+ 1 for n in sizes]
     expected = evaluate(values)
     for o in eachindex(expected), k in eachindex(expected[o])
-        actual = sum((m[k] == 0 ? 0.0 : values[d][m[k]] for (d, m) in enumerate(maps[o])); init = 0.0)
-        @ensures actual == expected[o][k] "operation $(op_names()[casadi.op(node)]) is not a copy of nonzeros"
+        actual = sum((m[k] == 0 ? 0.0 : values[owner[d]][m[k]] for (d, m) in enumerate(maps[o])); init = 0.0)
+        # A sum of several nonzeros of one operand may be added in another order than CasADi adds it.
+        @ensures (isempty(layer_of) ? actual == expected[o][k] : isapprox(actual, expected[o][k]; rtol = 8eps())) "operation $(op_names()[casadi.op(node)]) is not a copy of nonzeros"
     end
-    map(maps) do found
-        every = [zeros(Int, length(first(found))) for _ in slots]
-        every[distinct] = found
+    every_slots = [slots; slots[distinct[layer_of]]]
+    every_maps = map(maps) do found
+        every = [zeros(Int, length(first(found))) for _ in every_slots]
+        every[[distinct; length(slots) .+ (1:length(layer_of))]] = found
         every
     end
+    every_slots, every_maps
 end
 
 """
@@ -919,7 +989,7 @@ function read_mx(f::casadi.Function, expand::Bool, callees::Dict{Int,Any})
             callee isa MXAlgorithm && sum(callee.nnz_in; init = 0) > length(callee.instructions) && push!(inlined, k)
             MXInstruction(op, out, operands, callee)
         elseif op in COPY_OPERATIONS
-            MXInstruction(op, out, operands, copy_maps(node, operands, op in ADDING_OPERATIONS))
+            MXInstruction(op, out, copy_maps(node, operands, op in ADDING_OPERATIONS)...)
         elseif haskey(LINEAR_OPERATIONS, op)
             MXInstruction(op, out, operands, linear_data(op, node))
         elseif haskey(INDEX_OPERATIONS, op)
@@ -1276,7 +1346,8 @@ function fixed_step_function(f::casadi.Function)
     # The state of the loop is one vector, because `fold` passes on its first argument only.
     nx, nv, nq = casadi.size1(x), casadi.size1(v), casadi.size1(q)
     one = let state = MX.sym("state", nx + nv + nq), t = MX.sym("t"), h = MX.sym("h"), p = MX.sym("p", casadi.size1(p)), u = MX.sym("u", nu)
-        xs, vs, qs = state[1:nx]::MX, state[nx+1:nx+nv]::MX, state[nx+nv+1:nx+nv+nq]::MX
+        # `vec`: an empty range of a column gives a 1x0 matrix, which does not add to an empty column.
+        xs, vs, qs = (casadi.vec(state[r])::MX for r in (1:nx, nx+1:nx+nv, nx+nv+1:nx+nv+nq))
         point = MX[t, h, first_part(xs, nx1), first_part(vs, nv1), first_part(p, np1), first_part(u, nu1)]
         next = as_list(casadi.call(step, point, false, true))
         if forward !== nothing

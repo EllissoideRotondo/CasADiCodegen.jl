@@ -482,6 +482,9 @@ function table_statements(em::Emission, ins::MXInstruction, out, at, sizes, n, s
     elseif op === :OP_EINSTEIN
         copied = at[1] == out ? Any[] : loop(sizes[1], i -> :($(element(out, i)) = $(element(at[1], i))))
         Any[copied..., indexed(em, data.terms, (kz, kx, ky) -> :($(element(out, kz)) += $(element(at[2], kx)) * $(element(at[3], ky))))...]
+    elseif op === :OP_KRON_CONTRACT && data.dims === nothing
+        Any[loop(n, i -> :($(element(out, i)) = zero(eltype(w))))...,
+            indexed(em, data.terms, (ky, km, kx) -> :($(element(out, ky)) += $(element(at[1], km)) * $(element(at[2], kx))))...]
     elseif op === :OP_KRON_CONTRACT
         ma, na, mb, nb = data.dims
         data.inner ? Any[:($(helper(Symbol("kron_inner!")))(w, $(at[1]), $ma, $na, $(at[2]), $mb, $nb, $out))] :
