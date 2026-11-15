@@ -66,6 +66,10 @@ h, _ = build_function(CasadiFunction("thrust", [x], [thrust]); expression = Val{
 h([0.2]), h([0.8]), h([-1.0])
 ```
 
+A condition times a value is that value or zero, as a `Bool` is in Julia, so a piecewise
+function written as `(x < 0) * Inf + (x >= 0) * x^2` gives `x^2` for a positive `x`, not the
+`NaN` of `0 * Inf`.
+
 Code that cannot be written this way, or that accepts only `Float64`, enters the graph
 through a callback (see [Call a Julia function from the model](@ref)).
 

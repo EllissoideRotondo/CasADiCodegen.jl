@@ -88,6 +88,30 @@ end
     @test mx_close(f)
 end
 
+# The adjoint of an index that names an element twice adds two nonzeros of one operand
+# into one nonzero, which a single map per operand cannot hold.
+@testset "sums of one operand into one nonzero, as the adjoint of a repeated index" begin
+    x, seed = MX.sym("x", 3), MX.sym("seed", 5)
+    f = CasADiCodegen.Function("adj", [x, seed], [casadi.jtimes(x[[1, 2, 1, 3, 1]] .* x[1], x, seed, true)])
+    @test :OP_ADDNONZEROS in mx_ops(f)
+    @test mx_close(f)
+    expanded(nz) = build_function(f; nonzeros = true, expression = Val{false})([fill(NaN, n) for n in nnz_out(f)], Tuple(nz))
+    @test all(all(close_enough.(e, a)) for (e, a) in zip(mx_casadi(f, mx_inputs(f)), expanded(mx_inputs(f))))
+end
+
+# CasADi refuses to inline a function made with `never_inline`, so its graph is copied as it is.
+@testset "a function that CasADi never inlines" begin
+    x = MX.sym("x")
+    pair = CasADiCodegen.Function("pair", [x], [x + 1, x - 1], Dict("never_inline" => true))
+    for expand in (true, false)
+        g, _ = build_function(pair; expression = Val{false}, expand)
+        @test g([2.0]) == ([3.0], [1.0])
+    end
+    y = MX.sym("y")
+    outer = CasADiCodegen.Function("outer", [y], [pair(y)[1] * pair(y)[2]], Dict("never_inline" => true))
+    @test mx_same(outer)
+end
+
 @testset "sparse inputs and outputs" begin
     L = MX.sym("L", casadi.Sparsity.lower(3))
     D = MX.sym("D", casadi.Sparsity.diag(3))
