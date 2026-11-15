@@ -891,14 +891,13 @@ function copy_maps(node, slots, adding::Bool)
                 [[[length(s) >= l ? s[l] : 0 for s in sources[o]] for l in 1:depth] for o in eachindex(sources)]
             end
         end
-        depth = [maximum(length, layers[d]) for d in eachindex(operands)]
+        # `layers[d][o]` holds the maps of operand `d` for result `o`, as many for each result.
+        depth = [length(first(layers[d])) for d in eachindex(operands)]
         for d in eachindex(operands), _ in 2:depth[d]
             push!(layer_of, d)
         end
-        n_out = length(first(layers))
-        pad(o, d, l) = l <= length(layers[d][o]) ? layers[d][o][l] : zeros(Int, length(first(layers[d][o])))
-        [[[pad(o, d, 1) for d in eachindex(operands)]; [pad(o, d, l) for d in eachindex(operands) for l in 2:depth[d]]]
-         for o in 1:n_out]
+        [[[layers[d][o][1] for d in eachindex(operands)]; [layers[d][o][l] for d in eachindex(operands) for l in 2:depth[d]]]
+         for o in eachindex(first(layers))]
     else
         tagged = evaluate([collect(base[d] .+ (1.0:sizes[d])) for d in eachindex(operands)])
         map(tagged) do tags

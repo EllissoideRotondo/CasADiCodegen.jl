@@ -89,11 +89,15 @@ end
 end
 
 # The adjoint of an index that names an element twice adds two nonzeros of one operand
-# into one nonzero, which a single map per operand cannot hold.
+# into one nonzero, which a single map per operand cannot hold. The Julia front end of
+# CasADi gives such an index as a parameter (`OP_ADDNONZEROS_PARAM`), so the function
+# comes from Python, saved by CasADi 3.8.2:
+#     x = MX.sym("x", 3); s = MX.sym("seed", 5); y = x[[0, 1, 0, 2, 0]]
+#     Function("adj", [x, s], [y * x[0], jtimes(y * x[0], x, s, True)], ["x", "seed"], ["y", "adjoint"])
 @testset "sums of one operand into one nonzero, as the adjoint of a repeated index" begin
-    x, seed = MX.sym("x", 3), MX.sym("seed", 5)
-    f = CasADiCodegen.Function("adj", [x, seed], [casadi.jtimes(x[[1, 2, 1, 3, 1]] .* x[1], x, seed, true)])
-    @test :OP_ADDNONZEROS in mx_ops(f)
+    f = CasadiFunction.load(joinpath(@__DIR__, "data", "repeated_index_adjoint.casadi"))
+    adds = [ins for ins in MXAlgorithm(f).instructions if ins.op === :OP_ADDNONZEROS]
+    @test any(ins -> !allunique(ins.in), adds)               # an operand with more than one map
     @test mx_close(f)
     expanded(nz) = build_function(f; nonzeros = true, expression = Val{false})([fill(NaN, n) for n in nnz_out(f)], Tuple(nz))
     @test all(all(close_enough.(e, a)) for (e, a) in zip(mx_casadi(f, mx_inputs(f)), expanded(mx_inputs(f))))
