@@ -96,8 +96,8 @@ function staged_algorithm(f::casadi.Function)
     outputs = try
         as_list(casadi.call(f, inputs, true, false))
     catch err
-        err isa casadi.SwigError && occursin("never_inline", sprint(showerror, err)) && return nothing
-        rethrow()
+        (err isa casadi.SwigError && occursin("never_inline", sprint(showerror, err))) || rethrow()
+        return nothing
     end
     g = casadi.Function(casadi.name(f), inputs, outputs)
     # The nodes that carry the results of the calls: (call node, result) => node.
