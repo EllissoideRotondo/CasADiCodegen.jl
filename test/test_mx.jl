@@ -178,6 +178,44 @@ end
     @test build_function(s; nonzeros = true, expand = false) == build_function(s; nonzeros = true)            # nothing to expand
 end
 
+"A step with about 60 scalar instructions, for loops over steps."
+function loop_step()
+    x, u = SX.sym("x", 3), SX.sym("u")
+    ode(x) = vcat(x[2], x[3], -sin(x[1]) * x[2] + u)
+    k1 = ode(x); k2 = ode(x + 0.05 * k1)
+    CasADiCodegen.Function("step", [x, u], [x + 0.025 * (k1 + k2)])
+end
+
+@testset "expansion keeps the calls of a long loop and writes out a map" begin
+    step = loop_step()
+    x0, U = MX.sym("x0", 3), MX.sym("U", 1, 1000)
+    loop = CasADiCodegen.Function("loop", [x0, vec(U)], [casadi.fold(step, 1000)(x0, U)])
+    # Expanded, the 1000 steps would be 60000 scalar instructions: the loop keeps calling the step.
+    @test CasADiCodegen.Codegen.algorithm(loop; expand = true) isa MXAlgorithm
+    @test all(close_enough.(only(mx_casadi(loop, mx_inputs(loop))),
+                            build_function(loop; nonzeros = true, expression = Val{false})([zeros(3)], Tuple(mx_inputs(loop)))[1]))
+    # CasADi nests the loop as calls of 10 steps; the code keeps each level a call, not 1000 copies.
+    V = MX.sym("V", 1, 10)
+    short = CasADiCodegen.Function("short", [x0, vec(V)], [casadi.fold(step, 10)(x0, V)])
+    @test length(string(build_function(loop; nonzeros = true, expand = false))) <
+          4 * length(string(build_function(short; nonzeros = true, expand = false)))
+    # A map holds its copies side by side, each of them work to do anyway: it is expanded.
+    X = MX.sym("X", 3, 1000)
+    side = CasADiCodegen.Function("side", [vec(X), vec(U)], [vec(step.map(1000)(X, U))])
+    @test CasADiCodegen.Codegen.algorithm(side; expand = true) isa CasADiCodegen.Codegen.Algorithm
+end
+
+@testset "functions with the same content share their code" begin
+    a = SX.sym("a")
+    h = CasADiCodegen.Function("h", [a], [sin(a) * 2])
+    copy = casadi.deserialize(casadi.Function, casadi.serialize(h))         # another object
+    v = MX.sym("v")
+    f = CasADiCodegen.Function("same", [v], [h(v) - copy(2 * v)])
+    @test mx_same(f)
+    code = string(build_function(f; nonzeros = true, expand = false))
+    @test occursin("same_h!", code) && !occursin("same_h_2!", code)
+end
+
 @testset "every form of the matrix code gives the same numbers" begin
     f = call_case()
     x = mx_inputs(f)

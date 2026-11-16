@@ -366,10 +366,10 @@ function matrix_algorithm(f::casadi.Function, expand::Bool, solvers::Union{Nothi
     # The readers of the called functions find the solvers of the user in `SOLVERS`.
     Base.ScopedValues.with(SOLVERS => solvers) do
         expand || return MXAlgorithm(f; expand)
-        expanded = expanded_algorithm(f)
+        expanded = expanded_algorithm(f; bounded = true)
         expanded === nothing || return expanded
         staged = staged_algorithm(f)
-        staged === nothing ? MXAlgorithm(f; expand) : staged
+        staged === nothing ? read_mx(f, expand, Dict{Int,Any}()) : staged
     end
 end
 
@@ -381,14 +381,103 @@ function matrix_function(f::casadi.Function)
                [casadi.name_in(f, i) for i in 0:casadi.n_in(f)-1], [casadi.name_out(f, j) for j in 0:casadi.n_out(f)-1])
 end
 
-"The scalar algorithm of the expanded matrix function `f`, or `nothing` when there is none."
-function expanded_algorithm(f::casadi.Function)
-    try
-        Algorithm(casadi.expand(f))
+"""
+The number of scalar instructions from which code generation keeps the calls of a matrix
+function that grows by more than `EXPAND_GROWTH` when expanded (see `expanded_algorithm`).
+"""
+const EXPAND_LIMIT = 20_000
+"The growth of a matrix function by expansion beyond which `EXPAND_LIMIT` applies."
+const EXPAND_GROWTH = 10
+
+"""
+    expanded_algorithm(f; bounded = false) -> Algorithm or nothing
+
+The scalar algorithm of the expanded matrix function `f`, or `nothing` when there is none.
+With `bounded`, also `nothing` when the expansion has more than `EXPAND_LIMIT`
+instructions and more than `EXPAND_GROWTH` times those of `f` and the functions it calls,
+each counted once (`distinct_size`): the expansion then repeats a called function, such as
+the step of an integrator in its loop, and the matrix reader keeps the calls instead.
+"""
+function expanded_algorithm(f::casadi.Function; bounded::Bool = false)
+    # The calls alone, as CasADi would repeat them, can show the growth before any expansion.
+    if bounded
+        distinct, repeated = call_sizes(f)
+        repeated > EXPAND_LIMIT && repeated > EXPAND_GROWTH * distinct && return nothing
+    end
+    expanded = try
+        casadi.expand(f)
     catch err
         err isa Union{ArgumentError,casadi.SwigError} || rethrow()
+        return nothing
+    end
+    n = casadi.n_instructions(expanded)
+    bounded && n > EXPAND_LIMIT && n > EXPAND_GROWTH * distinct_size(f) && return nothing
+    try
+        Algorithm(expanded)
+    catch err
+        err isa ArgumentError || rethrow()
         nothing
     end
+end
+
+"""
+    distinct_size(f) -> Int
+
+The instructions of `f` and of the scalar and matrix functions that it calls, directly or
+not, each function counted once; a map counts as its copies of the body, and a function
+of another class as one.
+"""
+distinct_size(f::casadi.Function) = first(call_sizes(f))
+
+"""
+    call_sizes(f) -> (distinct, repeated)
+
+The instructions of `f` and of the scalar and matrix functions that it calls, directly or
+not: each function counted once (`distinct`), and as often as it is called (`repeated`).
+Both count a map as its copies of the body, which its expansion writes out side by side,
+and a function of another class as one instruction. Both count a matrix operation as
+one instruction, so `repeated` is at most the size of the expansion of `f`.
+"""
+function call_sizes(f::casadi.Function)
+    repeated = Dict{Int,Int}()               # by the identity of a function
+    function walk(g)
+        key = casadi.__hash__(g)
+        haskey(repeated, key) && return repeated[key]
+        body = map_body(g)
+        body === nothing || return repeated[key] = last(body) * walk(first(body))
+        own = casadi.is_a(g, "SXFunction") || casadi.is_a(g, "MXFunction") ? casadi.n_instructions(g) : 1
+        total = own
+        if casadi.is_a(g, "MXFunction")
+            for k in 0:own-1
+                casadi.instruction_id(g, k) == casadi.OP_CALL && (total += walk(casadi.which_function(casadi.instruction_MX(g, k))))
+            end
+        end
+        repeated[key] = total
+    end
+    total = walk(f)
+    distinct = 0
+    seen = Set{Int}()
+    function count(g)
+        key = casadi.__hash__(g)
+        key in seen && return
+        push!(seen, key)
+        body = map_body(g)
+        body === nothing || return distinct += last(body) * walk(first(body))
+        mx = casadi.is_a(g, "MXFunction")
+        distinct += mx || casadi.is_a(g, "SXFunction") ? casadi.n_instructions(g) : 1
+        mx && for k in 0:casadi.n_instructions(g)-1
+            casadi.instruction_id(g, k) == casadi.OP_CALL && count(casadi.which_function(casadi.instruction_MX(g, k)))
+        end
+    end
+    count(f)
+    distinct, total
+end
+
+"The body of a map and its number of copies, or `nothing` for other functions."
+function map_body(g::casadi.Function)
+    casadi.class_name(g) in ("Map", "ThreadMap", "OmpMap") || return nothing
+    info = casadi.info(g)
+    info["f"]::casadi.Function, Int(info["n"])
 end
 
 check_optlevel(optlevel) =
@@ -461,7 +550,9 @@ a matrix; `g` returns one of one column as a vector by default, and as a matrix 
   CasADi. With `false` it throws a `DomainError`, as in Base, and the code accepts any
   real number type.
 - `expand = true`: a matrix (MX) function is expanded to scalar operations where CasADi
-  can do that. With `false` the code keeps the matrix operations. See
+  can do that, except a function whose expansion would repeat a called function many
+  times, as an integrator or `fold` repeats its step, which keeps the matrix operations
+  and its calls. With `false` the code keeps the matrix operations. See
   [Matrix code and functions without instructions](@ref).
 - `cache = false`: with `true` or a directory, the compiled functions come from a package
   on disk that Julia compiles once, so a later session compiles nothing. It needs

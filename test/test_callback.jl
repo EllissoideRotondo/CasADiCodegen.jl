@@ -34,6 +34,17 @@ const DRAG_X = [0.7, -1.3, 0.4]
 
 emitted(f, res, arg; kwargs...) = build_function(f; nonzeros = true, expression = Val{false}, kwargs...)(res, arg)
 
+@testset "two Julia functions of one name stay apart" begin
+    # CasADi serializes a callback as its class and name, so the text alone does not tell them apart.
+    once = callback(CallbackModels.drag, "same", (3,), (2,))
+    thrice = callback(v -> 3 * CallbackModels.drag(v), "same", (3,), (2,))
+    v = MX.sym("v", 3)
+    f = CasADiCodegen.Function("pair", [v], [once(v) + thrice(v)])
+    for expand in (true, false)
+        @test emitted(f, [zeros(2)], (DRAG_X,); expand)[1] == 4 * CallbackModels.drag(DRAG_X)
+    end
+end
+
 @testset "a Julia function is a CasADi function" begin
     drag = callback(CallbackModels.drag, "drag", (3,), (2,))
     @test casadi.nonzeros(drag(casadi.DM(DRAG_X))) == CallbackModels.drag(DRAG_X)
