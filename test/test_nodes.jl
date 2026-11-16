@@ -313,7 +313,8 @@ end
     @testset "$kind" for kind in ("serial", "thread", "openmp")
         f = mapped(3, kind)
         @test isequal(evaluated(native(f), f, mx_inputs(f)), mx_casadi(f, mx_inputs(f)))
-        @test code_length(mapped(300, kind)) <= 1.1 * code_length(f)     # longer numbers only
+        # Longer numbers only; both sizes write their results to `res` without the frame (`DIRECT_RESULT`).
+        @test code_length(mapped(300, kind)) <= 1.1 * code_length(mapped(40, kind))
     end
     @testset "derivatives, which are maps of the derivatives of the body" begin
         f = mapped(3, "serial")
