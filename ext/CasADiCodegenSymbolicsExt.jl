@@ -14,13 +14,32 @@ const OPERATIONS = Set{Any}([
     min, max, hypot, ifelse, <, >, <=, >=, ==, !=, &, |, !,
 ])
 
-"The operations of Symbolics.jl that CasADi scalars spell differently, such as the `signbit` in the derivative of `abs`."
-const SUBSTITUTES = Dict{Any,Function}(signbit => a -> a < 0)
+"A CasADi scalar for a translated value, which can be a plain number."
+sx(a) = a isa SX ? a : SX(Float64(a))
 
-"The scalar symbols and expressions of `a`, in column-major order, and the size of `a`."
+"""
+The operations of Symbolics.jl that CasADi scalars spell differently, such as the
+`signbit` in the derivative of `abs`, `clamp`, and `rem` and `mod`, whose results have
+the sign of the first and of the second operand.
+"""
+const SUBSTITUTES = Dict{Any,Function}(signbit => a -> a < 0,
+                                       clamp => (x, lo, hi) -> ifelse(x > hi, hi, ifelse(x < lo, lo, x)),   # as Base, also for lo > hi
+                                       rem => (a, b) -> CasADiCodegen.casadi.fmod(sx(a), sx(b)),
+                                       mod => (a, b) -> a - b * floor(a / b))
+
+"""
+The scalar symbols and expressions of `a`, in column-major order, and the size of `a`.
+An unwrapped symbol or an array of them, as `unknowns` of ModelingToolkit.jl gives, is
+wrapped first.
+"""
 function elements(a)
+    a isa SU.BasicSymbolic && (a = Symbolics.wrap(a))
+    a isa AbstractArray && !(a isa Symbolics.Arr) && all(x -> x isa Union{Symbolics.Num,SU.BasicSymbolic}, a) &&
+        (a = isempty(a) ? similar(a, Symbolics.Num) : map(x -> Symbolics.Num(Symbolics.unwrap(x)), a))   # an empty one may be a Vector{Any}
+    (a isa Complex || a isa AbstractArray{<:Complex}) &&
+        throw(ArgumentError("casadi_function: $(typeof(a)) is complex; complex values have no CasADi counterpart"))
     a isa Union{Symbolics.Num,Symbolics.Arr,AbstractArray{<:Symbolics.Num}} ||
-        throw(ArgumentError("casadi_function: $(typeof(a)) is not a symbolic number or an array of them; complex values have no CasADi counterpart"))
+        throw(ArgumentError("casadi_function: $(typeof(a)) is not a symbolic number or an array of them"))
     a isa Symbolics.Num && return [a], ()
     scalars = Symbolics.scalarize(a)
     vec(scalars), size(scalars)
