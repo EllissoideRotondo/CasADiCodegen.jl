@@ -7,12 +7,16 @@ is `SX` or `MX`, so that generic Julia code traces into a CasADi graph.
 Arithmetic, the elementary functions, `min`, `max`, `clamp`, `ifelse`, `floor`, `ceil`,
 `trunc`, `rem`, `mod`, `copysign`, `cbrt`, `norm` and `SpecialFunctions.erf`, `erfc` and
 `erfinv` give `Traced` values; a plain number promotes to `Traced`, a `BigFloat` as a
-`Float64`. `det`, `inv` and `A \\ b` of a square matrix of `Traced` values are
-formed by CasADi, since the factorizations of LinearAlgebra choose pivots by comparing
-values. A comparison gives a traced condition, not a `Bool`, so an `if`, `&&` or `? :` on
-traced values throws a `TypeError` instead of following one branch. A condition times a
-value gives the value or zero, as a `Bool` does: `(x <= 0) * Inf` is zero for a positive
-`x`. Use `ifelse`, `min`, `max` or `clamp` for a choice that depends on the input, or [`CasADiCodegen.callback`](@ref "Call a Julia function from the model") for a Julia function with branches.
+`Float64`. CasADi has no complementary error function, so `erfc(x)` is `1 - erf(x)`: its
+relative error is near `1e-12` at `x = 3` and `1e-5` at `x = 5`, and from about `x = 6`,
+where `erfc` is near `2e-17`, the value is zero. Its derivative keeps full accuracy.
+`det`, `inv` and `A \\ b` of a square matrix of `Traced` values are formed by CasADi,
+since the factorizations of LinearAlgebra choose pivots by comparing values. A comparison
+gives a traced condition, not a `Bool`, so an `if`, `&&` or `? :` on traced values throws
+a `TypeError` instead of following one branch. A condition times a value gives the value
+or zero, as a `Bool` does: `(x <= 0) * Inf` is zero for a positive `x`.
+Use `ifelse`, `min`, `max` or `clamp` for a choice that depends on the input, or
+[`CasADiCodegen.callback`](@ref "Call a Julia function from the model") for a Julia function with branches.
 
 See [`CasADiCodegen.traced`](@ref traced) and [`CasADiCodegen.untraced`](@ref untraced).
 """
@@ -90,7 +94,7 @@ Base.cbrt(a::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.sign(a.value) * c
 SpecialFunctions.erf(a::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.erf(a.value))
 SpecialFunctions.erfinv(a::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.erfinv(a.value))
 # CasADi has no complementary error function; `1 - erf` loses the relative accuracy of
-# `erfc` where it is small, for `x` above about 5.
+# `erfc` where it is small (see the docstring of `Traced`).
 SpecialFunctions.erfc(a::Traced{S}) where {S<:Symbolic} = Traced{S}(1.0 - casadi.erf(a.value))
 
 # The factorizations of LinearAlgebra choose pivots by comparing values, which a trace
