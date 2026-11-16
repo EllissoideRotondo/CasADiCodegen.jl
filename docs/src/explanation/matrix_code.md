@@ -9,10 +9,17 @@ generated code never calls CasADi.
 
 The default `expand = true` expands an MX function to scalar operations, which gives
 the fastest code for a model of moderate size but repeats the body of a called
-function at each call (see [Cost of the two kinds of code](@ref)). With
-`expand = false` the code keeps the matrix operations and compiles each called
-function once, except a function with more argument nonzeros than operations, such
-as an `inline` interpolant with its table as an argument, which is inlined.
+function at each call (see [Cost of the two kinds of code](@ref)). When that
+repetition would give more than 20000 scalar operations and more than 10 times the
+operations of the functions involved, each counted once, the function keeps its
+matrix operations instead: an integrator or a `fold` of 1000 steps calls its step
+rather than writing it 1000 times. A `map` counts as its copies, since each is work
+that the code does anyway, so it is still expanded.
+
+With `expand = false` the code keeps the matrix operations and compiles each called
+function once, and functions with the same content share their code. A function that
+calls no other function and has more argument nonzeros than operations, such as an
+`inline` interpolant with its table as an argument, is inlined.
 
 ```julia
 g, g! = build_function(f; expression = Val{false}, expand = false)   # f is an MX function

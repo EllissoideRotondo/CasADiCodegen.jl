@@ -944,7 +944,7 @@ than instructions, such as an interpolant, is replaced by those instructions (se
 """
 MXAlgorithm(f::casadi.Function; expand::Bool = false) = read_mx(f, expand, Dict{Int,Any}())
 
-# `callees` maps the identity of a CasADi function to its copy (see `callee_copy`).
+# `callees` maps the content of a CasADi function to its copy (see `callee_copy`).
 function read_mx(f::casadi.Function, expand::Bool, callees::Dict{Int,Any})
     label = "function \"$(casadi.name(f))\""
     @requires casadi.is_a(f, "MXFunction") "$label is not a matrix (MX) function"
@@ -985,7 +985,8 @@ function read_mx(f::casadi.Function, expand::Bool, callees::Dict{Int,Any})
         elseif op === :OP_CONST
             MXInstruction(op, out, Int[], Vector{Float64}(casadi.nonzeros(casadi.evalf(node))))
         elseif op === :OP_CALL
-            callee isa MXAlgorithm && sum(callee.nnz_in; init = 0) > length(callee.instructions) && push!(inlined, k)
+            callee isa MXAlgorithm && sum(callee.nnz_in; init = 0) > length(callee.instructions) &&
+                !any(i -> i.op === :OP_CALL, callee.instructions) && push!(inlined, k)
             MXInstruction(op, out, operands, callee)
         elseif op in COPY_OPERATIONS
             MXInstruction(op, out, copy_maps(node, operands, op in ADDING_OPERATIONS)...)
@@ -1411,11 +1412,29 @@ end
 Return the copy of the CasADi function `g` from the table `callees`; the first
 request reads it (see `read_callee`).
 
-The table keeps `g` with its copy, because the key is the identity of `g`.
-CasADi gives the identity of a freed function to a later function, and some
-functions in the table are made during the read and have no other owner.
+The key is the content of `g` (`callee_key`), so that equal functions made apart, such
+as the loops written for the integrators of a derivative, are read and emitted once.
+The table keeps `g` with its copy: a key from the identity of `g` would be given by
+CasADi to a later function once `g` is freed, and some functions in the table are made
+during the read and have no other owner.
 """
-callee_copy(g::casadi.Function, expand::Bool, callees) = first(get!(() -> (read_callee(g, expand, callees), g), callees, casadi.__hash__(g)))
+callee_copy(g::casadi.Function, expand::Bool, callees) = first(get!(() -> (read_callee(g, expand, callees), g), callees, callee_key(g)))
+
+"""
+    callee_key(g) -> Int
+
+The hash of the serialized CasADi function `g`, or its identity when CasADi cannot
+serialize it, as a function that calls Julia.
+"""
+function callee_key(g::casadi.Function)
+    text = try
+        casadi.serialize(g)
+    catch err
+        err isa casadi.SwigError || rethrow()
+        return casadi.__hash__(g)
+    end
+    reinterpret(Int, hash(text))
+end
 
 """
     fitted(g, switch) -> CasADiCodegen.Function
@@ -1507,6 +1526,6 @@ function read_callee(callee::casadi.Function, expand::Bool, callees)
         return read_callee(written, expand, callees)
     end
     casadi.is_a(callee, "MXFunction") || refuse(callee)
-    expanded = expand ? expanded_algorithm(callee) : nothing
-    expanded === nothing ? read_mx(callee, expand, callees) : expanded
+    expanded = expand ? expanded_algorithm(callee; bounded = true) : nothing
+    expanded === nothing ? matrix_reading(callee, expand, callees) : expanded
 end
