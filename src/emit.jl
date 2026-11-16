@@ -369,7 +369,7 @@ function matrix_algorithm(f::casadi.Function, expand::Bool, solvers::Union{Nothi
         expanded = expanded_algorithm(f; bounded = true)
         expanded === nothing || return expanded
         staged = staged_algorithm(f)
-        staged === nothing ? matrix_reading(f, expand, Dict{Int,Any}()) : staged
+        staged === nothing ? read_mx(f, expand, Dict{Int,Any}()) : staged
     end
 end
 
@@ -478,23 +478,6 @@ function map_body(g::casadi.Function)
     casadi.class_name(g) in ("Map", "ThreadMap", "OmpMap") || return nothing
     info = casadi.info(g)
     info["f"]::casadi.Function, Int(info["n"])
-end
-
-"""
-    matrix_reading(f, expand, callees) -> MXAlgorithm or Algorithm
-
-The matrix algorithm of `f`; when the reader refuses `f` and its expansion was declined for
-its size, the expansion after all.
-"""
-function matrix_reading(f::casadi.Function, expand::Bool, callees)
-    try
-        read_mx(f, expand, callees)
-    catch err
-        (expand && err isa ArgumentError) || rethrow()
-        fallback = expanded_algorithm(f)
-        fallback === nothing && rethrow()
-        fallback
-    end
 end
 
 check_optlevel(optlevel) =

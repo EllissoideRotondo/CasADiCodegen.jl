@@ -1423,18 +1423,17 @@ callee_copy(g::casadi.Function, expand::Bool, callees) = first(get!(() -> (read_
 """
     callee_key(g) -> Int
 
-The hash of the serialized CasADi function `g`, or its identity when CasADi cannot
-serialize it, as a function that calls Julia.
+The hash of the serialized CasADi function `g`, or its identity when it is or calls a
+callback, such as a Julia function: CasADi serializes a callback as its class and name
+only, so two callbacks of one name would have the same text.
 """
 function callee_key(g::casadi.Function)
-    text = try
-        casadi.serialize(g)
-    catch err
-        err isa casadi.SwigError || rethrow()
-        return casadi.__hash__(g)
-    end
-    reinterpret(Int, hash(text))
+    text = casadi.serialize(g)
+    occursin(SERIAL_CALLBACK, text) ? casadi.__hash__(g) : reinterpret(Int, hash(text))
 end
+
+"The name of the class of a callback in the serial form of CasADi: each byte as two letters from `a`, low half first."
+const SERIAL_CALLBACK = join(string('a' + (b & 0x0f), 'a' + (b >> 4)) for b in codeunits("Callback"))
 
 """
     fitted(g, switch) -> CasADiCodegen.Function
@@ -1527,5 +1526,5 @@ function read_callee(callee::casadi.Function, expand::Bool, callees)
     end
     casadi.is_a(callee, "MXFunction") || refuse(callee)
     expanded = expand ? expanded_algorithm(callee; bounded = true) : nothing
-    expanded === nothing ? matrix_reading(callee, expand, callees) : expanded
+    expanded === nothing ? read_mx(callee, expand, callees) : expanded
 end
