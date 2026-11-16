@@ -121,7 +121,7 @@ function julia_mod(a::S, b::S) where {S<:Symbolic}
     m = casadi.copysign(casadi.if_else(moved, r + b, r), b)
     VERSION < v"1.13" && return m
     finite_a = casadi.eq(a - a, zero_)                                   # false for Inf and NaN
-    signed_select(casadi.logic_and(casadi.eq(casadi.fabs(b), S(Inf)), finite_a), a, m)
+    signed_select(casadi.logic_and(casadi.eq(casadi.abs(b), S(Inf)), finite_a), a, m)
 end
 
 """
