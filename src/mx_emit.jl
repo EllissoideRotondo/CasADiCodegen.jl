@@ -67,6 +67,8 @@ in_work(p::Place, offset::Int) = p.array === :w && p.offset == offset
 
 "The name under which the entry point reads its argument `k` in place."
 input_name(k::Int) = Symbol(:input_, k)
+"The name of the vector to which the entry point writes the nonzeros of its result `j` (see `framed_body`)."
+output_name(j::Int) = Symbol(:output_, j)
 
 "The element at the index expression `index` of the array of `p`."
 function element_at(p::Place, index)
@@ -235,15 +237,16 @@ needs_copy(ins::MXInstruction, s::Int, place::Place) = place.array !== :w &&
     (!reads_in_place(ins) || ins.op === :OP_LOW && s == ins.in[1] && place.array isa Float64)
 
 """
-    instruction_statements(em, alg, ins, reads, writes, scratch, offset_out) -> Vector{Any}
+    instruction_statements(em, alg, ins, reads, writes, scratch, outputs) -> Vector{Any}
 
 Return the statements of one instruction other than `:OP_INPUT` and `:OP_CONST`, which
 give an operand a `Place` and no statements (see `body!`). Operand slot `s` is
 read at `reads[s]`, which is in the work vector unless `reads_in_place(ins)`; result slot
 `s` is written after `w[writes[s]]`. Nonzero `k` of result `j` of the function is
-`w[offset_out[j] + k]`, and `scratch` is the offset of the work space of `scratch_size`.
+nonzero `k` of the `Place` `outputs[j]`, and `scratch` is the offset of the work space of
+`scratch_size`.
 """
-function instruction_statements(em::Emission, alg::MXAlgorithm, ins::MXInstruction, reads::Vector{Place}, writes::Vector{Int}, scratch, offset_out)
+function instruction_statements(em::Emission, alg::MXAlgorithm, ins::MXInstruction, reads::Vector{Place}, writes::Vector{Int}, scratch, outputs::Vector{Place})
     op = ins.op
     nnz(s) = alg.slot_nnz[s]
     @requires !(op in (:OP_INPUT, :OP_CONST)) "$op has no statements"
@@ -252,7 +255,7 @@ function instruction_statements(em::Emission, alg::MXAlgorithm, ins::MXInstructi
     at = in_place ? Int[] : Int[reads[s].offset for s in ins.in]
     if op === :OP_OUTPUT
         slot, (result, offset) = ins.in[1], ins.data
-        loop(nnz(slot), i -> :($(element(offset_out[result] + offset, i)) = $(element(reads[slot], i))))
+        loop(nnz(slot), i -> :($(element(shifted(outputs[result], offset), i)) = $(element(reads[slot], i))))
     elseif op === :OP_CALL && ins.data isa JuliaCall
         julia_call_statements(em, ins, at, writes)
     elseif op === :OP_CALL
@@ -590,7 +593,8 @@ end
 
 # A value is written to its work slot, but an input and a constant are read where they
 # are: input `i` in the frame, or as `input_name(i)` with `direct`, a constant of several
-# values in the constant table, and one of equal values as that number. `reads[s]` is the
+# values in the constant table, and one of equal values as that number. Result `j` is
+# written to its frame, or to `output_name(j)` with `direct` and `DIRECT_RESULT` nonzeros or more. `reads[s]` is the
 # place of the value of slot `s`, until an instruction writes the slot. An instruction
 # that reads in the work vector only (see `needs_copy`) first copies such an operand to
 # its slot.
@@ -601,6 +605,7 @@ function body!(em::Emission, alg::MXAlgorithm, name::Symbol; direct::Bool = fals
     offset_in, offset_out, start = frame!(em, alg, own + unused)
     home = start .+ cumsum(alg.slot_nnz) .- alg.slot_nnz
     inputs = direct ? [Place(input_name(i), 0, true) for i in eachindex(offset_in)] : Place.(offset_in)
+    outputs = [direct && n >= DIRECT_RESULT ? Place(output_name(j), 0, false) : Place(offset_out[j]) for (j, n) in enumerate(alg.nnz_out)]
     reads = Place.(home)
     parts = map(alg.instructions) do ins
         if ins.op === :OP_INPUT
@@ -620,7 +625,7 @@ function body!(em::Emission, alg::MXAlgorithm, name::Symbol; direct::Bool = fals
             append!(statements, loop(alg.slot_nnz[s], i -> :($(element(home[s], i)) = $(element(reads[s], i)))))
             reads[s] = Place(home[s])
         end
-        append!(statements, instruction_statements(em, alg, ins, reads, home, start + own, offset_out))
+        append!(statements, instruction_statements(em, alg, ins, reads, home, start + own, outputs))
         for s in ins.out
             s == 0 || (reads[s] = Place(home[s]))
         end
@@ -676,8 +681,9 @@ Emit the matrix algorithm `alg` with the entry point `name`. `em` holds the
 sub-functions and the tables. `frame` is
 `((offset_in, offset_out, total, direct), statements)`: the layout of the work vector
 and the statements that run the algorithm in it (see `framed_body`). With `direct`,
-the statements read argument `i` as `input_name(i)`, because they are not split into
-sub-functions, which get the work vector only.
+the statements read argument `i` as `input_name(i)` and write a result `j` of
+`DIRECT_RESULT` nonzeros or more to `output_name(j)`, because they are not split into sub-functions, which get the work
+vector only.
 """
 function emission(alg::MXAlgorithm, name::Symbol, chunk_size::ChunkSize, ref)
     em = Emission(name, chunk_size, ref)
