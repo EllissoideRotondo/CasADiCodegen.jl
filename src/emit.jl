@@ -260,19 +260,15 @@ function framed_body(alg, frame, ref, key; place_in = i -> :k, place_out = j -> 
     frame_view(j, n) = :(view(w, $(offset_out[j] + 1):$(offset_out[j] + n)))
     # With `direct`, the statements write result `j` to `output_name(j)`: the array of `res`
     # itself when it takes the nonzeros in order and has `DIRECT_RESULT` of them or more,
-    # else the frame, which the stores copy. A result that may share memory with an argument
-    # goes to the frame as well, because the statements read the arguments in place until
-    # the end; for a small result, the copy costs less than that check.
+    # else the frame, which the stores copy. A result never shares memory with an argument
+    # (`aliasing_check`).
     straight = [direct && results && n >= DIRECT_RESULT && place_out(j) === :k for (j, n) in enumerate(alg.nnz_out)]
-    check = any(straight) ? Any[:(shared = $(ref(:Helpers, :aliased))(res, arg))] : Any[]
     for (j, n) in enumerate(alg.nnz_out)
         (direct && n >= DIRECT_RESULT) || continue
-        push!(names, straight[j] ? :($(output_name(j)) = shared ? $(frame_view(j, n)) : view(res[$j], 1:$n)) :
-                                   :($(output_name(j)) = $(frame_view(j, n))))
+        push!(names, :($(output_name(j)) = $(straight[j] ? :(view(res[$j], 1:$n)) : frame_view(j, n))))
     end
-    stores = !results ? Any[] :
-        Any[straight[j] ? :(shared && $(store(j, n))) : store(j, n) for (j, n) in enumerate(alg.nnz_out) if n > 0]
-    Any[work_vector(ref, key, total), check..., inbounds_block(Any[loads..., names..., statements..., stores...])]
+    stores = !results ? Any[] : Any[store(j, n) for (j, n) in enumerate(alg.nnz_out) if n > 0 && !straight[j]]
+    Any[work_vector(ref, key, total), inbounds_block(Any[loads..., names..., statements..., stores...])]
 end
 
 """
@@ -303,7 +299,7 @@ all statements of scalar code without a frame, or the statements of
 """
 function entry_function(alg, signature, frame, ref, key)
     body = frame === nothing ? Any[inbounds_block(whole_statements(alg, ref))] : framed_body(alg, frame, ref, key)
-    Expr(:function, signature, Expr(:block, io_checks(alg, ref)..., body..., :(return res)))
+    Expr(:function, signature, Expr(:block, io_checks(alg, ref)..., aliasing_check(alg, ref)..., body..., :(return res)))
 end
 
 chunk_function(signature, statements) =
@@ -510,7 +506,9 @@ a matrix; `g` returns one of one column as a vector by default, and as a matrix 
   elements in all give `Vector` and `Matrix` for any argument, with a warning at the
   first call with a static array.
 - `g!` fills the arrays of the tuple `res` from the tuple `arg` and returns `res`. An array
-  of `res` can be a mutable static array. An array of `res` or `arg` needs the number of
+  of `res` can be a mutable static array. An array of `res` that shares memory with an
+  array of `arg` throws an `ArgumentError`, since the code reads the arguments while it
+  writes the results. An array of `res` or `arg` needs the number of
   elements of its output or input only, so a vector and a matrix of one column both serve
   for a column.
 - A structural zero of an output is set to zero. A structural zero of an input is not read.

@@ -15,6 +15,9 @@ since the factorizations of LinearAlgebra choose pivots by comparing values. A c
 gives a traced condition, not a `Bool`, so an `if`, `&&` or `? :` on traced values throws
 a `TypeError` instead of following one branch. A condition times a value gives the value
 or zero, as a `Bool` does: `(x <= 0) * Inf` is zero for a positive `x`.
+`mod` and `clamp` give the results of Julia, also for a large quotient, signed zeros and
+NaN. `min` and `max` are `fmin` and `fmax` of CasADi, which return the other operand for
+a NaN, where Julia returns NaN.
 Use `ifelse`, `min`, `max` or `clamp` for a choice that depends on the input, or
 [`CasADiCodegen.callback`](@ref "Call a Julia function from the model") for a Julia function with branches.
 
@@ -74,7 +77,8 @@ for f in (:-, :sqrt, :exp, :log, :log2, :log10, :log1p, :expm1, :abs, :abs2, :in
     @eval Base.$f(a::Traced{S}) where {S<:Symbolic} = Traced{S}($f(a.value))
 end
 Base.sincos(a::Traced) = (sin(a), cos(a))
-Base.clamp(x::Traced, lo::Real, hi::Real) = min(max(x, lo), hi)
+Base.clamp(x::Traced{S}, lo::Real, hi::Real) where {S<:Symbolic} =
+    Traced{S}(julia_clamp(x.value, convert(Traced{S}, lo).value, convert(Traced{S}, hi).value))
 # A condition joins a plain `Bool`, as `(x > 0) & true` in generic code.
 for f in (:&, :|)
     @eval Base.$f(a::Traced{S}, b::Real) where {S<:Symbolic} = $f(a, convert(Traced{S}, b))
@@ -85,10 +89,49 @@ end
 Base.round(x::Traced{S}, ::RoundingMode{:Down}) where {S<:Symbolic} = Traced{S}(casadi.floor(x.value))
 Base.round(x::Traced{S}, ::RoundingMode{:Up}) where {S<:Symbolic} = Traced{S}(casadi.ceil(x.value))
 Base.round(x::Traced{S}, ::RoundingMode{:ToZero}) where {S<:Symbolic} =
-    Traced{S}(casadi.if_else(casadi.lt(x.value, S(0.0)), casadi.ceil(x.value), casadi.floor(x.value)))
+    Traced{S}(signed_select(casadi.lt(x.value, S(0.0)), casadi.ceil(x.value), casadi.floor(x.value)))
 Base.rem(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.fmod(a.value, b.value))
-# As in Julia, the result of `mod` has the sign of `b`.
-Base.mod(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = a - b * floor(a / b)
+Base.mod(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(julia_mod(a.value, b.value))
+
+"""
+    signed_select(c, a, b) -> Symbolic
+
+`ifelse(c, a, b)` of Julia as a CasADi expression, also for a signed zero. The `if_else`
+of CasADi scalars adds `c * a` and `!c * b`, so a chosen `-0.0` becomes `0.0`; here the
+sign comes from a choice between `±1`, which the sum keeps.
+"""
+function signed_select(c::S, a::S, b::S) where {S<:Symbolic}
+    one_ = S(1.0)
+    casadi.copysign(casadi.if_else(c, a, b), casadi.if_else(c, casadi.copysign(one_, a), casadi.copysign(one_, b)))
+end
+
+"""
+    julia_mod(a, b) -> Symbolic
+
+`mod(a, b)` of Julia as a CasADi expression: the exact remainder of `fmod`, moved by `b`
+when it is not zero and its sign differs from that of `b`, with the sign of `b`, as `Base.mod` of the Julia
+that traces the model (Julia 1.13 returns a finite `a` for an infinite `b`; Julia 1.12
+does not). The form `a - b * floor(a / b)` loses the remainder when `a / b` is large: it
+gives 0 for `mod(1e16, 3.0)`, which is 1.
+"""
+function julia_mod(a::S, b::S) where {S<:Symbolic}
+    r = casadi.fmod(a, b)
+    zero_ = S(0.0)
+    moved = casadi.logic_and(casadi.ne(r, zero_), casadi.ne(casadi.gt(r, zero_), casadi.gt(b, zero_)))
+    m = casadi.copysign(casadi.if_else(moved, r + b, r), b)
+    VERSION < v"1.13" && return m
+    finite_a = casadi.eq(a - a, zero_)                                   # false for Inf and NaN
+    signed_select(casadi.logic_and(casadi.eq(casadi.fabs(b), S(Inf)), finite_a), a, m)
+end
+
+"""
+    julia_clamp(x, lo, hi) -> Symbolic
+
+`clamp(x, lo, hi)` of Julia as a CasADi expression: the upper bound is tested first,
+which decides for `lo > hi`, and a NaN passes.
+"""
+julia_clamp(x::S, lo::S, hi::S) where {S<:Symbolic} =
+    signed_select(casadi.gt(x, hi), hi, signed_select(casadi.lt(x, lo), lo, x))
 Base.copysign(a::Traced{S}, b::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.copysign(a.value, b.value))
 Base.cbrt(a::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.sign(a.value) * casadi.power(casadi.abs(a.value), S(1 / 3)))
 SpecialFunctions.erf(a::Traced{S}) where {S<:Symbolic} = Traced{S}(casadi.erf(a.value))

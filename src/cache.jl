@@ -75,7 +75,8 @@ by `dependency`.
 """
 function cached_module(generated::String, statements, imports, directory::String)
     wrapper = join(["import StaticArrays", "include(\"generated.jl\")", statements...], "\n")
-    name = "CasADiCodegenCache_" * string(hash(generated, hash(wrapper)), base = 16, pad = 16)
+    # SHA-256 and not `hash`, which Julia may change between versions or machines.
+    name = "CasADiCodegenCache_" * bytes2hex(SHA.sha256(string(generated, '\0', wrapper)))[1:16]
     id = Base.PkgId(Base.uuid5(CACHE_NAMESPACE, name), name)
     dependencies = sort!(unique!(Base.PkgId[dependency(dep) for dep in (:StaticArrays, imports...)]); by = dep -> dep.name)
     loaded = lock(CACHE_LOCK) do

@@ -62,7 +62,7 @@ at every input.
 | `attachAssert`, `monitor`, `printme`, `dump`, `lift` (a mark for the lifted Newton method) | The check, print or file of CasADi; the value passes through |
 | `map`, serial, on threads or with OpenMP | One loop over blocks of columns in one thread; a map of a Julia function is written out, one call per block |
 | External function from a compiled library | A direct call of the library, `Float64` only |
-| Rootfinder `newton` | The iteration of CasADi 3.8.2 with its line search and options |
+| Rootfinder `newton` | The iteration of CasADi 3.8.2 with its line search and options; as in CasADi, a residual of NaN only counts as converged |
 | Integrators `rk` and `collocation` with forward and adjoint sensitivities and second derivatives | A loop over the step function of CasADi; a collocation step is a Newton rootfinder |
 
 The interpolants below have 9 points and return the value with its derivative, the

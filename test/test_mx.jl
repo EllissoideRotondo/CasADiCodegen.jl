@@ -627,8 +627,7 @@ end
     @test Base.invokelatest((r, a) -> src.Banded.solve_nonzeros!(r, a), [zeros(n), zeros(n), zeros(2n)], Tuple(values)) == g(results, Tuple(values))
 end
 
-# A large result of matrix code goes straight to its array of `res`, unless that array
-# shares memory with an argument, which the code reads until the end.
+# A large result of matrix code goes straight to its array of `res`.
 @testset "results written to res without the frame" begin
     n = 2 * CasADiCodegen.Codegen.DIRECT_RESULT
     u, p = MX.sym("u", n), MX.sym("p")
@@ -637,20 +636,13 @@ end
     @test occursin("output_1", ex) && occursin("output_2", ex) && !occursin("output_3", ex)   # the small result keeps the frame
     @test mx_close(f)
     g = build_function(f; nonzeros = true, expression = Val{false}, expand = false)
-    # In place over the argument: the result of `p * u` is the argument `u`.
-    v, q = collect(range(0.5, 2.0; length = n)), [3.0]
-    out = (v, zeros(n), zeros(3))
-    g(out, (v, q))
-    @test v ≈ 3.0 .* collect(range(0.5, 2.0; length = n)) && out[2] == fill(3.0, n) && out[3] ≈ sin.(range(0.5, 2.0; length = n)[1:3])
     # Split code reads and writes the frame only, and so does the matrix form of the results.
     @test mx_close(f; chunk_size = 2)
     h, _ = build_function(f; expression = Val{false}, expand = false)
     w = collect(range(0.5, 2.0; length = n))
     value, jac, small = h(w, [3.0])
     @test value ≈ 3.0 .* w && jac == 3.0 * LinearAlgebra.I(n) && small ≈ sin.(w[1:3])
-    # A written module carries the helper of the check.
     text = sprint(io -> generate_julia(f, io; module_name = :Scale, name = :scale!, expand = false))
-    @test occursin("aliased(", text)
     src = Module()
     Base.include_string(src, text)
     @test Base.invokelatest((r, a) -> src.Scale.scale_nonzeros!(r, a), [zeros(n), zeros(n), zeros(3)], (w, [3.0]))[1] ≈ 3.0 .* w

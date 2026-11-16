@@ -73,6 +73,24 @@ end
     end
 end
 
+@testset "mod and clamp of traced values are those of Julia, bit for bit" begin
+    x, y, z = SX.sym("x"), SX.sym("y"), SX.sym("z")
+    a, b, c = only(traced(x)), only(traced(y)), only(traced(z))
+    m = CasadiFunction("m", [x, y], [untraced(mod(a, b))])
+    g, _ = build_function(m; expression = Val{false})
+    @testset "mod($u, $v)" for (u, v) in JULIA_MOD_CASES
+        @test isequal(only(g([u], [v])), mod(u, v))
+        @test isequal(only(only(casadi_eval(m, u, v))), mod(u, v))
+    end
+    k = CasadiFunction("k", [x, y, z], [untraced(clamp(a, b, c))])
+    h, _ = build_function(k; expression = Val{false})
+    @testset "clamp($u, $lo, $hi)" for (u, lo, hi) in JULIA_CLAMP_CASES
+        @test isequal(only(h([u], [lo], [hi])), clamp(u, lo, hi))
+    end
+    t = CasadiFunction("t", [x], [untraced(trunc(a))])
+    @test isequal(only(build_function(t; expression = Val{false})[1]([-0.5])), -0.0)
+end
+
 @testset "determinant, inverse and solve of a traced matrix" begin
     # LinearAlgebra factorizes with pivoting, which compares values; CasADi forms them from the graph.
     z = SX.sym("z", 4)

@@ -23,9 +23,9 @@ The operations of Symbolics.jl that CasADi scalars spell differently, such as th
 the sign of the first and of the second operand.
 """
 const SUBSTITUTES = Dict{Any,Function}(signbit => a -> a < 0,
-                                       clamp => (x, lo, hi) -> ifelse(x > hi, hi, ifelse(x < lo, lo, x)),   # as Base, also for lo > hi
+                                       clamp => (x, lo, hi) -> CasADiCodegen.Codegen.julia_clamp(sx(x), sx(lo), sx(hi)),
                                        rem => (a, b) -> CasADiCodegen.casadi.fmod(sx(a), sx(b)),
-                                       mod => (a, b) -> a - b * floor(a / b))
+                                       mod => (a, b) -> CasADiCodegen.Codegen.julia_mod(sx(a), sx(b)))
 
 """
 The scalar symbols and expressions of `a`, in column-major order, and the size of `a`.

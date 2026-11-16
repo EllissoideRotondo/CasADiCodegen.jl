@@ -28,12 +28,10 @@ is_stored(a) = false""",
     # and the call of a Julia function, which keeps its own bounds checks.
     :static => "static(::Type{S}, x::Tuple) where {S} = StaticArrays.SArray{S,promote_type(map(typeof, x)...),length(S.parameters),length(x)}(x)",
     :checked => "checked(f, arguments...) = f(arguments...)",
-    # Whether an array of the results may share memory with an argument. Matrix code then
-    # writes its results to the work vector and copies them at the end, since it reads the
-    # arguments in place until then.
-    :aliased => """
-aliased(r, a) = r isa AbstractArray && a isa AbstractArray && Base.mightalias(r, a)
-aliased(res::Tuple, arg::Tuple) = any(r -> any(a -> aliased(r, a), arg), res)""",
+    # A result that shares memory with an argument is refused: the code reads the arguments
+    # in place while it writes the results, and zeroes a sparse result before it reads them.
+    :aliased => "aliased(r, a) = r isa AbstractArray && a isa AbstractArray && Base.mightalias(r, a)",
+    :alias_error => "@noinline alias_error(name::String) = throw(ArgumentError(string(name, \": a result array shares memory with an argument; pass separate arrays\")))",
     # The error of a wrong number or size of arrays in a call of generated code. It is a
     # function of its own, so that the checks keep the code of a call small enough to inline.
     # Its arguments have concrete types, so that the count is not boxed and a call of
