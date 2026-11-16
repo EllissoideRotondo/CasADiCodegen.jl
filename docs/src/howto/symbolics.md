@@ -9,7 +9,8 @@ ModelingToolkit system.
 ## Translate expressions
 
 Each symbol or array of symbols makes one argument, and each expression or array of
-expressions one result. Pass an array of symbols whole, such as `p` for `p[1:2]`.
+expressions one result. Pass an array of symbols whole, such as `p` for `p[1:2]`. A vector
+of symbols that ModelingToolkit.jl gives, such as `unknowns(sys)`, can be passed as it is.
 
 ```@example symbolics
 using CasADiCodegen
@@ -30,10 +31,10 @@ or qualify the name.
 
 ## Supported operations
 
-The translation accepts `+ - * / ^`, `sin cos tan asin acos atan sinh cosh tanh asinh acosh
-atanh`, `exp exp2 expm1 log log2 log10 log1p sqrt inv`, `abs sign floor ceil min max hypot`,
-`ifelse`, the comparisons `< > <= >= == !=` and the logical operators `& | !`. It throws
-an `ArgumentError` for any other operation, a function registered with
-`@register_symbolic`, an unevaluated `Differential`, a complex constant, or a symbol
-that is not an argument. Apply `Symbolics.scalarize` before a `sum` or `prod` over a
-symbolic array.
+The translation accepts `+ - * / ^`, `sin cos tan asin acos atan sinh cosh tanh asinh
+acosh atanh`, `exp exp2 expm1 log log2 log10 log1p sqrt inv`, `abs sign floor ceil min max
+hypot`, `clamp rem mod`, `ifelse`, the comparisons `< > <= >= == !=` and the logical
+operators `& | !`. It throws an `ArgumentError` for any other operation, a function
+registered with `@register_symbolic`, an unevaluated `Differential`, a complex constant,
+or a symbol that is not an argument. Apply `Symbolics.scalarize` before a `sum` or `prod`
+over a symbolic array.

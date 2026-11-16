@@ -335,6 +335,7 @@ end
 # Property: random matrix graphs over exact operations, with calls to a scalar
 # and to a matrix function, equal CasADi bit for bit for any chunk size.
 # ---------------------------------------------------------------------------
+include("interpreter.jl")
 const GRAPH_H = let a = SX.sym("a", 3)
     CasADiCodegen.Function("h", [a], [vcat(a[2] * a[3], a[1] - a[2], a[3]), a[1] * a[1]])
 end
@@ -383,6 +384,8 @@ end
             chunk_size = Data.SampledFrom([1, 4, 1000]))
         f = graph_function(steps)
         x = [u .+ 0.0, v .+ 0.0]
+        # An fmin or fmax of two zeros of opposite signs has no single result (see `zero_tie`).
+        zero_tie(Algorithm(casadi.expand(f)), x) && return true
         isequal(mx_casadi(f, x), mx_emitted(f, x; chunk_size))
     end
 end

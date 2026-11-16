@@ -458,6 +458,19 @@ end
         f = CasADiCodegen.Function("f", [x, p], [reached[1], reached[2], casadi.jacobian(reached[2], p)])
         @test all_agree(evaluated(native(f), f, values[1:2]), mx_casadi(f, values[1:2]); rtol = 1e-10)
     end
+    # The loop is checked against CasADi at a few points; a rootfinder of CasADi that fails
+    # there must not stop the build. One Newton step from the first guess solves the
+    # collocation equations of x' = -x^3 only at x0 = 0.
+    @testset "a rootfinder of CasADi that fails where the loop is checked" begin
+        z = MX.sym("z")
+        once = Dict("number_of_finite_elements" => 2, "rootfinder" => "newton",
+                    "rootfinder_options" => Dict("max_iter" => 1, "error_on_fail" => true))
+        rule = casadi.integrator("rule", "collocation", Dict("x" => z, "ode" => -z^3), 0.0, 1.0, once)
+        z0 = MX.sym("z0")
+        f = CasADiCodegen.Function("f", [z0], [rule(z0, MX(0, 1), MX(0, 1), MX(0, 1), MX(), MX(), MX())[1]])
+        @test_throws casadi.SwigError mx_casadi(f, [[0.37]])
+        @test evaluated(native(f), f, [[0.0]]) == mx_casadi(f, [[0.0]])
+    end
     # Most models have no quadrature; the state of the loop of steps then ends with an empty part.
     @testset "no quadrature, $plugin" for plugin in ("rk", "collocation")
         rule = casadi.integrator("rule", plugin, Dict("x" => x, "p" => p, "ode" => vcat(x[2], -p * casadi.sin(x[1]))), 0.0, [0.5, 1.0],
