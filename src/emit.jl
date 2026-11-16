@@ -222,6 +222,9 @@ end
 whole_statements(alg::Algorithm, ref; kwargs...) =
     chunk_statements(alg, eachindex(alg.instructions), Int[], Int[], ref; kwargs...)
 
+"The number of nonzeros from which matrix code writes a result to `res` without the frame (see `framed_body`)."
+const DIRECT_RESULT = 64
+
 """
     framed_body(alg, frame, ref, key; place_in, place_out, results = true) -> Vector{Any}
 
@@ -230,8 +233,11 @@ Return the statements that run code which works in the work vector. `frame` is
 statements over `w`. The result binds `w`, copies the nonzeros of each array of `arg` into
 it, runs the statements and, with `results`, copies the nonzeros of each result to `res`.
 A layout `(offset_in, offset_out, total, true)` of matrix code (see `emission`) has
-statements that read argument `i` as the vector `input_name(i)` of its nonzeros; that
-name is bound to `arg[i]` itself where nonzero `k` is element `k`, without a copy.
+statements that read argument `i` as the vector `input_name(i)` of its nonzeros and write
+a result `j` of `DIRECT_RESULT` nonzeros or more to `output_name(j)`. The first is bound to
+`arg[i]` itself where nonzero `k` is element `k`, without a copy, and the second to
+`res[j]` itself under the same condition when the result shares no memory with an
+argument; otherwise to its frame, which the stores copy.
 
 `place_in(i)` is the expression for the position in `arg[i]` of nonzero `k`, and
 `place_out(j)` is that in `res[j]`. Both are `k` by default.
@@ -250,9 +256,23 @@ function framed_body(alg, frame, ref, key; place_in = i -> :k, place_out = j -> 
             direct && push!(names, :($(input_name(i)) = view(w, $(offset_in[i] + 1):$(offset_in[i] + n))))
         end
     end
+    store(j, n) = loop(n, :(res[$j][$(place_out(j))] = w[$(offset_out[j]) + k]))
+    frame_view(j, n) = :(view(w, $(offset_out[j] + 1):$(offset_out[j] + n)))
+    # With `direct`, the statements write result `j` to `output_name(j)`: the array of `res`
+    # itself when it takes the nonzeros in order and has `DIRECT_RESULT` of them or more,
+    # else the frame, which the stores copy. A result that may share memory with an argument
+    # goes to the frame as well, because the statements read the arguments in place until
+    # the end; for a small result, the copy costs less than that check.
+    straight = [direct && results && n >= DIRECT_RESULT && place_out(j) === :k for (j, n) in enumerate(alg.nnz_out)]
+    check = any(straight) ? Any[:(shared = $(ref(:Helpers, :aliased))(res, arg))] : Any[]
+    for (j, n) in enumerate(alg.nnz_out)
+        (direct && n >= DIRECT_RESULT) || continue
+        push!(names, straight[j] ? :($(output_name(j)) = shared ? $(frame_view(j, n)) : view(res[$j], 1:$n)) :
+                                   :($(output_name(j)) = $(frame_view(j, n))))
+    end
     stores = !results ? Any[] :
-        Any[loop(n, :(res[$j][$(place_out(j))] = w[$(offset_out[j]) + k])) for (j, n) in enumerate(alg.nnz_out) if n > 0]
-    Any[work_vector(ref, key, total), inbounds_block(Any[loads..., names..., statements..., stores...])]
+        Any[straight[j] ? :(shared && $(store(j, n))) : store(j, n) for (j, n) in enumerate(alg.nnz_out) if n > 0]
+    Any[work_vector(ref, key, total), check..., inbounds_block(Any[loads..., names..., statements..., stores...])]
 end
 
 """
