@@ -166,7 +166,9 @@ with no CasADi in between.
 - `options...`: options of CasADi for the function, for example `enable_fd = true`.
 
 `generate_julia` needs `f` and the Jacobian functions to be named functions of a module.
-See [Call a Julia function from the model](@ref).
+The package keeps each callback for the rest of the session, since a CasADi graph can call
+it after its last Julia reference is gone; one costs about 2 kB. See
+[Call a Julia function from the model](@ref).
 
 # Examples
 ```jldoctest
