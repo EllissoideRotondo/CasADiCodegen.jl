@@ -44,27 +44,22 @@ satisfies `invariants` and `alg`. `index` is the differentiation index: 0 with n
 algebraic equation, otherwise 1 plus the largest number of differentiations.
 
 A model of index 1 is returned unchanged, with `differentiations` all 0 and no
-invariant. Write a fully implicit equation `0 = F(x', x, z)` in this form with new
-algebraic states `w` for `x'`, `ode = w` and `alg = F(w, x, z)`.
+invariant.
 
 # Keywords
 - `baumgarte_pole = 0.0`: the pole `γ ≤ 0` of Baumgarte's stabilization. An equation `g`
-  differentiated `k` times becomes the sum over `j` in `0:k` of `binomial(k, j) (-γ)^j`
-  times the derivative of `g` of order `k - j`, whose characteristic polynomial
-  `(s - γ)^k` has the root `γ`, so that its invariants decay as `exp(γ t)` instead of
-  drifting. 0 gives the derivative of order `k` alone, as
-  `dae_reduce_index` of CasADi does by default. A positive `γ` throws `ArgumentError`.
+  differentiated `k` times becomes the combination of its derivatives whose characteristic
+  polynomial is `(s - γ)^k`, so that its invariants decay as `exp(γ t)` instead of
+  drifting; 0 gives the derivative of order `k` alone.
 
-Throws `ArgumentError` when the equations are structurally singular, that is, when no
-number of differentiations determines the states; the message names the equations
-`ode[i]` and `alg[i]` that are involved, with `i` from 1. The algorithm uses the
-sparsity patterns only, and terms of a derivative can cancel. When the reduced equations
-then do not determine `z`, the function throws `ArgumentError` too; it never returns
-such a model.
+Throws an `ArgumentError` for a positive `baumgarte_pole`, when the equations are
+structurally singular (no number of differentiations determines the states; the message
+names the equations `ode[i]` and `alg[i]` involved, from 1), and when terms of a
+derivative cancel so that the reduced equations do not determine `z`.
 
-The algorithm does not select dummy derivatives (Mattsson and Söderlind): the reduced
-model keeps every state and enforces only the highest derivative of each equation, so
-the invariants drift unless they are stabilized. See [Model physical systems with differential-algebraic
+The algorithm selects no dummy derivatives: the reduced model keeps every state and
+enforces only the highest derivative of each equation, so the invariants drift unless
+they are stabilized. See [Model physical systems with differential-algebraic
 equations](@ref).
 
 # Examples
