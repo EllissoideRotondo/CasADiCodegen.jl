@@ -60,7 +60,7 @@ The [manual](https://orbitology.github.io/CasADiCodegen.jl/dev/) starts with
 [Getting started](https://orbitology.github.io/CasADiCodegen.jl/dev/getting_started/).
 A model must have a fixed number of inputs and outputs of fixed sizes, as every CasADi
 function has; [Scope and differences from CasADi](https://orbitology.github.io/CasADiCodegen.jl/dev/explanation/scope/)
-lists what is supported. The package is tested on Linux only.
+lists what is supported. The package is tested on Linux, macOS and Windows.
 
 ## Acknowledgements
 

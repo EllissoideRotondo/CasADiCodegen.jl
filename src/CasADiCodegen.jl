@@ -112,6 +112,18 @@ public Models, Traced, traced, untraced, traced_function, traced_problem, Solver
     smooth_step, smooth_sign, smooth_abs, smooth_max, smooth_min, smoothed, differentiable,
     instruction_histogram, nan_trace, initialization_problem, natural_continuation
 
+"The version of CasADi whose serial form, C code and node data the readers of this package parse."
+const CASADI_VERSION = "3.8.2"
+
+# The readers parse formats that CasADi does not keep stable between versions, so another
+# version is announced when the package loads; most readers also compare their code with
+# CasADi at build time.
+function __init__()
+    found = casadi.CasadiMeta.version()
+    found == CASADI_VERSION || @warn "CasADiCodegen.jl reads the internals of CasADi $CASADI_VERSION, and CasADi $found is loaded; generated code may be wrong or refused. Pin CasADiNative.jl to a version with CasADi $CASADI_VERSION."
+    nothing
+end
+
 include("precompile.jl")
 
 end # module CasADiCodegen

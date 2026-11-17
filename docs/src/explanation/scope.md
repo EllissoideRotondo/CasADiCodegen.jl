@@ -30,7 +30,7 @@ its results differ from those of CasADi.
 | Julia array code on symbols | Sums, iteration, concatenation, broadcasting and arithmetic with arrays of symbols and numbers (see [The CasADi front end](@ref)). Concatenating `SX` with `MX` throws `ArgumentError` |
 | Forms of a generated function | Out of place and in place on `Array`, `SArray`, `MArray` in matrix shape; in place on `SparseMatrixCSC`; in place on vectors of nonzeros with `nonzeros = true` |
 | Number types | `Float64`, `Float32`, ForwardDiff dual numbers; any real type with `nanmath = false` of `build_function` and `generate_julia` |
-| Platforms | Tested on Linux; macOS and Windows, where CasADiNative.jl loads, untested |
+| Platforms | Tested on Linux (x86), macOS (ARM) and Windows (x86) |
 
 The scalar operations are:
 
@@ -63,6 +63,16 @@ package is refused at build time with a message that names the function and the 
   with row exchanges, or by sparse LU for a Jacobian of 16 rows or more with at most a
   quarter of its elements stored, where CasADi uses QR; the roots agree to rounding
   error.
+- The elementary functions are those of Julia, where CasADi calls the C library of the
+  platform. On Linux and macOS they agree to the last bits; the C library of Windows rounds
+  `sin`, `cos`, `tan` and `pow` less closely, and differs from Julia at large arguments
+  (`sin(1e300)`) and in the leading digits of tiny results (`sin(π)`). On ARM, the C
+  compiler of CasADi fuses some products and sums into one rounding, so a routine read
+  from its C code, such as `kron_contract`, can differ in the last bit.
+- CasADi converts a number to an integer, for the index of `conditional` and the place of
+  an interpolant on an equidistant grid, with a cast of C, whose result for NaN or a value
+  out of range depends on the processor; the generated code follows the processor that
+  runs it.
 - An operation outside its domain gives `NaN` through NaNMath.jl, as in CasADi;
   `nanmath = false` selects the Base functions, which throw. `erfinv` is
   `SpecialFunctions.erfinv`, whereas that of CasADi has a relative error up to 1e-4.
