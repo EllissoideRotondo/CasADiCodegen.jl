@@ -55,6 +55,20 @@ end
     end
 end
 
+@testset "mod and clamp are those of Julia, bit for bit" begin
+    @variables z
+    m = casadi_function("m", [x, y], [mod(x, y)])
+    g, _ = build_function(m; expression = Val{false})
+    @testset "mod($u, $v)" for (u, v) in JULIA_MOD_CASES
+        @test isequal(only(g(u, v)), mod(u, v))
+    end
+    k = casadi_function("k", [x, y, z], [clamp(x, y, z)])
+    h, _ = build_function(k; expression = Val{false})
+    @testset "clamp($u, $lo, $hi)" for (u, lo, hi) in JULIA_CLAMP_CASES
+        @test isequal(only(h(u, lo, hi)), clamp(u, lo, hi))
+    end
+end
+
 # ModelingToolkit.jl gives the symbols of a system unwrapped, as `unknowns(sys)` does.
 @testset "unwrapped symbols are arguments" begin
     raw = Symbolics.unwrap.([x, y])

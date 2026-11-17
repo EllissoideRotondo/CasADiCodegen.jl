@@ -70,3 +70,15 @@ mx_casadi(f, nz) = casadi_nonzeros(
 mx_inputs(f) = [[0.37 * k - 1.3 + 0.11 * i for k in 1:n] for (i, n) in enumerate(nnz_in(f))]
 
 dense_values(m) = casadi.nonzeros(casadi.densify(m))
+
+# Operands of `mod` and `clamp` that the translations from Julia (Traced and Symbolics.jl)
+# must follow bit for bit: a large quotient with a small remainder, every sign, signed
+# zeros, infinities, NaN, and bounds of `clamp` in reverse order (`lo > hi`).
+const JULIA_MOD_CASES = [(1e16, 3.0), (1e20, 7.0), (-1e16, 3.0), (1e16, -3.0), (5.5, 2.0), (-5.5, 2.0),
+                         (5.5, -2.0), (-5.5, -2.0), (0.0, 3.0), (-0.0, 3.0), (0.0, -3.0), (6.0, -3.0),
+                         (1.0, 0.0), (-1.0, Inf), (1.0, -Inf), (1.0, Inf), (-0.0, Inf), (Inf, 3.0), (NaN, 3.0),
+                         (1.0, NaN), (-1e-20, 3.0)]
+const JULIA_CLAMP_CASES = [(-5.0, 10.0, 6.0), (8.0, 10.0, 6.0), (20.0, 10.0, 6.0), (0.5, 0.0, 1.0),
+                           (-2.0, 0.0, 1.0), (3.0, 0.0, 1.0), (6.0, 6.0, 6.0), (NaN, 0.0, 1.0),
+                           (Inf, 0.0, 1.0), (-Inf, 0.0, 1.0), (0.5, -Inf, Inf), (-0.0, -1.0, 1.0),
+                           (2.0, -1.0, -0.0), (-2.0, -0.0, 1.0)]

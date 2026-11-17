@@ -426,3 +426,22 @@ module_optlevel(m::Module) = ccall(:jl_get_module_optlevel, Cint, (Any,), m)
     @test_throws ArgumentError build_function(f; expression = Val{false}, optlevel = 4)
     @test_throws ArgumentError build_function(f; optlevel = 1)
 end
+
+# The code reads the arguments in place while it writes the results, and zeroes a sparse
+# result first, so a result array that shares memory with an argument is refused.
+@testset "a result that shares memory with an argument is refused" begin
+    x = SX.sym("x", 2)
+    swap = CasadiFunction("swap", [x], [vcat(x[2], x[1])])
+    _, g! = build_function(swap; expression = Val{false})
+    a = [2.0, 3.0]
+    @test_throws ArgumentError g!((a,), (a,))
+    @test a == [2.0, 3.0]
+    @test_throws ArgumentError g!([view(a, 1:2)], (a,))
+    @test g!((zeros(2),), (a,))[1] == [3.0, 2.0]
+    X = MX.sym("X", 40)
+    scale = CasADiCodegen.Function("scale", [X], [2 * X])
+    h = build_function(scale; nonzeros = true, expression = Val{false}, expand = false)
+    v = ones(40)
+    @test_throws ArgumentError h((v,), (v,))
+    @test h((zeros(40),), (v,))[1] == fill(2.0, 40)
+end
