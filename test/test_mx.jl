@@ -178,10 +178,11 @@ end
     @test build_function(s; nonzeros = true, expand = false) == build_function(s; nonzeros = true)            # nothing to expand
 end
 
-"A step with about 60 scalar instructions, for loops over steps."
+"A step with about 60 scalar instructions, for loops over steps; it has arithmetic only, so
+CasADi and the emitted code agree bit for bit on every platform."
 function loop_step()
     x, u = SX.sym("x", 3), SX.sym("u")
-    ode(x) = vcat(x[2], x[3], -sin(x[1]) * x[2] + u)
+    ode(x) = vcat(x[2], x[3], -x[1] * x[2] * (1 - x[1]^2 / 6) + u)
     k1 = ode(x); k2 = ode(x + 0.05 * k1)
     CasADiCodegen.Function("step", [x, u], [x + 0.025 * (k1 + k2)])
 end

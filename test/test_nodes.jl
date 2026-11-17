@@ -175,8 +175,10 @@ end
     f = CasADiCodegen.Function("contract", [A, B, D], [casadi.kron_contract(A, B, true), casadi.kron_contract(A, D, false)])
     @test :OP_KRON_CONTRACT in node_ops(f)
     values = mx_inputs(f)
-    @test isequal(evaluated(native(f), f, values), mx_casadi(f, values))
-    @test isequal(written(f, values), mx_casadi(f, values))
+    # On ARM, the C compiler of CasADi fuses a product and a sum into one rounding.
+    same(a, b) = Sys.ARCH === :aarch64 ? all(isapprox.(a, b; rtol = 1e-14)) : isequal(a, b)
+    @test same(evaluated(native(f), f, values), mx_casadi(f, values))
+    @test same(written(f, values), mx_casadi(f, values))
 end
 
 # With a sparse operand CasADi has no dense routine; the product becomes a list of terms.

@@ -39,14 +39,16 @@ is_stored(a) = false""",
     :shape_error => "@noinline shape_error(message::String, count::Int) = throw(ArgumentError(string(message, count)))",
     # The place of `x` in the rising grid `w[grid+1:grid+n]`, from zero, as the CasADi routine `casadi_low`:
     # mode 0 searches from the start, mode 1 computes the place in a grid with equal steps, and mode 2
-    # halves the range. A value that is no number, or too large for a whole number, has the place 0 in
-    # mode 1, as on the processors where the conversion of C gives the smallest whole number.
+    # halves the range. In mode 1 the place of a value that is no number, or too large for a whole
+    # number, follows the conversion of C on the processor: the smallest whole number on x86, so
+    # the place 0; on ARM, 0 for NaN and the nearest whole number otherwise.
     :low => """
 function low(w, grid, n, x, mode)
     if mode == 1
         first = w[grid+1]
         v = (x - first) * (n - 1) / (w[grid+n] - first)
-        return abs(v) < 9.2e18 ? clamp(trunc(Int, v)::Int, 0, n - 2) : 0
+        abs(v) < 9.2e18 && return clamp(trunc(Int, v)::Int, 0, n - 2)
+        return Sys.ARCH === :aarch64 && v > 0 ? n - 2 : 0
     elseif mode == 2
         (n < 2 || x < w[grid+2]) && return 0
         x > w[grid+n] && return n - 2
@@ -639,12 +641,14 @@ const DUMP_COUNT = Dict{String,Int}()
 const DUMP_LOCK = ReentrantLock()
 function write_matrix(base, nrow, ncol, rows, columns, values)
     count = lock(() -> (DUMP_COUNT[base] = get(DUMP_COUNT, base, -1) + 1), DUMP_LOCK)
+    # CasADi writes the file in text mode, so its lines end with CR LF on Windows.
+    newline = Sys.iswindows() ? "\\r\\n" : "\\n"
     open(string(base, ".", lpad(count, 6, "0"), ".mtx"), "w") do io
-        println(io, "%%MatrixMarket matrix coordinate real general")
-        println(io, nrow, " ", ncol, " ", length(values))
+        print(io, "%%MatrixMarket matrix coordinate real general", newline)
+        print(io, nrow, " ", ncol, " ", length(values), newline)
         for k in eachindex(values)
             x = values[k]
-            println(io, rows[k], " ", columns[k], " ", x isa Float64 ? Base.Ryu.writeexp(x, 16) : x)
+            print(io, rows[k], " ", columns[k], " ", x isa Float64 ? Base.Ryu.writeexp(x, 16) : x, newline)
         end
     end
     nothing

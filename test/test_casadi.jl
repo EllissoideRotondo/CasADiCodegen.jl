@@ -14,6 +14,9 @@ const EXACT_OPS = Set([:OP_ASSIGN, :OP_ADD, :OP_SUB, :OP_MUL, :OP_DIV, :OP_NEG, 
     :OP_REMAINDER, :OP_INPUT, :OP_OUTPUT, :OP_CONST])
 
 same_bits(a, b) = isequal(a, b)
+const JULIA_OPS = Dict(:OP_SIN => (a, b) -> sin(a), :OP_COS => (a, b) -> cos(a), :OP_TAN => (a, b) -> tan(a),
+                       :OP_POW => (a, b) -> CasADiCodegen.Codegen.NaNMath.pow(a, b),
+                       :OP_CONSTPOW => (a, b) -> CasADiCodegen.Codegen.NaNMath.pow(a, 2.5))
 function op_function(op)
     arity, build = OP_BUILDERS[op]
     x, y = SX.sym("x"), SX.sym("y")
@@ -37,6 +40,13 @@ function op_agrees(op, a, b)
     exponent = op === :OP_CONSTPOW ? 2.5 : b
     if op in (:OP_POW, :OP_CONSTPOW) && a < 0 && !isinteger(exponent) && (isinf(a) || isinf(exponent))
         return isnan(actual)
+    end
+    # The C library of Windows rounds sin, cos, tan and pow less closely than Julia, which the
+    # emitted code calls (sin(pi) and sin(1e300) differ in their leading digits), so there the
+    # emitted value is compared with Julia's.
+    if Sys.iswindows() && haskey(JULIA_OPS, op)
+        close_enough(expected, actual) || return close_enough(JULIA_OPS[op](a, b), actual)
+        return true
     end
     # Of 0.0 and -0.0, C leaves open which one fmin and fmax return, and C libraries differ.
     op in (:OP_FMIN, :OP_FMAX) && iszero(a) && iszero(b) && return iszero(actual)

@@ -655,7 +655,11 @@ function body!(em::Emission, switch::SwitchCall, name::Symbol)
     for k in length(switch.cases):-1:1
         chain = Expr(k == 1 ? :if : :elseif, :(trunc(selector) == $(k - 1)), branch(switch.cases[k]), chain)
     end
-    (Any[:(selector = $(element(offset_in[1], 1))), chain], offset_in, offset_out)
+    # CasADi converts the selector to an integer with a cast of C, which gives the smallest
+    # integer for NaN on x86 (the default branch) and zero on ARM (the first case).
+    read = :(selector = $(element(offset_in[1], 1)))
+    arm = :(Sys.ARCH === :aarch64 && isnan(selector) && (selector = zero(selector)))
+    (Any[read, arm, chain], offset_in, offset_out)
 end
 
 # A map runs its body in one loop over the blocks: each turn copies one block of
