@@ -178,36 +178,30 @@ end
     generate_julia(f, io::IO; kwargs...) -> nothing
 
 Write Julia source code for the CasADi function `f` to the file `path` or to the stream
-`io`, as CasADi `generate` writes C code. The output is one module with the functions of
+`io`. The output is one module with the functions of
 [`build_function`](@ref), which describes them.
 
 The module holds:
 
 - the in-place function `name`;
 - the out-of-place function, whose name is `name` without `!`;
-- the function on nonzeros, whose name is that name followed by `_nonzeros!`;
+- the function on nonzeros, `f_nonzeros!` for a function `f`;
 - the constants `NAME`, `NAMES_IN`, `NAMES_OUT`, `NNZ_IN`, `NNZ_OUT`, `NWORK`, `SPARSITY_IN`,
   `SPARSITY_OUT` and `DEPENDENCIES`. Each sparsity pattern is `(nrow, ncol, colptr, rowval)`,
   1-based. `NWORK` is the length of the work vector. `DEPENDENCIES` is the sorted tuple of
   the names of the packages that the module imports.
 
 The module does not need CasADiCodegen.jl. A package that includes the file must have each
-package of `DEPENDENCIES` as a dependency. The module imports:
+package of `DEPENDENCIES` as a dependency: StaticArraysCore.jl, and as the code needs them
+NaNMath.jl, SparseArrays.jl, SpecialFunctions.jl, LinearAlgebra, StaticArrays.jl and the
+package of each Julia function of a `callback`, which the module calls by its full name. A
+function with a SciML integrator, rootfinder or solver gives a module that makes the
+solvers again, so it also loads CasADiCodegen.jl, SciMLBase.jl and the packages of the
+algorithms.
 
-- StaticArraysCore.jl, for the method with static arrays, unless `f` has no input;
-- NaNMath.jl, when the code has an operation with a limited domain, such as `sqrt` or
-  `log`, unless `nanmath = false`;
-- SparseArrays.jl, when an input or an output has structural zeros, as most Jacobians have,
-  for the methods with sparse matrices;
-- SpecialFunctions.jl for `erfinv`, LinearAlgebra for the factorizations of matrix code,
-  StaticArrays.jl and the package of each Julia function of a `callback`.
-
-A Julia function of a `callback` must be a named function of a module. The module calls it
-by its full name and imports its package.
-
-A function with an integrator, a rootfinder or an optimization solver of the SciML
-extension gives a module that makes the solvers again. That module loads CasADiCodegen.jl,
-SciMLBase.jl and the packages of the algorithm, which must be installed.
+Throws an `ArgumentError` if `module_name` or `name` is not a valid identifier, if `name`
+does not end with `!`, or if `f` has free symbols or an operation outside the scope of the
+package.
 
 # Keywords
 - `module_name`: the name of the module, a valid identifier. The default is the name of

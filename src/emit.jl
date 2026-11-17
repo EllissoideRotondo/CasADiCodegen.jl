@@ -490,14 +490,12 @@ expression_flag(other) =
                    chunk_size = nothing, split_above = nothing,
                    nanmath = true, expand = true, cache = false, solvers = nothing, optlevel = nothing)
 
-Generate Julia code for the CasADi function `f`, in the manner of
-`Symbolics.build_function`. Return an out-of-place function `g(arg1, arg2, ...)` and an
+Generate Julia code for the CasADi function `f`. Return an out-of-place function `g(arg1, arg2, ...)` and an
 in-place function `g!(res, arg)`: as one `Expr` with the two definitions by default, or as
 the pair `(g, g!)` of compiled functions with `expression = Val{false}`.
 
-Both functions take arrays in matrix shape. CasADi has no vector type, so every output is
-a matrix; `g` returns one of one column as a vector by default, and as a matrix with
-`vector_columns = false`.
+Both functions take arrays in matrix shape. `g` returns an output of one column as a
+vector, and as a matrix with `vector_columns = false`.
 
 - `g` takes one array per input. It returns one array for one output, and a tuple of
   arrays otherwise. The arrays are `SVector` and `SMatrix` when the first argument is a
@@ -514,11 +512,8 @@ a matrix; `g` returns one of one column as a vector by default, and as a matrix 
 - A structural zero of an output is set to zero. A structural zero of an input is not read.
 - With SparseArrays.jl loaded, an array of `res` or `arg` can be a `SparseMatrixCSC` with
   the sparsity pattern of that output or input, which `SparseMatrixCSC(sparsity)` makes.
-  `g!` then reads and writes the stored values only. It compares the whole pattern of a
-  matrix whose index vectors (`colptr` and `rowval`) are not those of the last matrix that
-  passed this comparison. Otherwise it compares the number of rows and of stored values
-  only, so a call costs as much as the function on nonzeros. Do not change the index
-  vectors of a matrix in place.
+  `g!` then reads and writes the stored values only. Do not change the index vectors of a
+  matrix in place.
 
 # Keywords
 - `expression = Val{true}`: `Val{true}` returns an `Expr`, and `Val{false}` returns
@@ -529,35 +524,28 @@ a matrix; `g` returns one of one column as a vector by default, and as a matrix 
   receives those of output `j`, as CasADi evaluates a function.
 - `vector_columns = true`: with `false`, `g` returns each output in the shape that CasADi
   gives it: a column of `n` elements, and a scalar, become a `Matrix` of size `(n, 1)`, or
-  an `SMatrix{n,1}` for a static argument. A function whose outputs then have a fixed
-  number of dimensions, such as the matrices of a linearization, needs this. It does not
-  change `g!` or the function of `nonzeros`.
+  an `SMatrix{n,1}` for a static argument. It does not change `g!`.
 - `name`: the name of `g!` in the returned `Expr`, a valid identifier. It must end with
   `!` unless `nonzeros` is set. The name of `g` is `name` without `!`.
 - `chunk_size = nothing`, `split_above = nothing`: a function with more than `split_above`
-  instructions is split into sub-functions of at most `chunk_size` instructions. This
-  shortens the compilation of a large function and costs some speed. `chunk_size` is
-  $DEFAULT_CHUNK_SIZE by default. `split_above` is `chunk_size` when that is given;
+  instructions is split into sub-functions of at most `chunk_size` instructions, which
+  compile faster. `chunk_size` is $DEFAULT_CHUNK_SIZE by default. `split_above` is `chunk_size` when that is given;
   otherwise it is $UNSPLIT_LIMIT for scalar code and $DEFAULT_CHUNK_SIZE operations for
   matrix code. See [Large functions and the cache on disk](@ref).
 - `nanmath = true`: an operation outside its domain returns NaN through NaNMath.jl, as in
   CasADi. With `false` it throws a `DomainError`, as in Base, and the code accepts any
   real number type.
 - `expand = true`: a matrix (MX) function is expanded to scalar operations where CasADi
-  can do that, except a function whose expansion would repeat a called function many
-  times, as an integrator or `fold` repeats its step, which keeps the matrix operations
-  and its calls. With `false` the code keeps the matrix operations. See
+  can do that and the expansion does not repeat a called function many times, as the step
+  of an integrator. With `false` the code keeps the matrix operations. See
   [Matrix code and functions without instructions](@ref).
 - `cache = false`: with `true` or a directory, the compiled functions come from a package
-  on disk that Julia compiles once, so a later session compiles nothing. It needs
-  `expression = Val{false}`. Code that runs already must call the functions with
-  `Base.invokelatest`. A Julia function in the graph must belong to a package. See
+  on disk that Julia compiles once, so a later session compiles nothing. A caller that
+  was compiled before the call must call the functions with `Base.invokelatest`. A Julia function in the graph must belong to a package. See
   [Large functions and the cache on disk](@ref).
 - `optlevel = nothing`: with an integer from 0 to 3, Julia compiles the functions at this
   optimization level, as `Base.Experimental.@optlevel` sets it, in place of the level of
-  the session (`-O`, 2 by default). A lower level shortens the compilation at the first
-  call of a large function and can slow the later calls. It needs `expression = Val{false}`,
-  and with `cache` it sets the level of the cached package.
+  the session (`-O`, 2 by default). With `cache` it sets the level of the cached package.
 - `solvers = nothing`: a [`CasADiCodegen.Solvers`](@ref Solvers) with the SciML solvers that the
   code calls in place of the solver objects of CasADi in the graph, since generated code
   never calls CasADi.

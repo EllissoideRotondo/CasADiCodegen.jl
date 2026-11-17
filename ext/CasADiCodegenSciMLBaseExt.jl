@@ -182,96 +182,68 @@ function jumped!(integrator, s::GridSolver, x0, q, jump!)
 end
 
 """
-    integrator(name, alg, dae, t0, tf; specialize, adjoint = false, mass, nonsmooth = :warn,
-               modes = nothing, switches = nothing, switch_times = false, options...) -> CasADiCodegen.Function
-    integrator(name, alg, dae, t0, times::AbstractVector; specialize, adjoint = false, nonsmooth = :warn,
-               modes = nothing, switches = nothing, options...) -> CasADiCodegen.Function
-    integrator(name, alg, dae; specialize, adjoint = false, mass, direction = 0, interp_points = 10,
-               events = 1, terminal = true, exact = true, nonsmooth = :warn,
-               modes = nothing, switches = nothing, switch_times = false, options...) -> CasADiCodegen.Function
+    integrator(name, alg, dae, t0, tf; keywords...) -> CasADiCodegen.Function
+    integrator(name, alg, dae, t0, times::AbstractVector; keywords...) -> CasADiCodegen.Function
+    integrator(name, alg, dae; keywords...) -> CasADiCodegen.Function
 
 Make a CasADi function that integrates an ordinary differential equation with the SciML
 algorithm `alg`, for example `Vern9()` of OrdinaryDiffEqVerner.jl. CasADi differentiates
-the function to any order, and `build_function` emits code that calls the solver directly.
-
-The times select the form of the function. `p` is absent when the model has no parameters.
+it to any order. The times select the form of the function; `p` is absent when the model
+has no parameters, and a model with quadratures returns them as a second result.
 
 | Call                                    | Function           | Result                                        |
 |-----------------------------------------|--------------------|-----------------------------------------------|
 | `integrator(name, alg, dae, t0, tf)`    | `F(x0, p)`         | the state at `tf`                             |
 | `integrator(name, alg, dae, t0, times)` | `F(x0, p)`         | a matrix; column `k` is the state at `times[k]` |
-| `integrator(name, alg, dae)`            | `G(x0, p, t0, tf)` | the state at `tf`; CasADi also differentiates by the two times |
+| `integrator(name, alg, dae)`            | `G(x0, p, t0, tf)` | the state at `tf`, also differentiable by the times |
 
-With free times, `tf` can be before `t0` or equal to it. The times of the vector `times`
-can be in any order and on both sides of `t0`. One run of the solver, which stops at
-each time, gives the states at all the times after `t0`, and one more those before it;
-`options` must not hold a saving option, such as `saveat` or `tstops`. A model with
-quadratures returns them as a second result.
+`dae` is a dictionary as for the CasADi integrators: the state `"x"` and its derivative
+`"ode"`, dense columns, and optionally the parameters `"p"`, the time `"t"` and the
+integrands `"quad"`. With free times, `"zero"` is a column of event functions and
+`"transition"` the state after an event, one column or one column per event function.
+The times are finite, `t0` and `tf` differ with fixed times, and the times of `times` may
+come in any order on both sides of `t0`. `options` must not hold a saving option, such as
+`saveat` or `tstops`.
 
-# Arguments
-- `name`: the name of the CasADi function, a valid identifier.
-- `dae`: a dictionary as for the CasADi integrators. It holds the state `"x"` and its
-  derivative `"ode"`, both dense column vectors. Optional entries are the parameters `"p"`,
-  the time `"t"` and the integrands `"quad"`. With free times, the entry `"zero"` is a
-  column of event functions, and `"transition"` is the state after an event: one column,
-  or one column per event function.
-- `t0`, `tf`, `times`: finite times. `t0` and `tf` must be different.
+With an event function, the function returns the state at the event, the quadratures,
+and the event time `te` (a vector for `events > 1`); with several event functions, the
+index `ie` of the function of each event; with `exact = false`, the number `ne` of events,
+where a missing event has the time `tf` and the index 0. A zero at the initial time is not
+an event. See [Stop at an event](@ref events).
 
 # Keywords
-- `specialize = SciMLBase.FullSpecialize`: the specialization of the SciML problem. With
-  `SciMLBase.AutoSpecialize` the solver is compiled once for all integrators, and the runs
-  are slower.
-- `adjoint = false`: with `true`, a reverse derivative comes from an integrator of the
-  adjoint equations, which runs from the final time back to the initial time. Its cost
-  does not grow with the number of parameters.
-- `mass`: the diagonal of the mass matrix of a model with algebraic states: 0 for an
-  algebraic state and 1 for the others. The element of `"ode"` for an algebraic state is
-  the residual of an algebraic equation, and its initial value is a guess. `alg` must
-  accept a mass matrix, as `Rodas5P()` of OrdinaryDiffEqRosenbrock.jl does. A vector of
-  times is not supported with it.
-- `direction = 0`: the change of sign of an element of `"zero"` that is an event: any with 0, from
-  negative to positive with 1, and from positive to negative with -1.
-- `interp_points = 10`: the number of points of each step at which the solver looks for
-  the change of sign, besides the end of the step.
-- `events = 1`: the number of events that the integration passes.
-- `terminal = true`: the integration ends at the last event. With `false` it applies the
-  transition there too and goes on to `tf`.
-- `exact = true`: a call throws when fewer than `events` events come before `tf`. With
-  `false` it passes at most `events` events and returns their count.
-- `nonsmooth = :warn`: what a switch in `"ode"` or `"quad"` gives when its operand depends
-  on the state, or on the time and a parameter together: a warning when the integrator is
-  built, an `ArgumentError` with `:error`, or nothing with `:ignore`. A switch is an
-  operation such as a comparison, `sign` or `abs`;
-  [Discontinuous models](@ref discontinuities) lists them all. The values are right, but
-  CasADi differentiates such an operation branch by branch, so the derivatives miss the
-  jump of the state transition matrix (STM) at the switching time.
-- `modes = nothing`: the pair `m => S` of a model that switches between modes. `m` is a
-  column of symbols of the type of the state, which `"ode"` and `"quad"` use in place of the
-  sign of the switching functions `S`, a column of the same size: a mode is +1 where its
-  switching function is positive and -1 where it is negative. Each change of sign of `S`
-  is an event that flips its mode, so the derivatives have the jump of the STM at the
-  switching time. The initial mode is the sign of `S` at `t0`, or on the surface the mode
-  whose flow leaves it. The inputs and the results are those of the model without modes,
-  except for the results that `switch_times` adds. A call throws when the flow slides on
-  a surface, or when a mode and its switching function disagree at an output time.
-- `switches = nothing`: an upper bound on the number of switches between `t0` and `tf`, or
-  between two output times of `times`; a call throws when more come. `modes` requires it,
-  and it requires `modes`: otherwise `integrator` throws `ArgumentError`. `events` counts
-  the events of `"zero"` only, and needs the exact number.
-- `switch_times = false`: with `true`, the results end with the switch times `ts`
-  (`switches` of them; a missing switch has the time `tf`), the index `is` of the
-  switching function of each with more than one mode, and their number `ns`. A vector of
-  times does not support it.
+- `specialize = SciMLBase.FullSpecialize`: with `SciMLBase.AutoSpecialize` the solver is
+  compiled once for all integrators, and the runs are slower.
+- `adjoint = false`: with `true`, a reverse derivative comes from the adjoint equations,
+  integrated back from the final time.
+- `mass`: the diagonal of the mass matrix of a model with algebraic states, 0 for an
+  algebraic state; its element of `"ode"` is a residual, and its initial value a guess.
+  `alg` must accept a mass matrix, as `Rodas5P()` does. Not with a vector of times.
+- `direction = 0`: the sign change of `"zero"` that is an event: any with 0, upward with
+  1, downward with -1.
+- `interp_points = 10`: the points of each step, besides its end, at which the solver
+  looks for a sign change.
+- `events = 1`, `terminal = true`, `exact = true`: the number of events to pass; whether
+  the integration ends at the last one or applies its transition and goes on to `tf`;
+  whether fewer events before `tf` throw, or `events` is an upper bound.
+- `nonsmooth = :warn`: a switch on the state in `"ode"` or `"quad"`, such as a comparison,
+  `sign` or `abs`, gives a warning when the integrator is built, an `ArgumentError` with
+  `:error`, or nothing with `:ignore`: its derivatives miss the jump at the switching time
+  (see [Discontinuous models](@ref discontinuities)).
+- `modes = nothing`, `switches = nothing`, `switch_times = false`: a model that switches
+  between modes, `m => S`, with `"ode"` using the modes `m` in place of the signs of the
+  switching functions `S`; an upper bound on the switches per interval; and the switch
+  times `ts`, indices `is` and count `ns` as further results. The derivatives then have
+  the jump at each switch; see [Give the switches as modes](@ref).
 - `options...`: options of the solver, for example `abstol`, `reltol` and `maxiters`.
 
-With an event function, the function returns the state at the event, the quadratures if
-the model has them, and the event time `te`; `te` is a vector with `events` more than 1.
-With several event functions, the result `ie` follows: for each event, the index from 1 of
-the event function that changed its sign. With `exact = false`, the last result `ne` is the
-number of events, and a missing event has the time `tf` and the index 0. A zero at the
-initial time is not an event.
+Throws an `ArgumentError` when the integrator is built for `modes` without `switches` or
+the reverse, for `switch_times` or `mass` with a vector of times, and with
+`nonsmooth = :error` for a switch on the state. A call throws when fewer than `events`
+events come with `exact = true`, when more switches come than `switches`, and when the
+flow slides on a switching surface.
 
-See [Integrate a differential equation](@ref) and [Stop at an event](@ref events).
+See [Integrate a differential equation](@ref).
 
 # Examples
 ```julia
@@ -1231,70 +1203,43 @@ end
 
 Make the SciML function of the ordinary differential equation whose right side is the
 CasADi function `f(u)`, `f(u, p)` or `f(u, p, t)`. It holds generated code for the right
-side and for its Jacobians by the state (`jac`) and by the parameters (`paramjac`).
+side and for its Jacobians by the state (`jac`) and by the parameters (`paramjac`), which
+`jac = false` or `paramjac = false` leaves out.
 
-The first result of `f` is the right side, a column vector of the size of its first
-argument. Each further result, a column vector, is an observed variable. Set `jac` or
-`paramjac` to `false` to leave that Jacobian out.
+The first result of `f` is the right side, a column of the size of its first argument;
+each further result, a column, is an observed variable. The states, the parameters, the
+time and the observed variables have the names of the scalar symbols and of the results of
+`f`, so a solution and a problem are indexed by name; a vector parameter is also one
+parameter by its own name. A function of the time without parameters takes an empty
+parameter argument, such as `SX(0, 1)`. A `sys` among the `options` replaces the names.
+See [Use the generated code with SciML packages](@ref) for the naming rules.
 
-The function has the names of the symbols of `f` as its `sys`, so that `solution[:x]`,
-`remake(problem; p = [:k => 2.0])`, `problem.ps[:k]` and the observed function
-`SymbolicIndexingInterface.observed(problem, :x)` of a state, a parameter or a further
-result work:
+# Keywords
+- `sparse = false`: with `true`, the function has a `jac_prototype`, a `SparseMatrixCSC`
+  with the pattern of the Jacobian, into whose stored values `jac` writes. It needs
+  SparseArrays.jl loaded, `jac = true` and `inplace = true`. The Jacobians also have an out-of-place method
+  `jac(u, p, t)`, dense or of that pattern.
+- `inplace = false`: out-of-place functions that return an `SVector` for the right side
+  and an `SMatrix` for each Jacobian, for an `SVector` state.
+- `specialize = SciMLBase.FullSpecialize`: with `SciMLBase.AutoSpecialize`, the solver
+  compiled for one model serves the next (see
+  [Compilation of the solver for each new model](@ref)).
+- `initialization = nothing`: a CasADi function with the arguments of `f` whose first
+  result holds conditions `c(u, p, t) = 0` on the initial values, which the default
+  `initializealg` solves with the algebraic equations (the zero rows of `mass_matrix`)
+  before the first step. The unknowns are the state, whose values are a guess, and the
+  parameters in `solved_parameters`, by name or by place; see
+  [`initialization_problem`](@ref CasADiCodegen.initialization_problem) and
+  [Initialize differential-algebraic equations](@ref).
+- `chunk_size`, `split_above`, `optlevel` and `cache` go to
+  [`build_function`](@ref CasADiCodegen.build_function), the other `options` to
+  `SciMLBase.ODEFunction`.
 
-- The states, the parameters and the time have the names of the scalar symbols of the
-  arguments of `f`. The elements of one symbol of several elements, such as
-  `MX.sym("x", 2)`, are `x_0` and `x_1`, as CasADi names the elements of `SX.sym("x", 2)`.
-  A parameter symbol of several elements is also one parameter by its own name, so that
-  `remake(problem; p = [:x => [1.0, 2.0]])` replaces all its elements. Without a third
-  argument the time is `t`.
-
-A function of the time without parameters takes an empty parameter argument, such as
-`SX(0, 1)`; its problem then needs no parameters.
-- An observed variable has the name of its result (see `casadi.name_out`). A result of more
-  than one element `y` also gives `y_0`, `y_1`, ..., one per element.
-
-A function whose arguments are not made of named symbols, or whose names occur twice,
-gets no names, and then a further result throws an `ArgumentError`. A `sys` among the
-`options` replaces the names and the observed variables. With `sparse = true` the function has a
-`jac_prototype`: a `SparseMatrixCSC` with the sparsity pattern of the Jacobian, into whose
-stored values `jac` writes. It needs SparseArrays.jl loaded and `jac = true`. Besides the
-in-place `jac(J, u, p, t)`, the Jacobians have the out-of-place method `jac(u, p, t)`, which
-returns a new matrix: dense, or with `sparse = true` a sparse matrix of the pattern of
-`jac_prototype`.
-
-With `inplace = false` the functions are out of place and return static arrays: an
-`SVector` for the right side and an `SMatrix` for each Jacobian, also of one row or one
-column. Use it with an `SVector` state. Each of these arrays holds at most 1024
-elements, so `jac = true` allows at most 32 states; a larger function throws an
-`ArgumentError`. `specialize` is the specialization of the SciML
-function: `SciMLBase.AutoSpecialize` lets OrdinaryDiffEq.jl wrap the in-place functions of
-a `Vector{Float64}` state, so that the solver code compiled for one model serves the next
-one; an explicit solver wraps them only with `jac = false`. `chunk_size`, `split_above`,
-`optlevel` and `cache` go to [`build_function`](@ref CasADiCodegen.build_function).
-
-`initialization` is a CasADi function with the arguments of `f` whose first result, a
-column vector, holds conditions `c(u, p, t) = 0` on the initial values. With it the
-function has an `initialization_data`, from which the default `initializealg` of
-OrdinaryDiffEq.jl solves the algebraic equations of `f` and the conditions together before
-the first step. The algebraic equations are the rows of zeros of the option `mass_matrix`.
-The unknowns are the state, whose values in the problem are a guess, and the parameters in
-`solved_parameters`, given by name or by place. The initialization problem is a
-`NonlinearProblem` when it has as many equations as unknowns, and a
-`NonlinearLeastSquaresProblem` otherwise; see
-[`initialization_problem`](@ref CasADiCodegen.initialization_problem). A condition on a
-derivative calls `f` on the arguments of `initialization`. With
-`specialize = SciMLBase.AutoSpecialize`, functions of one `f` with other conditions have one
-type, so that the solvers compiled for the first serve the others.
-
-The default nonlinear solver of OrdinaryDiffEq.jl needs OrdinaryDiffEqNonlinearSolve.jl
-loaded, and starts with Broyden's method, which does not use the generated Jacobian and
-can leave the guess for another solution. A method that uses it is given as
-`initializealg = SciMLBase.OverrideInit(; nlsolve = TrustRegion())`, to `solve` or to the
-problem.
-
-The other `options` go to `SciMLBase.ODEFunction`. See
-[Give a CasADi function to a SciML problem](@ref).
+Throws an `ArgumentError` if a further result of `f` has no name to take (its arguments
+are not made of named symbols, or a name occurs twice), if `sparse = true` comes with
+`jac = false` or `inplace = false` or without SparseArrays.jl, or with `inplace = false` if
+an array has more than
+1024 elements, which allows at most 32 states with `jac`.
 
 # Examples
 ```julia
