@@ -9,7 +9,8 @@ extension(name) = Base.get_extension(CasADiCodegen, name)
 # front end, so the reference is checked here: each exported or public name of the package,
 # and each name that `CasADiCodegen.Models` exports, must be an entry of a `@docs` block.
 let front = Set(names(CasADiCodegen.Codegen.Front)),
-    own = [string(n) for n in names(CasADiCodegen) if !(n in front) && n !== :CasADiCodegen],
+    # `casadi` is the module of the front end, whose page is the CasADi documentation.
+    own = [string(n) for n in names(CasADiCodegen) if !(n in front) && n !== :CasADiCodegen && n !== :casadi],
     models = ["Models." * string(n) for n in names(CasADiCodegen.Models) if n !== :Models],
     entries = join((m[1] for page in ("api.md", "api_sciml.md")
                     for m in eachmatch(r"```@docs\n(.*?)```"s, read(joinpath(@__DIR__, "src", page), String))), "\n")
@@ -32,25 +33,12 @@ makedocs(;
         "Home" => "index.md",
         "Getting started" => "getting_started.md",
         "Tutorials" => [
-            "tutorials/ode_modeling.md",
-            "tutorials/nonlinear.md",
-            "tutorials/optimization.md",
-            "tutorials/sparse_jacobians.md",
+            "tutorials/traced_problems.md",
+            "tutorials/parameter_estimation.md",
             "tutorials/dae_models.md",
             "tutorials/initialization.md",
             "tutorials/events.md",
             "tutorials/bang_bang.md",
-            "tutorials/stochastic.md",
-            "tutorials/discrete.md",
-            "tutorials/callable_parameters.md",
-            "tutorials/bifurcation.md",
-            "tutorials/traced_problems.md",
-            "tutorials/linear_analysis.md",
-            "tutorials/independent_variable.md",
-            "tutorials/perturbation.md",
-            "tutorials/attractors.md",
-            "tutorials/parameter_estimation.md",
-            "tutorials/dynamic_optimization.md",
             "tutorials/large_models.md",
         ],
         "Models" => [
@@ -66,8 +54,8 @@ makedocs(;
             "howto/linearize.md",
         ],
         "Solvers and SciML" => [
-            "howto/casadi_solvers.md",
             "howto/sciml_functions.md",
+            "howto/casadi_solvers.md",
             "howto/autodiff_rules.md",
         ],
         "Large models and debugging" => [

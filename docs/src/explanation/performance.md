@@ -25,6 +25,11 @@ their 6 by 6 Jacobians, measured once on Julia 1.13:
 The first call is mostly compilation. For scalar code above about 50,000 instructions,
 or matrix code above about 1,000, see [Large functions and the cache on disk](@ref).
 
+With a `SparseMatrixCSC`, `g!` compares the whole pattern of a matrix whose index vectors
+(`colptr` and `rowval`) are not those of the last matrix that passed this comparison;
+otherwise it compares the number of rows and of stored values only, so a call costs as
+much as the function on nonzeros.
+
 ## Split of a large function
 
 Above `split_above` instructions, `build_function` and `generate_julia` split the code
@@ -56,3 +61,31 @@ Whether splitting shortens the first call depends on the model: the largest chai
 compiles in 54 s instead of 339 s, while the gravity model gains nothing at the
 default size. Smaller versions of the two models near the default limit of 50,000
 instructions, not in the table, took 18 s and 14 s unsplit against 10 s and 22 s split.
+
+## Compilation of the solver for each new model
+
+With the default `specialize = SciMLBase.FullSpecialize` of the SciML constructors,
+OrdinaryDiffEq.jl compiles its solver again for each new model. `specialize =
+SciMLBase.AutoSpecialize` reuses it for a `Vector{Float64}` state; an explicit solver such
+as `Tsit5()` reuses it only with `jac = false`. On Lotka-Volterra and then the Lorenz
+system, the first solve of the second model took the times below, and each later solve
+was 5 to 20 percent slower:
+
+| First solve of the second model | `FullSpecialize` | `AutoSpecialize` |
+|---|---|---|
+| `Rodas5P()` | 2.55 s | 0.15 s |
+| `Tsit5()` | 0.89 s | 0.08 s, with `jac = false` |
+
+## Cost of the two kinds of code
+
+A model that calls a scalar function of 710 instructions 20 times in a chain, and
+returns the result with its Jacobian, shows the cost of expansion: expanded code
+repeats the 710 instructions at each call, so it builds and compiles longer and here
+also runs slower than matrix code, which compiles the called function once. Both are
+faster than the CasADi virtual machine; one measurement of each:
+
+| Form | Build | First call | Later calls |
+|---|---|---|---|
+| `expand = true` | 4.8 s | 86 s | 183 µs |
+| `expand = false` | 0.3 s | 13 s | 134 µs |
+| CasADi virtual machine | | | 950 µs |

@@ -36,6 +36,23 @@ lin_sparse!(out, ([0.0, 0.0], [0.0], [9.81, 2.0]))
 out[1]
 ```
 
+The matrices are those of a `StateSpace` system of ControlSystemsBase.jl. The package has
+no block-diagram signals, so a perturbation of a loop is an input of the model, and the
+outputs give the transfer functions. For a plant `x' = (k u - x) / τ` with the controller
+`c = K x` and the perturbation `w` at the plant input, the outputs `u = c + w`, `-c` and `x`
+give the sensitivity functions `S`, `T` and `P S`:
+
+```@example linearize
+using ControlSystemsBase: ss, tf
+
+xl, w, pl = SX.sym("xl"), SX.sym("w"), SX.sym("pl", 3)        # pl = [k, τ, K]
+c = pl[3] * xl
+loop_f = CasadiFunction("loop_f", [xl, w, pl], [(pl[1] * (c + w) - xl) / pl[2]])
+loop_h = CasadiFunction("loop_h", [xl, w, pl], [vcat(c + w, -c, xl)])
+closed = ss(CasADiCodegen.linearization(loop_f, loop_h)[1]([0.0], [0.0], [1.0, 1.0, -1.0])...)
+tf(closed[1, 1])                                               # S
+```
+
 ## Linearize a model with algebraic states
 
 For `x' = f(x, z, u, p)`, `0 = g(x, z, u, p)` and `y = h(x, z, u, p)`, call
@@ -54,8 +71,6 @@ lin_dae, _ = CasADiCodegen.linearization(f, g, h)
 A, B, C, D = lin_dae([2.0, 0.0], [1.0], [0.0], Float64[])
 A, C
 ```
-
-[Linear analysis of a feedback loop](@ref) applies this to a circuit.
 
 ## Order equations by their dependencies
 

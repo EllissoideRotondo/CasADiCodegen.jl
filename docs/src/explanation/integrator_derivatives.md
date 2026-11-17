@@ -42,6 +42,20 @@ state transition matrix at the event, to any order. A switch in the right side, 
 as an `if_else`, has no such node and its derivatives lack the jump; see
 [Discontinuous models](@ref discontinuities).
 
+Let the right side change from ``f^-`` to ``f^+`` where the switching function ``S(y, t)``
+changes its sign, with the rate ``\dot S = \frac{\partial S}{\partial y} f^- + \frac{\partial S}{\partial t}``.
+The state transition matrix (STM) is then multiplied at the switch by
+
+```math
+\Psi = I + \left(\dot y^+ - \dot y^-\right) \frac{1}{\dot S} \frac{\partial S}{\partial y},
+\qquad \dot y^\pm = f^\pm(y(t_s), t_s),
+```
+
+which is singular at a grazing contact, where ``\dot S = 0``. An integrator with an event
+function contains this jump to any order, while a
+switch written with `if_else` in `"ode"` has no event time, so its derivatives take
+``\Psi = I``.
+
 ## Adjoint equations
 
 With `adjoint = true`, a reverse derivative comes from one backward integration of the

@@ -46,7 +46,7 @@ nothing # hide
 ```
 
 The problem has the generated right side and its Jacobian, sparse with
-`ODEFunction(rhs; sparse = true)` (see [Give a CasADi function to a SciML problem](@ref)).
+`ODEFunction(rhs; sparse = true)` (see [Use the generated code with SciML packages](@ref)).
 A `NonlinearProblem` and an out-of-place function work as well; the parameters may be
 a tuple or a named tuple, and the keywords `states` and `parameters` name the elements.
 [`CasADiCodegen.traced_problem`](@ref CasADiCodegen.traced_problem(::AbstractString, ::SciMLBase.ODEProblem))

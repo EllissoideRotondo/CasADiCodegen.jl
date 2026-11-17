@@ -2,19 +2,34 @@
 
 This page and [SciML problems and functions](@ref) list the functions and types of
 CasADiCodegen.jl, grouped by task. The package exports `build_function`,
-`generate_julia`, `CasadiFunction` and `casadi_function`, and `using CasADiCodegen` also gives the names that the front end of CasADi exports, such as `SX`, `MX`, `DM`,
-`Opti`, `jacobian`, `gradient` and `substitute`. The whole front end, with the functions of
-the Python API of CasADi, is the exported module `casadi`, and a CasADi function is a
-`CasADiCodegen.Function`, which `CasadiFunction` makes. The other names of these pages need
-the prefix `CasADiCodegen.`, except `callback`, `integrator` and `rootfinder`, which are
-exported functions of the front end to which the package adds methods; the entries below
-write the prefix for all of them.
+`generate_julia`, `CasadiFunction`, `casadi_function` and `casadi`; the other names below
+are public and need the prefix `CasADiCodegen.`, except `callback`, `integrator` and
+`rootfinder`, which are functions of the front end to which the package adds methods.
+
+## The CasADi front end
+
+`using CasADiCodegen` loads CasADiNative.jl, the Julia front end of CasADi 3.8.2, whose
+calls follow the [CasADi documentation](https://web.casadi.org/docs/) for Python, with
+these differences:
+
+- `SX`, `MX`, `DM`, `jacobian`, `gradient`, `hessian`, `substitute`, `nlpsol`,
+  `integrator`, `rootfinder`, `callback` and the `Opti` functions `Opti`, `variable`,
+  `parameter`, `minimize`, `subject_to`, `bounded`, `set_initial`, `solve` and `value` are
+  exported. Every other function is in the exported module `casadi`, as in Python:
+  `casadi.set_value`, `casadi.sumsqr`.
+- `CasadiFunction` makes a CasADi function, since `Function` is a Julia type; the type of
+  the result is `CasADiCodegen.Function`.
+- Operations have their Julia meaning: `*` is the matrix product, `sin.(x)` and `x .^ 2`
+  act on each element, and `[a; b]` concatenates.
+- Indices start at 1, except in CasADi methods that take the index of an input or output,
+  such as `casadi.sparsity_out(f, 0)`.
+- A chained comparison such as `-2 <= w[1] <= 2` is not a constraint, since Julia
+  evaluates it with `&&`; write `bounded(-2, w[1], 2)`.
 
 ## Code generation
 
 ```@docs
 CasadiFunction
-CasADiCodegen.casadi
 CasADiCodegen.casadi_function
 build_function
 generate_julia

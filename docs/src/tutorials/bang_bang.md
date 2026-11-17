@@ -52,9 +52,9 @@ CasADiCodegen.nonsmooth_operations(rhs; inputs = ["y"])
 ```
 
 [`CasADiCodegen.nonsmooth_operations`](@ref) finds two comparisons on the state, and
-[`integrator`](@ref) warns about them. CasADi differentiates each constant branch of
-`if_else` separately, so the Jacobian of the residual is zero, as we show with the warning
-silenced by `nonsmooth = :ignore`:
+[`integrator`](@ref) warns about them. CasADi differentiates each constant branch
+separately, so the Jacobian of the residual is zero; `nonsmooth = :ignore` silences the
+warning:
 
 ```@example bang
 branchwise = integrator("branchwise", Vern9(), Dict("x" => y, "p" => a, "ode" => ode), 0.0, 3.0;
@@ -70,11 +70,9 @@ times.
 
 ## Route 1: the switches as modes
 
-The keyword `modes = m => S` of `integrator` replaces the sign of each switching function
-by a mode, +1 or -1, which an event flips at each change of sign; CasADi differentiates the
-event times, so the derivatives include the jump. With the switching functions
-``\lambda_v \mp 1``, the control is ``u = -(m_1 + m_2)/2``, and `switches` bounds the
-number of switches:
+With the keyword `modes = m => S` of `integrator` (see
+[Give the switches as modes](@ref)) and the switching functions ``\lambda_v \mp 1``, the
+control is ``u = -(m_1 + m_2)/2``, and `switches` bounds the number of switches:
 
 ```@example bang
 m = SX.sym("m", 2)
@@ -85,7 +83,6 @@ shoot = CasadiFunction("shoot", [z], [vcat(ym[1] - 1, ym[2])], ["z"], ["r"])
 nothing # hide
 ```
 
-Without `switch_times`, `switched` has the inputs and result of the model without modes.
 Newton's method needs a guess with the right sequence of switches:
 
 ```@example bang
@@ -94,22 +91,13 @@ solution = SciMLBase.solve(problem, SimpleNewtonRaphson(); abstol = 1e-10)
 solution.retcode, maximum(abs, solution.u - exact)
 ```
 
-From the guess `[-2.0, -3.0]`, Newton's method meets a singular Jacobian:
-
-```@example bang
-try
-    SciMLBase.solve(SciMLBase.remake(problem; u0 = [-2.0, -3.0]), SimpleNewtonRaphson(); abstol = 1e-10)
-catch err
-    typeof(err)
-end
-```
+From the guess `[-2.0, -3.0]`, it meets a singular Jacobian.
 
 ## Route 2: a smoothed control and continuation in its width
 
-[`CasADiCodegen.smoothed`](@ref) rewrites each switch into a smooth form of width
-``\varepsilon``; a comparison ``s > 0`` becomes ``(1 + \tanh(s/\varepsilon))/2``. The
-width is a parameter after ``\lambda_x``, and `inputs = y` rewrites only the switches on
-the state:
+[`CasADiCodegen.smoothed`](@ref) rewrites each switch into a smooth form (see
+[Smooth the switches](@ref)). The width is a parameter after ``\lambda_x``, and
+`inputs = y` rewrites only the switches on the state:
 
 ```@example bang
 w, W = SX.sym("width"), MX.sym("width")
@@ -120,9 +108,9 @@ shoot_smooth = CasadiFunction("shoot_smooth", [z, W], [vcat(ys[1] - 1, ys[2])], 
 nothing # hide
 ```
 
-The root of the smoothed model tends to the exact one as the width falls, but far from
-the root a small width makes the Jacobian nearly singular; from `[-2.0, -3.0]`, Newton's
-method converges at the width 1 but not at 0.1:
+The smoothed root tends to the exact one as the width falls, but far from the root a
+small width makes the Jacobian nearly singular; from `[-2.0, -3.0]`, Newton's method
+converges at the width 1 but not at 0.1:
 
 ```@example bang
 smooth_problem = SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(shoot_smooth), [-2.0, -3.0], [1.0])
@@ -136,8 +124,8 @@ end
 direct(1.0), direct(0.1)
 ```
 
-[`CasADiCodegen.natural_continuation`](@ref) solves for a decreasing sequence of widths,
-each from the root of the one before, and finds the parameter by its name `:width`:
+[`CasADiCodegen.natural_continuation`](@ref) follows the width toward zero (see
+[Follow the width toward zero](@ref)):
 
 ```@example bang
 path = CasADiCodegen.natural_continuation(smooth_problem, SimpleNewtonRaphson(), [1.0, 0.1, 0.01, 1e-3, 1e-4];
@@ -145,8 +133,8 @@ path = CasADiCodegen.natural_continuation(smooth_problem, SimpleNewtonRaphson(),
 [(width, s.retcode, maximum(abs, s.u - exact)) for (width, s) in path]
 ```
 
-The error falls as the square of the width, since both switching functions cross zero
-at a nonzero rate and the odd symmetry of ``\tanh`` cancels the first-order error.
+The error falls as the square of the width, as at any transversal crossing (see
+[Smooth the switches](@ref)).
 
 ## The two routes together
 
@@ -157,5 +145,4 @@ refined = SciMLBase.solve(SciMLBase.remake(problem; u0 = Dict(path)[0.1].u), Sim
 refined.retcode, maximum(abs, refined.u - exact)
 ```
 
-[Discontinuous models](@ref discontinuities) explains the choice between the routes,
-including a sliding arc, where only the smoothed route applies.
+[Discontinuous models](@ref discontinuities) explains the choice between the routes.
