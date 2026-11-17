@@ -143,8 +143,8 @@ A transcribed optimal control problem, with thousands of unknowns, solves the sa
 
 `OptimizationProblem(opti)` converts a problem of the `Opti` stack of CasADi with its
 initial values, parameter values and bounds. A bound on a variable stays a constraint, so
-the problem has no `lb` and `ub`. A chained comparison such as `-2 <= w[1] <= 2` is not a
-constraint, since Julia evaluates it with `&&`; write `bounded(lb, w, ub)`:
+the problem has no `lb` and `ub`. Write a two-sided bound with `bounded(lb, w, ub)` (see
+[The CasADi front end](@ref)):
 
 ```@example sciml
 opti = Opti()
@@ -215,8 +215,7 @@ branch = continuation(problem, PALC(), ContinuationPar(p_min = -2.0, p_max = 2.0
 ```
 
 Packages that read the names of a problem, such as DynamicalSystemsBase.jl and
-Attractors.jl, take the states and parameters by name, and a `TangentDynamicalSystem` uses
-the generated `jac`:
+Attractors.jl, take the states and parameters by name:
 
 ```@example sciml
 using Attractors: CoupledODEs, observe_state, current_parameter

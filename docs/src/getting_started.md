@@ -1,8 +1,8 @@
 # Getting started
 
 We write a small model with CasADi, generate Julia functions for it and its Jacobian, call
-them with arrays, static arrays and a sparse matrix, solve an ODE with them, and write the
-same functions to a file.
+them with arrays, static arrays and a sparse matrix, differentiate them, solve an ODE with
+a model of the same kind, and write the functions to a file.
 
 ## Write the model
 
@@ -56,8 +56,8 @@ typeof(J)
 ```
 
 `force_SA = true` returns static arrays for any input. Static arrays hold at most 1024
-elements over all outputs of one function, such as the Jacobian of 32 states; above that,
-the function returns ordinary arrays with a warning.
+elements over all outputs of one function together; above that, a static input gives
+ordinary arrays with a warning, and `force_SA = true` throws an `ArgumentError`.
 
 ## Fill a sparse Jacobian
 
@@ -74,8 +74,8 @@ Js
 
 ## Differentiate the generated code
 
-The generated code takes the dual numbers of ForwardDiff.jl, for a derivative that CasADi
-did not build:
+The generated code takes the dual numbers of ForwardDiff.jl; here they reproduce the
+Jacobian that CasADi built:
 
 ```@example start
 import ForwardDiff
@@ -86,8 +86,9 @@ ForwardDiff.jacobian(x -> g(x)[1], [0.3, 1.7, -0.4]) ≈ J
 ## Solve an ODE
 
 A CasADi function of the state, the parameters and the time is the right side of a SciML
-problem, with generated code for its Jacobians. The problem takes the names of the scalar
-symbols, and each result after the first is an observed variable:
+problem, with generated code for its Jacobians. The states and parameters take the names
+of the scalar symbols, and each result after the first is an observed variable named after
+the result:
 
 ```@example start
 using OrdinaryDiffEqTsit5: Tsit5
@@ -111,7 +112,7 @@ the file:
 
 ```@example start
 path = joinpath(mktempdir(), "f.jl")
-generate_julia(f, path; module_name = :F)
+generate_julia(f, path)                       # the module F, after the function f
 include(path)
 F.f([0.3, 1.7, -0.4])[1], F.DEPENDENCIES
 ```
@@ -125,12 +126,13 @@ F.f([0.3, 1.7, -0.4])[1], F.DEPENDENCIES
 | `build_function(f; expression = Val{false}, cache = true)` | The same, cached for later sessions | Yes |
 | `generate_julia(f, path)` | A module in a file | No, unless the model holds a SciML solver |
 
-The first call of a function compiles it, which takes seconds for a model of thousands of
-operations; [Large functions and the cache on disk](@ref) shortens that.
+The first call of a function compiles it, which takes seconds for a graph of tens of
+thousands of instructions; [Large functions and the cache on disk](@ref) shortens that.
 
 ## Next steps
 
 - A model written as Julia code: [From a Julia problem to generated code](@ref).
+- A model saved by CasADi from Python, MATLAB or C++: [Load a model from another language](@ref).
 - An integrator inside the graph, with its derivatives in a fit:
   [Estimate parameters through an integrator](@ref).
 - Equations with algebraic states: [Model physical systems with differential-algebraic equations](@ref).
