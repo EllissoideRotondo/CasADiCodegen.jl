@@ -6,16 +6,10 @@ its Julia front end [CasADiNative.jl](https://github.com/casadi/CasADiNative.jl)
 Julia functions that run without CasADi and accept arrays, static arrays, sparse matrices
 and ForwardDiff.jl dual numbers.
 
-Features:
-
-- Functions for the current session with [`build_function`](@ref), or a module on disk
-  with [`generate_julia`](@ref), each in an out-of-place and an in-place form.
-- Models saved by CasADi from Python, MATLAB or C++, generic Julia code traced into
-  CasADi, and equations with time derivatives compiled by `CasADiCodegen.Models`.
-- Calls to Julia functions inside a model, with user or automatic derivatives.
-- Integrators, rootfinders and optimization solvers inside a model, solved by SciML
-  packages in the generated code.
-- CasADi functions as `ODEFunction`, `NonlinearFunction` and `OptimizationFunction`.
+A model enters as a CasADi function built in Julia, as a file saved by CasADi from Python,
+MATLAB or C++, as generic Julia code traced into CasADi, or as equations compiled by
+`CasADiCodegen.Models`. The generated code can call Julia functions and SciML solvers, and
+it serves as the function of a SciML problem.
 
 To evaluate a model with CasADi itself, in C or with its solvers, use the CasADi front
 end and its C code generation instead.
@@ -30,103 +24,8 @@ pkg> add https://github.com/Orbitology/CasADiCodegen.jl
 
 CasADiNative.jl, a dependency, brings the binaries of CasADi 3.8.2.
 
-## Contents
-
-### Getting started
-
-```@contents
-Pages = ["getting_started.md"]
-Depth = 2
-```
-
-### Tutorials
-
-The tutorials solve the problems of the ModelingToolkit.jl documentation with CasADi
-models and SciML solvers.
-
-```@contents
-Pages = [
-    "tutorials/ode_modeling.md",
-    "tutorials/nonlinear.md",
-    "tutorials/optimization.md",
-    "tutorials/sparse_jacobians.md",
-    "tutorials/dae_models.md",
-    "tutorials/initialization.md",
-    "tutorials/events.md",
-    "tutorials/bang_bang.md",
-    "tutorials/stochastic.md",
-    "tutorials/discrete.md",
-    "tutorials/callable_parameters.md",
-    "tutorials/bifurcation.md",
-    "tutorials/traced_problems.md",
-    "tutorials/linear_analysis.md",
-    "tutorials/independent_variable.md",
-    "tutorials/perturbation.md",
-    "tutorials/attractors.md",
-    "tutorials/parameter_estimation.md",
-    "tutorials/dynamic_optimization.md",
-    "tutorials/large_models.md",
-]
-Depth = 1
-```
-
-### Models
-
-```@contents
-Pages = [
-    "howto/equations.md",
-    "howto/load_model.md",
-    "howto/symbolics.md",
-    "howto/traced_models.md",
-    "howto/callbacks.md",
-    "howto/integrators.md",
-    "howto/events.md",
-    "howto/discontinuities.md",
-    "howto/rootfinders.md",
-    "howto/linearize.md",
-]
-Depth = 1
-```
-
-### Solvers and SciML
-
-```@contents
-Pages = [
-    "howto/casadi_solvers.md",
-    "howto/sciml_functions.md",
-    "howto/autodiff_rules.md",
-]
-Depth = 1
-```
-
-### Large models and debugging
-
-```@contents
-Pages = [
-    "howto/large_functions.md",
-    "howto/inspect.md",
-]
-Depth = 1
-```
-
-### Concepts
-
-```@contents
-Pages = [
-    "explanation/matrix_code.md",
-    "explanation/integrator_derivatives.md",
-    "explanation/performance.md",
-    "explanation/scope.md",
-]
-Depth = 1
-```
-
-### Reference
-
-```@contents
-Pages = ["api.md", "api_sciml.md"]
-Depth = 1
-```
+Start with [Getting started](@ref); [Scope and differences from CasADi](@ref) lists what
+the package supports.
 
 ## Contributing
 

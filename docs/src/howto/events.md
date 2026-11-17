@@ -7,11 +7,9 @@ of the state there. This page uses the model `x`, `mu`, `ode` and the symbols `x
 ## Find one event
 
 With free times, put an event function of the state, the parameters and the time in the
-entry `"zero"`. The integration ends at the first change of sign, at the time `te`, and
-returns the state there, the quadratures if any, and `te`. A zero at the initial time is
-not an event, and a call throws when fewer events than `events` come before `tf`, unless
-`exact = false` (see [Pass up to a number of events](@ref)). Here we stop at the next apsis
-of an orbit, where the radial speed is zero:
+entry `"zero"`. The integration ends at the first change of sign and returns the state
+there and the event time `te`. This one stops at the next apsis of an orbit, where the
+radial speed is zero:
 
 ```julia
 apsis = integrator("apsis", Vern9(), Dict("x" => x, "p" => mu, "ode" => ode, "zero" => x[1] * x[3] + x[2] * x[4]);
@@ -20,8 +18,7 @@ xe, te = apsis(x0, p, t0, tf)
 f = CasadiFunction("f", [x0, p, t0, tf], [xe, te, jacobian(xe, x0), jacobian(te, x0)])
 ```
 
-CasADi differentiates the event time and the state at the event to any order, and the
-integrator also takes dual numbers. Three keywords control the search:
+Three keywords control the search:
 
 | Keyword | Default | Effect |
 |---|---|---|
@@ -29,8 +26,7 @@ integrator also takes dual numbers. Three keywords control the search:
 | `interp_points` | 10, as in SciML | The number of points of each step, besides its end, at which the solver looks for the change; 0 is faster, but can miss two changes of sign in one step |
 | `specialize` | `SciMLBase.FullSpecialize` | With `SciMLBase.AutoSpecialize`, after `import SciMLBase`, the solver compiles once for all event functions |
 
-The default `direction = 0` differs from the integrators of CasADi, which find a change
-from positive to negative only. For the orbit above, measured once:
+For the orbit above, measured once:
 
 | Outputs | `interp_points = 10` | `interp_points = 0` |
 |---|---|---|
@@ -40,11 +36,9 @@ from positive to negative only. For the orbit above, measured once:
 
 ## Pass several events
 
-Pass `events`, the number of events (1 by default), and give the state after an event in
-the entry `"transition"`; `te` is then the vector of event times. With the default
-`terminal = true` the integration ends at the last event, before its transition; with
-`terminal = false` it applies the transition and continues to `tf`. A ball that bounces
-three times:
+Pass `events` and give the state after an event in the entry `"transition"`; `te` is
+then a vector. With `terminal = false` the integration applies the last transition too
+and goes on to `tf`. A ball that bounces three times:
 
 ```julia
 s, c = MX.sym("s", 2), MX.sym("c", 2)                    # s = [height, speed], c = [gravity, restitution]
@@ -59,9 +53,8 @@ sf, te = bounce(s0, c0, t0, tf)                           # te has the three tim
 ## Several event functions
 
 Make `"zero"` a column of event functions, and `"transition"` one column for all of them
-or one column per function. The function then returns one more result, `ie`, the index
-from 1 of the function behind each event; when two change their sign in one root search,
-the first counts. A ball in a box with drag bounces on the floor `x = 0` and between the
+or one column per function. The further result `ie` holds the function behind each event;
+when two change their sign in one root search, the first counts. A ball in a box with drag bounces on the floor `x = 0` and between the
 walls `y = ±1.5`:
 
 ```julia
@@ -80,9 +73,8 @@ with a zero element of `"ode"`.
 
 ## Pass up to a number of events
 
-With `exact = false`, `events` is an upper bound: the integration passes at most
-`events` events and goes on to `tf`, and the last result `ne` is their number. A missing
-event has the time `tf` and the index 0 in `ie`:
+With `exact = false`, `events` is an upper bound, and the last result `ne` is the number
+of events:
 
 ```julia
 walls = integrator("walls", Vern9(), box; events = 40, exact = false, terminal = false, direction = -1)
@@ -98,12 +90,7 @@ For the box above, from `s = [1, 0, 0, 2]` to `t = 10` with `Tsit5()` at the tol
 | Three event functions, `events = 17` | 0.25 ms | 54 kB |
 | Three event functions, `events = 40, exact = false` | 0.41 ms | 112 kB |
 
-The three forms gave the same contact times to `3e-10`; the product form needs the
-number of contacts in advance and can pick the wrong wall when two factors are small
-together. For an integrator of CasADi with events, see [Integrators with events](@ref).
-
-## Switches in the right side
-
-A switch on the state written in `"ode"`, such as an `if_else`, gives wrong derivatives,
-and the integrator warns when it is built; [Discontinuous models](@ref discontinuities)
-gives such switches as events with the keyword `modes`.
+The three forms gave the same contact times to `3e-10`. The first two need the exact
+number of contacts, here 17; `exact = false` needs only a bound. The product form can
+also pick the wrong wall when two factors are small together. For an integrator of CasADi
+with events, see [Integrators with events](@ref).

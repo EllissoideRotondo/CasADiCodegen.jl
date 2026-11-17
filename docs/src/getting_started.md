@@ -1,23 +1,16 @@
 # Getting started
 
-We write a small model with CasADi, generate Julia functions for it and its Jacobian,
-and call them with arrays, static arrays and a sparse matrix; we then write the same
-functions to a file.
+We write a small model with CasADi, generate Julia functions for it and its Jacobian, call
+them with arrays, static arrays and a sparse matrix, differentiate them, solve an ODE with
+a model of the same kind, and write the functions to a file.
 
 ## Write the model
 
 `using CasADiCodegen` loads [CasADiNative.jl](https://github.com/casadi/CasADiNative.jl),
 the Julia front end of CasADi 3.8.2, whose calls follow the
-[CasADi documentation](https://web.casadi.org/docs/) for Python, with these differences:
-
-- `SX`, `MX`, `DM`, `jacobian`, `gradient`, `hessian`, `substitute`, `nlpsol` and the
-  `Opti` functions `Opti`, `variable`, `parameter`, `minimize`, `subject_to`, `bounded`,
-  `set_initial`, `solve` and `value` are exported. Every other function is in the
-  exported module `casadi`, as in Python: `casadi.set_value`, `casadi.sumsqr`.
-- `CasadiFunction` makes a CasADi function, since `Function` is a Julia type.
-- Operations have their Julia meaning: `*` is the matrix product, `sin.(x)` and `x .^ 2`
-  act on each element, and `[a; b]` concatenates.
-- Indices start at 1, except in CasADi methods that take the index of an input or output.
+[CasADi documentation](https://web.casadi.org/docs/) for Python, with the differences
+listed in [The CasADi front end](@ref). `CasadiFunction` makes a CasADi function, since
+`Function` is a Julia type:
 
 ```@example start
 using CasADiCodegen
@@ -63,11 +56,8 @@ typeof(J)
 ```
 
 `force_SA = true` returns static arrays for any input. Static arrays hold at most 1024
-elements over all outputs of one function, such as the Jacobian of 32 states. Above that
-limit, the function returns ordinary arrays with a warning, and an explicit request for
-static arrays throws an `ArgumentError`: `force_SA = true` here, or `inplace = false` in a
-[SciML constructor](@ref "Give a CasADi function to a SciML problem"), which applies the
-limit to each generated array.
+elements over all outputs of one function together; above that, a static input gives
+ordinary arrays with a warning, and `force_SA = true` throws an `ArgumentError`.
 
 ## Fill a sparse Jacobian
 
@@ -82,41 +72,50 @@ g!((zeros(2), Js), ([0.3, 1.7, -0.4],))
 Js
 ```
 
+## Differentiate the generated code
+
+The generated code takes the dual numbers of ForwardDiff.jl; here they reproduce the
+Jacobian that CasADi built:
+
+```@example start
+import ForwardDiff
+
+ForwardDiff.jacobian(x -> g(x)[1], [0.3, 1.7, -0.4]) ≈ J
+```
+
+## Solve an ODE
+
+A CasADi function of the state, the parameters and the time is the right side of a SciML
+problem, with generated code for its Jacobians. The states and parameters take the names
+of the scalar symbols, and each result after the first is an observed variable named after
+the result:
+
+```@example start
+using OrdinaryDiffEqTsit5: Tsit5
+import SciMLBase
+
+u, τ, t = SX.sym("u"), SX.sym("τ"), SX.sym("t")
+lag = CasadiFunction("lag", [u, τ, t], [(sin(t) - u) / τ, sin(t) - u], ["u", "τ", "t"], ["du", "error"])
+problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(lag), [0.0], (0.0, 10.0), [0.5])
+solution = SciMLBase.solve(problem, Tsit5())
+solution[:error][end], SciMLBase.remake(problem; p = [:τ => 2.0]).p
+```
+
+A new parameter value needs no new code. [Use the generated code with SciML packages](@ref)
+covers the other problems.
+
 ## Write the code to a file
 
 [`generate_julia`](@ref) writes the functions to a module that runs without
-CasADiCodegen.jl:
+CasADiCodegen.jl; each package of `F.DEPENDENCIES` must be in the environment that loads
+the file:
 
 ```@example start
 path = joinpath(mktempdir(), "f.jl")
-generate_julia(f, path; module_name = :F)
+generate_julia(f, path)                       # the module F, after the function f
 include(path)
-F.f([0.3, 1.7, -0.4])[1]
+F.f([0.3, 1.7, -0.4])[1], F.DEPENDENCIES
 ```
-
-```@example start
-F.f!(out, ([0.3, 1.7, -0.4],))
-out[2]
-```
-
-The module also holds `F.f_nonzeros!` (see [Choose a form](@ref)) and these constants:
-
-| Constant | Content |
-|---|---|
-| `NAME`, `NAMES_IN`, `NAMES_OUT` | Names of the function, its inputs and outputs |
-| `NNZ_IN`, `NNZ_OUT` | Numbers of structural nonzeros of inputs and outputs |
-| `NWORK` | Length of the work vector |
-| `SPARSITY_IN`, `SPARSITY_OUT` | Patterns `(nrow, ncol, colptr, rowval)`, indices from 1 |
-| `DEPENDENCIES` | Packages that the module imports |
-
-Each package of `DEPENDENCIES` must be in the environment that loads the file:
-
-```@example start
-F.DEPENDENCIES
-```
-
-A model with an integrator, a rootfinder or a solver also needs CasADiCodegen.jl,
-SciMLBase.jl and the package of the algorithm.
 
 ## Choose a form
 
@@ -127,6 +126,14 @@ SciMLBase.jl and the package of the algorithm.
 | `build_function(f; expression = Val{false}, cache = true)` | The same, cached for later sessions | Yes |
 | `generate_julia(f, path)` | A module in a file | No, unless the model holds a SciML solver |
 
-`nonzeros = true` gives one function `(res, arg) -> res` on the structural nonzeros of
-each input and output, in column-major order, as CasADi evaluates it; `generate_julia`
-writes it as `<name>_nonzeros!`.
+The first call of a function compiles it, which takes seconds for a graph of tens of
+thousands of instructions; [Large functions and the cache on disk](@ref) shortens that.
+
+## Next steps
+
+- A model written as Julia code: [From a Julia problem to generated code](@ref).
+- A model saved by CasADi from Python, MATLAB or C++: [Load a model from another language](@ref).
+- An integrator inside the graph, with its derivatives in a fit:
+  [Estimate parameters through an integrator](@ref).
+- Equations with algebraic states: [Model physical systems with differential-algebraic equations](@ref).
+- What the package supports, and where it differs from CasADi: [Scope and differences from CasADi](@ref).
