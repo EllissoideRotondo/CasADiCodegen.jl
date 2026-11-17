@@ -1,8 +1,21 @@
 using Documenter
 using CasADiCodegen
-import SciMLBase, ChainRulesCore, SparseArrays, OptimizationIpopt, BifurcationKit
+# Symbolics.jl loads its extension here, so that its precompilation prints nothing in a doctest.
+import SciMLBase, ChainRulesCore, SparseArrays, OptimizationIpopt, BifurcationKit, Symbolics
 
 extension(name) = Base.get_extension(CasADiCodegen, name)
+
+# `checkdocs` cannot tell the names of the package from those that it takes from the CasADi
+# front end, so the reference is checked here: each exported or public name of the package,
+# and each name that `CasADiCodegen.Models` exports, must be an entry of a `@docs` block.
+let front = Set(names(CasADiCodegen.Codegen.Front)),
+    own = [string(n) for n in names(CasADiCodegen) if !(n in front) && n !== :CasADiCodegen],
+    models = ["Models." * string(n) for n in names(CasADiCodegen.Models) if n !== :Models],
+    entries = join((m[1] for page in ("api.md", "api_sciml.md")
+                    for m in eachmatch(r"```@docs\n(.*?)```"s, read(joinpath(@__DIR__, "src", page), String))), "\n")
+    missing = [n for n in [own; models] if !occursin(Regex("(^|[.\\s])" * replace(n, "." => "\\.") * "([(\\s]|\$)", "m"), entries)]
+    isempty(missing) || error("the reference lists no docstring of: ", join(missing, ", "))
+end
 
 makedocs(;
     sitename = "CasADiCodegen.jl",

@@ -14,6 +14,7 @@ write the prefix for all of them.
 
 ```@docs
 CasadiFunction
+CasADiCodegen.casadi
 CasADiCodegen.casadi_function
 build_function
 generate_julia

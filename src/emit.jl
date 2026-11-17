@@ -506,9 +506,9 @@ a matrix; `g` returns one of one column as a vector by default, and as a matrix 
   elements in all give `Vector` and `Matrix` for any argument, with a warning at the
   first call with a static array.
 - `g!` fills the arrays of the tuple `res` from the tuple `arg` and returns `res`. An array
-  of `res` can be a mutable static array. An array of `res` that shares memory with an
-  array of `arg` throws an `ArgumentError`, since the code reads the arguments while it
-  writes the results. An array of `res` or `arg` needs the number of
+  of `res` can be a mutable static array and must not share memory with an array of
+  `arg`, since the code reads the arguments while it writes the results. An array of
+  `res` or `arg` needs the number of
   elements of its output or input only, so a vector and a matrix of one column both serve
   for a column.
 - A structural zero of an output is set to zero. A structural zero of an input is not read.
@@ -520,14 +520,10 @@ a matrix; `g` returns one of one column as a vector by default, and as a matrix 
   only, so a call costs as much as the function on nonzeros. Do not change the index
   vectors of a matrix in place.
 
-`f` must have no free symbols and only supported operations; see
-[Scope and differences from CasADi](@ref).
-
 # Keywords
 - `expression = Val{true}`: `Val{true}` returns an `Expr`, and `Val{false}` returns
   compiled functions.
-- `force_SA = false`: with `true`, `g` returns static arrays for any argument. It throws
-  an `ArgumentError` for outputs with more than 1024 elements in all.
+- `force_SA = false`: with `true`, `g` returns static arrays for any argument.
 - `nonzeros = false`: with `true`, return the single function `(res, arg) -> res` on which
   the others are built. `arg[i]` holds the structural nonzeros of input `i`, and `res[j]`
   receives those of output `j`, as CasADi evaluates a function.
@@ -563,8 +559,19 @@ a matrix; `g` returns one of one column as a vector by default, and as a matrix 
   call of a large function and can slow the later calls. It needs `expression = Val{false}`,
   and with `cache` it sets the level of the cached package.
 - `solvers = nothing`: a [`CasADiCodegen.Solvers`](@ref Solvers) with the SciML solvers that the
-  code calls in place of the solver objects of CasADi in the graph. Generated code never
-  calls CasADi, so such an object with no solver throws an `ArgumentError`.
+  code calls in place of the solver objects of CasADi in the graph, since generated code
+  never calls CasADi.
+
+Throws an `ArgumentError`:
+- when `f` has free symbols or an operation outside the scope of the package (see
+  [Scope and differences from CasADi](@ref));
+- when `f` calls a solver object of CasADi that `solvers` does not replace;
+- when `name` does not end with `!` and `nonzeros` is not set;
+- with `force_SA = true` for outputs with more than 1024 elements in all;
+- with `cache` or `optlevel` and `expression = Val{true}`, or an `optlevel` outside 0 to 3.
+
+`g` and `g!` throw an `ArgumentError` for a wrong number or size of arrays, and `g!` for
+an array of `res` that shares memory with an array of `arg`.
 
 # Examples
 ```jldoctest
