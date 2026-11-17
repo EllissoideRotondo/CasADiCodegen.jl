@@ -40,6 +40,20 @@ count_checks(alg, ref) = Any[
     :(length(res) == $(length(alg.sparsity_out)) || $(ref(:Helpers, :shape_error))($("$(alg.name): expected $(length(alg.sparsity_out)) results, got "), length(res))),
 ]
 
+"""
+    aliasing_check(alg, ref) -> Vector{Expr}
+
+The statement that refuses a result array that shares memory with an argument array: the
+code reads the arguments in place while it writes the results, and zeroes a sparse result
+first. Each pair is a term of its own, so that a tuple of arrays of several types needs
+no dynamic call.
+"""
+function aliasing_check(alg, ref)
+    terms = [:($(ref(:Helpers, :aliased))(res[$j], arg[$i])) for j in eachindex(alg.sparsity_out) for i in eachindex(alg.sparsity_in)]
+    isempty(terms) && return Any[]
+    Any[:($(foldl((a, b) -> :($a || $b), terms)) && $(ref(:Helpers, :alias_error))($(alg.name)))]
+end
+
 zero_fills(alg) = Any[:(fill!(res[$j], 0)) for (j, sp) in enumerate(alg.sparsity_out) if !is_dense(sp)]
 
 """
@@ -94,7 +108,7 @@ function inplace_function(alg, signature, frame, core, index, check, ref, key)
     body = frame === nothing ? Any[inbounds_block(whole_statements(alg, ref; matrix_access(alg)...))] :
            framed_body(alg, frame, ref, key; matrix_places(alg, index)...)
     Expr(:function, signature, Expr(:block, count_checks(alg, ref)..., shape_checks(alg, ref; results = true)...,
-        sparse..., zero_fills(alg)..., body..., :(return res)))
+        aliasing_check(alg, ref)..., sparse..., zero_fills(alg)..., body..., :(return res)))
 end
 
 argument_names(alg) = [Symbol(:arg, i) for i in eachindex(alg.sparsity_in::Vector{casadi.Sparsity})]

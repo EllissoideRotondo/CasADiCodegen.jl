@@ -222,6 +222,9 @@ end
 whole_statements(alg::Algorithm, ref; kwargs...) =
     chunk_statements(alg, eachindex(alg.instructions), Int[], Int[], ref; kwargs...)
 
+"The number of nonzeros from which matrix code writes a result to `res` without the frame (see `framed_body`)."
+const DIRECT_RESULT = 64
+
 """
     framed_body(alg, frame, ref, key; place_in, place_out, results = true) -> Vector{Any}
 
@@ -230,8 +233,11 @@ Return the statements that run code which works in the work vector. `frame` is
 statements over `w`. The result binds `w`, copies the nonzeros of each array of `arg` into
 it, runs the statements and, with `results`, copies the nonzeros of each result to `res`.
 A layout `(offset_in, offset_out, total, true)` of matrix code (see `emission`) has
-statements that read argument `i` as the vector `input_name(i)` of its nonzeros; that
-name is bound to `arg[i]` itself where nonzero `k` is element `k`, without a copy.
+statements that read argument `i` as the vector `input_name(i)` of its nonzeros and write
+a result `j` of `DIRECT_RESULT` nonzeros or more to `output_name(j)`. The first is bound to
+`arg[i]` itself where nonzero `k` is element `k`, without a copy, and the second to
+`res[j]` itself under the same condition when the result shares no memory with an
+argument; otherwise to its frame, which the stores copy.
 
 `place_in(i)` is the expression for the position in `arg[i]` of nonzero `k`, and
 `place_out(j)` is that in `res[j]`. Both are `k` by default.
@@ -250,8 +256,18 @@ function framed_body(alg, frame, ref, key; place_in = i -> :k, place_out = j -> 
             direct && push!(names, :($(input_name(i)) = view(w, $(offset_in[i] + 1):$(offset_in[i] + n))))
         end
     end
-    stores = !results ? Any[] :
-        Any[loop(n, :(res[$j][$(place_out(j))] = w[$(offset_out[j]) + k])) for (j, n) in enumerate(alg.nnz_out) if n > 0]
+    store(j, n) = loop(n, :(res[$j][$(place_out(j))] = w[$(offset_out[j]) + k]))
+    frame_view(j, n) = :(view(w, $(offset_out[j] + 1):$(offset_out[j] + n)))
+    # With `direct`, the statements write result `j` to `output_name(j)`: the array of `res`
+    # itself when it takes the nonzeros in order and has `DIRECT_RESULT` of them or more,
+    # else the frame, which the stores copy. A result never shares memory with an argument
+    # (`aliasing_check`).
+    straight = [direct && results && n >= DIRECT_RESULT && place_out(j) === :k for (j, n) in enumerate(alg.nnz_out)]
+    for (j, n) in enumerate(alg.nnz_out)
+        (direct && n >= DIRECT_RESULT) || continue
+        push!(names, :($(output_name(j)) = $(straight[j] ? :(view(res[$j], 1:$n)) : frame_view(j, n))))
+    end
+    stores = !results ? Any[] : Any[store(j, n) for (j, n) in enumerate(alg.nnz_out) if n > 0 && !straight[j]]
     Any[work_vector(ref, key, total), inbounds_block(Any[loads..., names..., statements..., stores...])]
 end
 
@@ -283,7 +299,7 @@ all statements of scalar code without a frame, or the statements of
 """
 function entry_function(alg, signature, frame, ref, key)
     body = frame === nothing ? Any[inbounds_block(whole_statements(alg, ref))] : framed_body(alg, frame, ref, key)
-    Expr(:function, signature, Expr(:block, io_checks(alg, ref)..., body..., :(return res)))
+    Expr(:function, signature, Expr(:block, io_checks(alg, ref)..., aliasing_check(alg, ref)..., body..., :(return res)))
 end
 
 chunk_function(signature, statements) =
@@ -346,10 +362,10 @@ function matrix_algorithm(f::casadi.Function, expand::Bool, solvers::Union{Nothi
     # The readers of the called functions find the solvers of the user in `SOLVERS`.
     Base.ScopedValues.with(SOLVERS => solvers) do
         expand || return MXAlgorithm(f; expand)
-        expanded = expanded_algorithm(f)
+        expanded = expanded_algorithm(f; bounded = true)
         expanded === nothing || return expanded
         staged = staged_algorithm(f)
-        staged === nothing ? MXAlgorithm(f; expand) : staged
+        staged === nothing ? read_mx(f, expand, Dict{Int,Any}()) : staged
     end
 end
 
@@ -361,14 +377,103 @@ function matrix_function(f::casadi.Function)
                [casadi.name_in(f, i) for i in 0:casadi.n_in(f)-1], [casadi.name_out(f, j) for j in 0:casadi.n_out(f)-1])
 end
 
-"The scalar algorithm of the expanded matrix function `f`, or `nothing` when there is none."
-function expanded_algorithm(f::casadi.Function)
-    try
-        Algorithm(casadi.expand(f))
+"""
+The number of scalar instructions from which code generation keeps the calls of a matrix
+function that grows by more than `EXPAND_GROWTH` when expanded (see `expanded_algorithm`).
+"""
+const EXPAND_LIMIT = 20_000
+"The growth of a matrix function by expansion beyond which `EXPAND_LIMIT` applies."
+const EXPAND_GROWTH = 10
+
+"""
+    expanded_algorithm(f; bounded = false) -> Algorithm or nothing
+
+The scalar algorithm of the expanded matrix function `f`, or `nothing` when there is none.
+With `bounded`, also `nothing` when the expansion has more than `EXPAND_LIMIT`
+instructions and more than `EXPAND_GROWTH` times those of `f` and the functions it calls,
+each counted once (`distinct_size`): the expansion then repeats a called function, such as
+the step of an integrator in its loop, and the matrix reader keeps the calls instead.
+"""
+function expanded_algorithm(f::casadi.Function; bounded::Bool = false)
+    # The calls alone, as CasADi would repeat them, can show the growth before any expansion.
+    if bounded
+        distinct, repeated = call_sizes(f)
+        repeated > EXPAND_LIMIT && repeated > EXPAND_GROWTH * distinct && return nothing
+    end
+    expanded = try
+        casadi.expand(f)
     catch err
         err isa Union{ArgumentError,casadi.SwigError} || rethrow()
+        return nothing
+    end
+    n = casadi.n_instructions(expanded)
+    bounded && n > EXPAND_LIMIT && n > EXPAND_GROWTH * distinct_size(f) && return nothing
+    try
+        Algorithm(expanded)
+    catch err
+        err isa ArgumentError || rethrow()
         nothing
     end
+end
+
+"""
+    distinct_size(f) -> Int
+
+The instructions of `f` and of the scalar and matrix functions that it calls, directly or
+not, each function counted once; a map counts as its copies of the body, and a function
+of another class as one.
+"""
+distinct_size(f::casadi.Function) = first(call_sizes(f))
+
+"""
+    call_sizes(f) -> (distinct, repeated)
+
+The instructions of `f` and of the scalar and matrix functions that it calls, directly or
+not: each function counted once (`distinct`), and as often as it is called (`repeated`).
+Both count a map as its copies of the body, which its expansion writes out side by side,
+and a function of another class as one instruction. Both count a matrix operation as
+one instruction, so `repeated` is at most the size of the expansion of `f`.
+"""
+function call_sizes(f::casadi.Function)
+    repeated = Dict{Int,Int}()               # by the identity of a function
+    function walk(g)
+        key = casadi.__hash__(g)
+        haskey(repeated, key) && return repeated[key]
+        body = map_body(g)
+        body === nothing || return repeated[key] = last(body) * walk(first(body))
+        own = casadi.is_a(g, "SXFunction") || casadi.is_a(g, "MXFunction") ? casadi.n_instructions(g) : 1
+        total = own
+        if casadi.is_a(g, "MXFunction")
+            for k in 0:own-1
+                casadi.instruction_id(g, k) == casadi.OP_CALL && (total += walk(casadi.which_function(casadi.instruction_MX(g, k))))
+            end
+        end
+        repeated[key] = total
+    end
+    total = walk(f)
+    distinct = 0
+    seen = Set{Int}()
+    function count(g)
+        key = casadi.__hash__(g)
+        key in seen && return
+        push!(seen, key)
+        body = map_body(g)
+        body === nothing || return distinct += last(body) * walk(first(body))
+        mx = casadi.is_a(g, "MXFunction")
+        distinct += mx || casadi.is_a(g, "SXFunction") ? casadi.n_instructions(g) : 1
+        mx && for k in 0:casadi.n_instructions(g)-1
+            casadi.instruction_id(g, k) == casadi.OP_CALL && count(casadi.which_function(casadi.instruction_MX(g, k)))
+        end
+    end
+    count(f)
+    distinct, total
+end
+
+"The body of a map and its number of copies, or `nothing` for other functions."
+function map_body(g::casadi.Function)
+    casadi.class_name(g) in ("Map", "ThreadMap", "OmpMap") || return nothing
+    info = casadi.info(g)
+    info["f"]::casadi.Function, Int(info["n"])
 end
 
 check_optlevel(optlevel) =
@@ -385,14 +490,12 @@ expression_flag(other) =
                    chunk_size = nothing, split_above = nothing,
                    nanmath = true, expand = true, cache = false, solvers = nothing, optlevel = nothing)
 
-Generate Julia code for the CasADi function `f`, in the manner of
-`Symbolics.build_function`. Return an out-of-place function `g(arg1, arg2, ...)` and an
+Generate Julia code for the CasADi function `f`. Return an out-of-place function `g(arg1, arg2, ...)` and an
 in-place function `g!(res, arg)`: as one `Expr` with the two definitions by default, or as
 the pair `(g, g!)` of compiled functions with `expression = Val{false}`.
 
-Both functions take arrays in matrix shape. CasADi has no vector type, so every output is
-a matrix; `g` returns one of one column as a vector by default, and as a matrix with
-`vector_columns = false`.
+Both functions take arrays in matrix shape. `g` returns an output of one column as a
+vector, and as a matrix with `vector_columns = false`.
 
 - `g` takes one array per input. It returns one array for one output, and a tuple of
   arrays otherwise. The arrays are `SVector` and `SMatrix` when the first argument is a
@@ -401,61 +504,62 @@ a matrix; `g` returns one of one column as a vector by default, and as a matrix 
   elements in all give `Vector` and `Matrix` for any argument, with a warning at the
   first call with a static array.
 - `g!` fills the arrays of the tuple `res` from the tuple `arg` and returns `res`. An array
-  of `res` can be a mutable static array. An array of `res` or `arg` needs the number of
+  of `res` can be a mutable static array and must not share memory with an array of
+  `arg`, since the code reads the arguments while it writes the results. An array of
+  `res` or `arg` needs the number of
   elements of its output or input only, so a vector and a matrix of one column both serve
   for a column.
 - A structural zero of an output is set to zero. A structural zero of an input is not read.
 - With SparseArrays.jl loaded, an array of `res` or `arg` can be a `SparseMatrixCSC` with
   the sparsity pattern of that output or input, which `SparseMatrixCSC(sparsity)` makes.
-  `g!` then reads and writes the stored values only. It compares the whole pattern of a
-  matrix whose index vectors (`colptr` and `rowval`) are not those of the last matrix that
-  passed this comparison. Otherwise it compares the number of rows and of stored values
-  only, so a call costs as much as the function on nonzeros. Do not change the index
-  vectors of a matrix in place.
-
-`f` must have no free symbols and only supported operations; see
-[Scope and differences from CasADi](@ref).
+  `g!` then reads and writes the stored values only. Do not change the index vectors of a
+  matrix in place.
 
 # Keywords
 - `expression = Val{true}`: `Val{true}` returns an `Expr`, and `Val{false}` returns
   compiled functions.
-- `force_SA = false`: with `true`, `g` returns static arrays for any argument. It throws
-  an `ArgumentError` for outputs with more than 1024 elements in all.
+- `force_SA = false`: with `true`, `g` returns static arrays for any argument.
 - `nonzeros = false`: with `true`, return the single function `(res, arg) -> res` on which
   the others are built. `arg[i]` holds the structural nonzeros of input `i`, and `res[j]`
   receives those of output `j`, as CasADi evaluates a function.
 - `vector_columns = true`: with `false`, `g` returns each output in the shape that CasADi
   gives it: a column of `n` elements, and a scalar, become a `Matrix` of size `(n, 1)`, or
-  an `SMatrix{n,1}` for a static argument. A function whose outputs then have a fixed
-  number of dimensions, such as the matrices of a linearization, needs this. It does not
-  change `g!` or the function of `nonzeros`.
+  an `SMatrix{n,1}` for a static argument. It does not change `g!`.
 - `name`: the name of `g!` in the returned `Expr`, a valid identifier. It must end with
   `!` unless `nonzeros` is set. The name of `g` is `name` without `!`.
 - `chunk_size = nothing`, `split_above = nothing`: a function with more than `split_above`
-  instructions is split into sub-functions of at most `chunk_size` instructions. This
-  shortens the compilation of a large function and costs some speed. `chunk_size` is
-  $DEFAULT_CHUNK_SIZE by default. `split_above` is `chunk_size` when that is given;
+  instructions is split into sub-functions of at most `chunk_size` instructions, which
+  compile faster. `chunk_size` is $DEFAULT_CHUNK_SIZE by default. `split_above` is `chunk_size` when that is given;
   otherwise it is $UNSPLIT_LIMIT for scalar code and $DEFAULT_CHUNK_SIZE operations for
   matrix code. See [Large functions and the cache on disk](@ref).
 - `nanmath = true`: an operation outside its domain returns NaN through NaNMath.jl, as in
   CasADi. With `false` it throws a `DomainError`, as in Base, and the code accepts any
   real number type.
 - `expand = true`: a matrix (MX) function is expanded to scalar operations where CasADi
-  can do that. With `false` the code keeps the matrix operations. See
+  can do that and the expansion does not repeat a called function many times, as the step
+  of an integrator. With `false` the code keeps the matrix operations. See
   [Matrix code and functions without instructions](@ref).
 - `cache = false`: with `true` or a directory, the compiled functions come from a package
-  on disk that Julia compiles once, so a later session compiles nothing. It needs
-  `expression = Val{false}`. Code that runs already must call the functions with
-  `Base.invokelatest`. A Julia function in the graph must belong to a package. See
+  on disk that Julia compiles once, so a later session compiles nothing. A caller that
+  was compiled before the call must call the functions with `Base.invokelatest`. A Julia function in the graph must belong to a package. See
   [Large functions and the cache on disk](@ref).
 - `optlevel = nothing`: with an integer from 0 to 3, Julia compiles the functions at this
   optimization level, as `Base.Experimental.@optlevel` sets it, in place of the level of
-  the session (`-O`, 2 by default). A lower level shortens the compilation at the first
-  call of a large function and can slow the later calls. It needs `expression = Val{false}`,
-  and with `cache` it sets the level of the cached package.
+  the session (`-O`, 2 by default). With `cache` it sets the level of the cached package.
 - `solvers = nothing`: a [`CasADiCodegen.Solvers`](@ref Solvers) with the SciML solvers that the
-  code calls in place of the solver objects of CasADi in the graph. Generated code never
-  calls CasADi, so such an object with no solver throws an `ArgumentError`.
+  code calls in place of the solver objects of CasADi in the graph, since generated code
+  never calls CasADi.
+
+Throws an `ArgumentError`:
+- when `f` has free symbols or an operation outside the scope of the package (see
+  [Scope and differences from CasADi](@ref));
+- when `f` calls a solver object of CasADi that `solvers` does not replace;
+- when `name` does not end with `!` and `nonzeros` is not set;
+- with `force_SA = true` for outputs with more than 1024 elements in all;
+- with `cache` or `optlevel` and `expression = Val{true}`, or an `optlevel` outside 0 to 3.
+
+`g` and `g!` throw an `ArgumentError` for a wrong number or size of arrays, and `g!` for
+an array of `res` that shares memory with an array of `arg`.
 
 # Examples
 ```jldoctest

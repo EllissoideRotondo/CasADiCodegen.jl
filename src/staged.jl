@@ -91,7 +91,14 @@ function staged_algorithm(f::casadi.Function)
     names = op_names()
     n_in, n_out = casadi.n_in(f), casadi.n_out(f)
     inputs = MX[MX.sym(casadi.name_in(f, i), casadi.sparsity_in(f, i)) for i in 0:n_in-1]
-    outputs = as_list(casadi.call(f, inputs, true, false))        # the graph of `f` on new symbols
+    # The graph of `f` on new symbols. CasADi refuses to inline a function made with the
+    # option `never_inline`; the matrix reader copies its instructions instead.
+    outputs = try
+        as_list(casadi.call(f, inputs, true, false))
+    catch err
+        (err isa casadi.SwigError && occursin("never_inline", sprint(showerror, err))) || rethrow()
+        return nothing
+    end
     g = casadi.Function(casadi.name(f), inputs, outputs)
     # The nodes that carry the results of the calls: (call node, result) => node.
     carriers = Dict{Tuple{Int,Int},MX}()

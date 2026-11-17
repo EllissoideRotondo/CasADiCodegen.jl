@@ -179,6 +179,23 @@ end
     @test isequal(written(f, values), mx_casadi(f, values))
 end
 
+# With a sparse operand CasADi has no dense routine; the product becomes a list of terms.
+@testset "contracted Kronecker product of sparse operands" begin
+    lower, diagonal = casadi.Sparsity.lower, casadi.Sparsity.diag
+    cases = [("sparse, sparse, inner", MX.sym("M", lower(4)), MX.sym("X", lower(2)), true),
+             ("sparse, dense, inner", MX.sym("M", lower(4)), MX.sym("X", 2, 2), true),
+             ("dense, sparse, inner", MX.sym("M", 4, 4), MX.sym("X", lower(2)), true),
+             ("sparse, dense, outer", MX.sym("M", casadi.Sparsity.banded(6, 1)), MX.sym("X", 2, 3), false),
+             ("dense, sparse, outer", MX.sym("M", 4, 6), MX.sym("X", diagonal(2)), false)]
+    @testset "$label" for (label, M, X, inner) in cases
+        y = casadi.kron_contract(M, X, inner)
+        f = CasADiCodegen.Function("contract", [M, X], [y, casadi.jacobian(y, M), casadi.jacobian(y, X)])
+        @test :OP_KRON_CONTRACT in node_ops(f)
+        values = mx_inputs(f)
+        @test all_agree(evaluated(native(f), f, values), mx_casadi(f, values); rtol = 1e-14)
+    end
+end
+
 @testset "a value written to a file" begin
     pattern = casadi.Sparsity.lower(2)
     v = MX.sym("v", pattern)
@@ -296,7 +313,8 @@ end
     @testset "$kind" for kind in ("serial", "thread", "openmp")
         f = mapped(3, kind)
         @test isequal(evaluated(native(f), f, mx_inputs(f)), mx_casadi(f, mx_inputs(f)))
-        @test code_length(mapped(300, kind)) <= 1.1 * code_length(f)     # longer numbers only
+        # Longer numbers only; both sizes write their results to `res` without the frame (`DIRECT_RESULT`).
+        @test code_length(mapped(300, kind)) <= 1.1 * code_length(mapped(40, kind))
     end
     @testset "derivatives, which are maps of the derivatives of the body" begin
         f = mapped(3, "serial")
@@ -438,6 +456,27 @@ end
                             Dict("number_of_finite_elements" => 2))
         reached = rule(x, MX(0.3), p, MX(0, 1), MX(), MX(), MX())
         f = CasADiCodegen.Function("f", [x, p], [reached[1], reached[2], casadi.jacobian(reached[2], p)])
+        @test all_agree(evaluated(native(f), f, values[1:2]), mx_casadi(f, values[1:2]); rtol = 1e-10)
+    end
+    # The loop is checked against CasADi at a few points; a rootfinder of CasADi that fails
+    # there must not stop the build. One Newton step from the first guess solves the
+    # collocation equations of x' = -x^3 only at x0 = 0.
+    @testset "a rootfinder of CasADi that fails where the loop is checked" begin
+        z = MX.sym("z")
+        once = Dict("number_of_finite_elements" => 2, "rootfinder" => "newton",
+                    "rootfinder_options" => Dict("max_iter" => 1, "error_on_fail" => true))
+        rule = casadi.integrator("rule", "collocation", Dict("x" => z, "ode" => -z^3), 0.0, 1.0, once)
+        z0 = MX.sym("z0")
+        f = CasADiCodegen.Function("f", [z0], [rule(z0, MX(0, 1), MX(0, 1), MX(0, 1), MX(), MX(), MX())[1]])
+        @test_throws casadi.SwigError mx_casadi(f, [[0.37]])
+        @test evaluated(native(f), f, [[0.0]]) == mx_casadi(f, [[0.0]])
+    end
+    # Most models have no quadrature; the state of the loop of steps then ends with an empty part.
+    @testset "no quadrature, $plugin" for plugin in ("rk", "collocation")
+        rule = casadi.integrator("rule", plugin, Dict("x" => x, "p" => p, "ode" => vcat(x[2], -p * casadi.sin(x[1]))), 0.0, [0.5, 1.0],
+                                 Dict("number_of_finite_elements" => 3))
+        final = rule(x, MX(0, 1), p, MX(0, 1), MX(), MX(), MX())[1]
+        f = CasADiCodegen.Function("f", [x, p], [final, casadi.jacobian(final, x)])
         @test all_agree(evaluated(native(f), f, values[1:2]), mx_casadi(f, values[1:2]); rtol = 1e-10)
     end
     @testset "two adjoint directions at once" begin

@@ -55,7 +55,7 @@ and the others, such as `abstol`, `reltol` and `maxiters`, go to the solver.
 | `integrator(name, alg, model)` | `G(x0, p, t0, tf)` | State at `tf`; CasADi also differentiates by the times |
 
 Free times may run backward. With `"quad"`, each function returns the quadratures as a
-second result. The derivative by the final time is the right side at the final state:
+second result. A Jacobian by the final time:
 
 ```@example ode
 G = integrator("G", Vern9(), model; abstol = 1e-13, reltol = 1e-13)
@@ -66,9 +66,9 @@ build_function(h; expression = Val{false})[1]([1.0, 0.0, 0.0, 1.0], [1.0], [0.0]
 
 ## Get a gradient by many parameters
 
-For the gradient of one number by many inputs, pass `adjoint = true`, so that a reverse
-derivative such as `gradient` integrates the adjoint equations backward once instead of
-one forward sensitivity per input.
+For the gradient of one number by many inputs, pass `adjoint = true`: a reverse
+derivative such as `gradient` then integrates the adjoint equations backward once instead
+of one forward sensitivity per input.
 
 ```@example ode
 A = integrator("A", Vern9(), model, 0.0, 3.0; adjoint = true, abstol = 1e-13, reltol = 1e-13)
@@ -87,32 +87,39 @@ initial states and 36 parameters, measured once:
 
 ## Shorten the compilation of the solver
 
-The default `FullSpecialize` compiles the solver for each new model, which takes about
-3 s at the first call. To compile it once for all models, run `import SciMLBase` and pass
+To compile the solver once for all models, run `import SciMLBase` and pass
 `specialize = SciMLBase.AutoSpecialize` to `integrator`. The first call of `f` above and a
-later one took, measured once on Julia 1.13:
+later one, measured once on Julia 1.13:
 
 | `specialize` | First model | Second model | Later call |
 |---|---|---|---|
 | `SciMLBase.FullSpecialize` (default) | 3.7 s | 2.9 s | 36.6 µs |
 | `SciMLBase.AutoSpecialize` | 2.8 s | 0.5 s | 41.9 µs |
 
-## Stop at an event
+## Derivatives of higher order
 
-An integrator with free times can stop where a function of the state changes its sign;
-see [Stop at an event](@ref events).
+A Taylor coefficient of the solution in a parameter, `∂ᵏx/∂εᵏ / k!`, is a repeated
+`jacobian`; each order costs a further integration:
+
+```@example ode
+X, e = MX.sym("X", 2), MX.sym("e")
+fall = Dict("x" => X, "p" => e, "ode" => vcat(X[2], -(1 + e * X[1])^(-2)))
+flow = integrator("flow", Vern9(), fall, 0.0, 3.0; abstol = 1e-12, reltol = 1e-12)
+position = flow(MX([0.0, 1.0]), e)[1]
+first_order = jacobian(position, e)
+taylor = CasadiFunction("taylor", [e], [position, first_order, jacobian(first_order, e) / 2])
+build_function(taylor; expression = Val{false})[1]([0.0])
+```
 
 ## Add algebraic states
 
 Pass `mass`, the diagonal of the mass matrix: 0 for an algebraic state, whose row of
 `"ode"` holds the residual of its equation, and 1 for the others.
 
-- The algorithm must accept a mass matrix, as `Rodas5P()` does.
-- The initial value of an algebraic state is a guess, corrected by Newton's method.
-- The times are `t0` and `tf`, fixed or free; a vector of times is not supported.
-- Forward derivatives of any order and `adjoint = true` are supported.
-- With free times, `"zero"` may depend on the algebraic states; the algebraic rows of
-  `"transition"` are a guess, which the integrator corrects after the jump.
+The algorithm must accept a mass matrix, as `Rodas5P()` does. The initial value of an
+algebraic state is a guess, corrected by Newton's method. With free times, `"zero"` may
+depend on the algebraic states; the algebraic rows of `"transition"` are a guess, which
+the integrator corrects after the jump.
 
 ```julia
 using OrdinaryDiffEqRosenbrock: Rodas5P

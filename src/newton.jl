@@ -35,7 +35,8 @@ in the place of the residual.
 The iteration ports `Newton::solve` of CasADi 3.8.2. It stops when the largest
 residual is at most `abstol`, or when the largest element of the step is at
 most `abstol_step`. With `line_search` the step is halved until the largest
-residual falls by the factor `1 - alpha / 2`.
+residual falls by the factor `1 - alpha / 2`. As in CasADi, the largest residual leaves
+out NaN elements, so a residual of NaN only counts as converged.
 
 The linear system is solved by elimination with row exchanges, where CasADi
 uses a QR factorization, so the results agree with CasADi to rounding. A

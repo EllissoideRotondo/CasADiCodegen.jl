@@ -43,6 +43,43 @@ end
     end
 end
 
+# `clamp` of ModelingToolkitStandardLibrary.jl limiters, and remainders with the sign of
+# the first operand (`rem`) and of the second (`mod`), at both signs of each operand.
+@testset "clamp, rem and mod agree with Julia" begin
+    f = casadi_function("cr", [x, y], [clamp(x, -1, y), rem(x, y), mod(x, y), mod(x, 2)])
+    @testset "x = $a, y = $b" for (a, b) in ((0.4, 2.0), (-3.7, 2.0), (3.7, -1.5), (-3.7, -1.5), (5.0, 2.5))
+        values = reduce(vcat, casadi_eval(f, a, b))
+        @test values ≈ [clamp(a, -1, b), rem(a, b), mod(a, b), mod(a, 2)] atol = 1e-14
+        g, _ = build_function(f; expression = Val{false})
+        @test reduce(vcat, g(a, b)) ≈ values atol = 1e-14
+    end
+end
+
+@testset "mod and clamp are those of Julia, bit for bit" begin
+    @variables z
+    m = casadi_function("m", [x, y], [mod(x, y)])
+    g, _ = build_function(m; expression = Val{false})
+    @testset "mod($u, $v)" for (u, v) in JULIA_MOD_CASES
+        @test isequal(only(g(u, v)), mod(u, v))
+    end
+    k = casadi_function("k", [x, y, z], [clamp(x, y, z)])
+    h, _ = build_function(k; expression = Val{false})
+    @testset "clamp($u, $lo, $hi)" for (u, lo, hi) in JULIA_CLAMP_CASES
+        @test isequal(only(h(u, lo, hi)), clamp(u, lo, hi))
+    end
+end
+
+# ModelingToolkit.jl gives the symbols of a system unwrapped, as `unknowns(sys)` does.
+@testset "unwrapped symbols are arguments" begin
+    raw = Symbolics.unwrap.([x, y])
+    f = casadi_function("u", [raw, Symbolics.unwrap(p[1])], [Symbolics.unwrap(x * y + p[1])])
+    @test only(casadi_eval(f, [2.0, 3.0], 0.5)[1]) ≈ 6.5
+    # A system without parameters gives an empty vector of no particular type.
+    g = casadi_function("e", [raw, Any[]], [Symbolics.unwrap(x * y)])
+    @test only(casadi_eval(g, [2.0, 3.0], Float64[])[1]) ≈ 6.0
+    @test_throws "complex values" casadi_function("z", [x], [[1.0im * x]])
+end
+
 @testset "piecewise expressions" begin
     expr = ifelse(x < y, x^2, ifelse((x >= 1) & (y != 0), -x, 5.0))
     f = casadi_function("pw", [x, y], [expr])

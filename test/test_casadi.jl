@@ -109,6 +109,7 @@ const tree_step = @composed function tree_step_(kind = Data.Integers(1, length(T
     (kind, i, j)
 end
 
+include("interpreter.jl")
 const TREES, TREES_SKIPPED = Ref(0), Ref(0)
 
 @testset "property: exact trees and their Jacobians equal CasADi" begin
@@ -123,6 +124,8 @@ const TREES, TREES_SKIPPED = Ref(0), Ref(0)
         TREES[] += 1
         # CasADi can put an operation that is not rounded correctly into a Jacobian; such a tree is counted, not compared.
         all(ins -> ins.op in EXACT_OPS, alg.instructions) || (TREES_SKIPPED[] += 1; return true)
+        # So can an fmin or fmax of two zeros of opposite signs (see `zero_tie`).
+        zero_tie(alg, [x]) && (TREES_SKIPPED[] += 1; return true)
         isequal(casadi_eval(f, x), emitted_eval(alg, x; chunk_size))
     end
     @test TREES_SKIPPED[] <= TREES[] ÷ 10

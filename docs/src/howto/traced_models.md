@@ -46,7 +46,7 @@ nothing # hide
 ```
 
 The problem has the generated right side and its Jacobian, sparse with
-`ODEFunction(rhs; sparse = true)` (see [Give a CasADi function to a SciML problem](@ref)).
+`ODEFunction(rhs; sparse = true)` (see [Use the generated code with SciML packages](@ref)).
 A `NonlinearProblem` and an out-of-place function work as well; the parameters may be
 a tuple or a named tuple, and the keywords `states` and `parameters` name the elements.
 [`CasADiCodegen.traced_problem`](@ref CasADiCodegen.traced_problem(::AbstractString, ::SciMLBase.ODEProblem))
@@ -65,6 +65,10 @@ thrust = CasADiCodegen.untraced(ifelse(t > 0, clamp(2t, 0, 1), 0.0))
 h, _ = build_function(CasadiFunction("thrust", [x], [thrust]); expression = Val{false})
 h([0.2]), h([0.8]), h([-1.0])
 ```
+
+A condition times a value is that value or zero, as a `Bool` is in Julia, so a piecewise
+function written as `(x < 0) * Inf + (x >= 0) * x^2` gives `x^2` for a positive `x`, not the
+`NaN` of `0 * Inf`.
 
 Code that cannot be written this way, or that accepts only `Float64`, enters the graph
 through a callback (see [Call a Julia function from the model](@ref)).

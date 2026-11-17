@@ -48,13 +48,24 @@ include("models.jl")
 """
     CasadiFunction(name, inputs, outputs[, options])
 
-Make a function of CasADi from the symbolic `inputs` and `outputs`. `CasadiFunction`
-is the front end's name for `CasADiCodegen.Function`, exported because a bare
-`Function` is the abstract type of Julia.
+Make a function of CasADi from the symbolic `inputs` and `outputs`, vectors of `SX` or of
+`MX`. `CasadiFunction` is the front end's name for `CasADiCodegen.Function`, exported
+because a bare `Function` is the abstract type of Julia. `options` is a `Dict` of the
+options of CasADi, such as `"allow_free" => true`.
 
-```julia
-x = SX.sym("x", 2)
-f = CasadiFunction("f", [x], [sin(x[1]) * x[2]])
+CasADi throws a `SwigError` when an output has a symbol that is not an input, unless
+`"allow_free"` is set, and [`build_function`](@ref) refuses such a function.
+
+# Examples
+```jldoctest
+julia> using CasADiCodegen
+
+julia> x = SX.sym("x", 2);
+
+julia> f = CasadiFunction("f", [x], [sin(x[1]) * x[2]]);
+
+julia> f(casadi.DM([0.0, 2.0]))
+DM(0)
 ```
 """
 CasadiFunction
@@ -65,19 +76,41 @@ CasadiFunction
 Make a function of CasADi from Symbolics.jl expressions: `inputs` is a vector of symbols and
 arrays of symbols, `outputs` a vector of expressions and arrays of expressions, and each
 becomes one argument or one result of the function, with the shape of the array. Every symbol
-of an output must be in `inputs`. `input_names` and `output_names` are vectors of strings;
-without them CasADi names the arguments and results. The method is defined when Symbolics.jl
-is loaded.
+of an output must be in `inputs`. `input_names` and `output_names` are vectors of strings,
+one per input and per output; without them CasADi names the arguments and results. The
+method is defined when Symbolics.jl is loaded.
 
-```julia
-using Symbolics
-@variables x y
-f = casadi_function("f", [x, y], [sin(x) * y, Symbolics.gradient(sin(x) * y, [x, y])])
+Throws an `ArgumentError` if an output has a symbol that is not in `inputs`, or a complex
+value. A wrong number of names gives the `SwigError` of CasADi.
+
+# Examples
+```jldoctest
+julia> using CasADiCodegen
+
+julia> import Symbolics
+
+julia> Symbolics.@variables x y;
+
+julia> f = casadi_function("f", [x, y], [sin(x) * y, Symbolics.gradient(sin(x) * y, [x, y])]);
+
+julia> g, _ = build_function(f; expression = Val{false});
+
+julia> g(0.0, 2.0)
+([0.0], [2.0, 0.0])
 ```
+
+Symbolics.jl exports a `build_function` of its own, so `import Symbolics` keeps the name of
+this package unambiguous.
 """
 function casadi_function end
 
 export build_function, generate_julia, CasadiFunction, casadi_function, casadi
+# The names that the manual calls with the prefix `CasADiCodegen.`; `docs/make.jl` checks
+# that the reference lists each of them.
+public Models, Traced, traced, untraced, traced_function, traced_problem, Solvers, Solver,
+    linearization, linearization_function, block_triangular_form, reduce_index, nonsmooth_operations,
+    smooth_step, smooth_sign, smooth_abs, smooth_max, smooth_min, smoothed, differentiable,
+    instruction_histogram, nan_trace, initialization_problem, natural_continuation
 
 include("precompile.jl")
 

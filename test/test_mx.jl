@@ -88,6 +88,34 @@ end
     @test mx_close(f)
 end
 
+# The adjoint of an index that names an element twice adds two nonzeros of one operand
+# into one nonzero, which a single map per operand cannot hold. The Julia front end of
+# CasADi gives such an index as a parameter (`OP_ADDNONZEROS_PARAM`), so the function
+# comes from Python, saved by CasADi 3.8.2:
+#     x = MX.sym("x", 3); s = MX.sym("seed", 5); y = x[[0, 1, 0, 2, 0]]
+#     Function("adj", [x, s], [y * x[0], jtimes(y * x[0], x, s, True)], ["x", "seed"], ["y", "adjoint"])
+@testset "sums of one operand into one nonzero, as the adjoint of a repeated index" begin
+    f = CasadiFunction.load(joinpath(@__DIR__, "data", "repeated_index_adjoint.casadi"))
+    adds = [ins for ins in MXAlgorithm(f).instructions if ins.op === :OP_ADDNONZEROS]
+    @test any(ins -> !allunique(ins.in), adds)               # an operand with more than one map
+    @test mx_close(f)
+    expanded(nz) = build_function(f; nonzeros = true, expression = Val{false})([fill(NaN, n) for n in nnz_out(f)], Tuple(nz))
+    @test all(all(close_enough.(e, a)) for (e, a) in zip(mx_casadi(f, mx_inputs(f)), expanded(mx_inputs(f))))
+end
+
+# CasADi refuses to inline a function made with `never_inline`, so its graph is copied as it is.
+@testset "a function that CasADi never inlines" begin
+    x = MX.sym("x")
+    pair = CasADiCodegen.Function("pair", [x], [x + 1, x - 1], Dict("never_inline" => true))
+    for expand in (true, false)
+        g, _ = build_function(pair; expression = Val{false}, expand)
+        @test g([2.0]) == ([3.0], [1.0])
+    end
+    y = MX.sym("y")
+    outer = CasADiCodegen.Function("outer", [y], [pair(y)[1] * pair(y)[2]], Dict("never_inline" => true))
+    @test mx_same(outer)
+end
+
 @testset "sparse inputs and outputs" begin
     L = MX.sym("L", casadi.Sparsity.lower(3))
     D = MX.sym("D", casadi.Sparsity.diag(3))
@@ -148,6 +176,44 @@ end
     x = SX.sym("x", 2)
     s = CasADiCodegen.Function("s", [x], [x * 2])
     @test build_function(s; nonzeros = true, expand = false) == build_function(s; nonzeros = true)            # nothing to expand
+end
+
+"A step with about 60 scalar instructions, for loops over steps."
+function loop_step()
+    x, u = SX.sym("x", 3), SX.sym("u")
+    ode(x) = vcat(x[2], x[3], -sin(x[1]) * x[2] + u)
+    k1 = ode(x); k2 = ode(x + 0.05 * k1)
+    CasADiCodegen.Function("step", [x, u], [x + 0.025 * (k1 + k2)])
+end
+
+@testset "expansion keeps the calls of a long loop and writes out a map" begin
+    step = loop_step()
+    x0, U = MX.sym("x0", 3), MX.sym("U", 1, 1000)
+    loop = CasADiCodegen.Function("loop", [x0, vec(U)], [casadi.fold(step, 1000)(x0, U)])
+    # Expanded, the 1000 steps would be 60000 scalar instructions: the loop keeps calling the step.
+    @test CasADiCodegen.Codegen.algorithm(loop; expand = true) isa MXAlgorithm
+    @test all(close_enough.(only(mx_casadi(loop, mx_inputs(loop))),
+                            build_function(loop; nonzeros = true, expression = Val{false})([zeros(3)], Tuple(mx_inputs(loop)))[1]))
+    # CasADi nests the loop as calls of 10 steps; the code keeps each level a call, not 1000 copies.
+    V = MX.sym("V", 1, 10)
+    short = CasADiCodegen.Function("short", [x0, vec(V)], [casadi.fold(step, 10)(x0, V)])
+    @test length(string(build_function(loop; nonzeros = true, expand = false))) <
+          4 * length(string(build_function(short; nonzeros = true, expand = false)))
+    # A map holds its copies side by side, each of them work to do anyway: it is expanded.
+    X = MX.sym("X", 3, 1000)
+    side = CasADiCodegen.Function("side", [vec(X), vec(U)], [vec(step.map(1000)(X, U))])
+    @test CasADiCodegen.Codegen.algorithm(side; expand = true) isa CasADiCodegen.Codegen.Algorithm
+end
+
+@testset "functions with the same content share their code" begin
+    a = SX.sym("a")
+    h = CasADiCodegen.Function("h", [a], [sin(a) * 2])
+    copy = casadi.deserialize(casadi.Function, casadi.serialize(h))         # another object
+    v = MX.sym("v")
+    f = CasADiCodegen.Function("same", [v], [h(v) - copy(2 * v)])
+    @test mx_same(f)
+    code = string(build_function(f; nonzeros = true, expand = false))
+    @test occursin("same_h!", code) && !occursin("same_h_2!", code)
 end
 
 @testset "every form of the matrix code gives the same numbers" begin
@@ -307,6 +373,7 @@ end
 # Property: random matrix graphs over exact operations, with calls to a scalar
 # and to a matrix function, equal CasADi bit for bit for any chunk size.
 # ---------------------------------------------------------------------------
+include("interpreter.jl")
 const GRAPH_H = let a = SX.sym("a", 3)
     CasADiCodegen.Function("h", [a], [vcat(a[2] * a[3], a[1] - a[2], a[3]), a[1] * a[1]])
 end
@@ -355,6 +422,8 @@ end
             chunk_size = Data.SampledFrom([1, 4, 1000]))
         f = graph_function(steps)
         x = [u .+ 0.0, v .+ 0.0]
+        # An fmin or fmax of two zeros of opposite signs has no single result (see `zero_tie`).
+        zero_tie(Algorithm(casadi.expand(f)), x) && return true
         isequal(mx_casadi(f, x), mx_emitted(f, x; chunk_size))
     end
 end
@@ -386,7 +455,9 @@ end
     end
     code_length(f) = length(string(build_function(f; nonzeros = true, expression = Val{true}, expand = false)))
     @test mx_same(transposed(5))
-    @test code_length(transposed(300)) <= 1.1 * code_length(transposed(5))     # longer numbers only
+    # Longer numbers only; both sizes write their results to `res` without the frame (`DIRECT_RESULT`).
+    @test 2 * (40 - 1) >= CasADiCodegen.Codegen.DIRECT_RESULT
+    @test code_length(transposed(300)) <= 1.1 * code_length(transposed(40))
 end
 
 @testset "a split whose first part has no nonzeros" begin
@@ -554,4 +625,25 @@ end
     src = Module()
     Base.include_string(src, text)
     @test Base.invokelatest((r, a) -> src.Banded.solve_nonzeros!(r, a), [zeros(n), zeros(n), zeros(2n)], Tuple(values)) == g(results, Tuple(values))
+end
+
+# A large result of matrix code goes straight to its array of `res`.
+@testset "results written to res without the frame" begin
+    n = 2 * CasADiCodegen.Codegen.DIRECT_RESULT
+    u, p = MX.sym("u", n), MX.sym("p")
+    f = CasADiCodegen.Function("scale", [u, p], [p * u, casadi.jacobian(p * u, u), casadi.sin(u[1:3])])
+    ex = string(build_function(f; nonzeros = true, expand = false))
+    @test occursin("output_1", ex) && occursin("output_2", ex) && !occursin("output_3", ex)   # the small result keeps the frame
+    @test mx_close(f)
+    g = build_function(f; nonzeros = true, expression = Val{false}, expand = false)
+    # Split code reads and writes the frame only, and so does the matrix form of the results.
+    @test mx_close(f; chunk_size = 2)
+    h, _ = build_function(f; expression = Val{false}, expand = false)
+    w = collect(range(0.5, 2.0; length = n))
+    value, jac, small = h(w, [3.0])
+    @test value ≈ 3.0 .* w && jac == 3.0 * LinearAlgebra.I(n) && small ≈ sin.(w[1:3])
+    text = sprint(io -> generate_julia(f, io; module_name = :Scale, name = :scale!, expand = false))
+    src = Module()
+    Base.include_string(src, text)
+    @test Base.invokelatest((r, a) -> src.Scale.scale_nonzeros!(r, a), [zeros(n), zeros(n), zeros(3)], (w, [3.0]))[1] ≈ 3.0 .* w
 end

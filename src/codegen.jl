@@ -12,6 +12,7 @@ module Codegen
 using RuntimeGeneratedFunctions: RuntimeGeneratedFunctions, RuntimeGeneratedFunction
 import LinearAlgebra
 import NaNMath
+import SHA
 import SpecialFunctions
 import StaticArrays
 import StaticArraysCore

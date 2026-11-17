@@ -4,34 +4,19 @@
 [![Coverage](https://codecov.io/gh/Orbitology/CasADiCodegen.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/Orbitology/CasADiCodegen.jl)
 
 CasADiCodegen.jl is a package for generating plain Julia code from the functions of
-[CasADi](https://web.casadi.org/), the framework for symbolic modelling and
-algorithmic differentiation. A model is built and differentiated with CasADi, through
+[CasADi](https://web.casadi.org/). A model is built and differentiated with CasADi, through
 [CasADiNative.jl](https://github.com/casadi/CasADiNative.jl), the official Julia front
 end of CasADi, and CasADiCodegen.jl then emits the model and its derivatives as Julia
 functions, which run without CasADi and accept Julia arrays, static arrays, sparse
 matrices and the dual numbers of ForwardDiff.jl.
 
-Features include:
-
-- Julia functions for the current session with `build_function`, or a Julia module
-  on disk with `generate_julia`, each with an out-of-place and an in-place form.
-- Models that were built in Python, MATLAB or C++ and saved by CasADi, models
-  written as generic Julia code, which a number type traces into CasADi, and models
-  written as equations with time derivatives, which `CasADiCodegen.Models` compiles into
-  the form of the CasADi integrators.
-- Calls to Julia functions inside a model, with derivatives from Julia functions or
-  from an automatic differentiation backend.
-- Integrators, rootfinders and optimization solvers inside a model, which the
-  generated code solves with the SciML packages.
-- CasADi functions as the functions of SciML problems: `ODEFunction`,
-  `NonlinearFunction` and `OptimizationFunction`.
-
-CasADiCodegen.jl is meant for a model that is defined with CasADi and must run as
-Julia code, in a simulation, in an optimization with a Julia solver, or inside a SciML
-problem. A model that is written as generic Julia code enters CasADi by tracing: the
-number type `CasADiCodegen.Traced` records the operations of the Julia function as a
-CasADi graph, which CasADi differentiates and the package emits. The interface of
-`build_function` follows that of [Symbolics.jl](https://docs.sciml.ai/Symbolics/stable/).
+A model enters as a CasADi function built in Julia, as a file saved by CasADi from Python,
+MATLAB or C++, as generic Julia code traced into CasADi, or as equations with time
+derivatives. The generated code can call Julia functions and SciML solvers, and it serves
+as the function of a SciML problem. The interface of `build_function` follows that of
+[Symbolics.jl](https://docs.sciml.ai/Symbolics/stable/). To evaluate a model with CasADi
+itself, in C or with its solvers, use the CasADi front end and its C code generation
+instead.
 
 ## Installation
 
@@ -69,33 +54,13 @@ derivative  # [4.0, 1.0]
 - `generate_julia(f, path)` writes the same functions to a Julia module, named `F`
   after the function `f` by default.
 
-## Tutorials and Documentation
+## Documentation
 
-For information on using the package, see the
-[documentation](https://orbitology.github.io/CasADiCodegen.jl/dev/). It starts
-with a [tutorial](https://orbitology.github.io/CasADiCodegen.jl/dev/getting_started/)
-that builds a model, generates Julia functions for it and compares the forms of the
-generated code. Tutorials then solve the problems of the ModelingToolkit.jl
-documentation with CasADi models, from ODE and DAE models to nonlinear systems, static
-and dynamic optimization, events and parameter estimation. Its how-to guides cover
-[models written as equations](https://orbitology.github.io/CasADiCodegen.jl/dev/howto/equations/)
-with time derivatives, models from other languages, Julia models traced into CasADi, calls to Julia code, integrators, events and rootfinders,
-the replacement of the solvers of CasADi by SciML solvers, CasADi functions in SciML
-problems, and large models; the concept pages explain the matrix code, the
-derivatives of integrators, the cost of the generated code and the differences from
-CasADi, and the API reference ends the manual.
-
-## Limits
-
-- A model must have a fixed number of inputs and outputs of fixed sizes, as every
-  CasADi function has.
-- Some CasADi nodes have no generated code, such as cone constraints and Functional
-  Mock-up Units.
-- The package is tested on Linux. macOS and Windows, where CasADiNative.jl loads, are
-  not tested.
-
-The page [Scope and differences from CasADi](https://orbitology.github.io/CasADiCodegen.jl/dev/explanation/scope/)
-of the manual lists all limits.
+The [manual](https://orbitology.github.io/CasADiCodegen.jl/dev/) starts with
+[Getting started](https://orbitology.github.io/CasADiCodegen.jl/dev/getting_started/).
+A model must have a fixed number of inputs and outputs of fixed sizes, as every CasADi
+function has; [Scope and differences from CasADi](https://orbitology.github.io/CasADiCodegen.jl/dev/explanation/scope/)
+lists what is supported. The package is tested on Linux only.
 
 ## Acknowledgements
 

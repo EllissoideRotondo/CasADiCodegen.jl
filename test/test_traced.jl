@@ -1,5 +1,7 @@
 # Generic Julia code traced into CasADi graphs with `Traced`.
 import LinearAlgebra
+import ForwardDiff
+import SpecialFunctions
 using StaticArrays: SVector
 
 const traced, untraced, Traced = CasADiCodegen.traced, CasADiCodegen.untraced, CasADiCodegen.Traced
@@ -71,6 +73,24 @@ end
     end
 end
 
+@testset "mod and clamp of traced values are those of Julia, bit for bit" begin
+    x, y, z = SX.sym("x"), SX.sym("y"), SX.sym("z")
+    a, b, c = only(traced(x)), only(traced(y)), only(traced(z))
+    m = CasadiFunction("m", [x, y], [untraced(mod(a, b))])
+    g, _ = build_function(m; expression = Val{false})
+    @testset "mod($u, $v)" for (u, v) in JULIA_MOD_CASES
+        @test isequal(only(g([u], [v])), mod(u, v))
+        @test isequal(only(only(casadi_eval(m, u, v))), mod(u, v))
+    end
+    k = CasadiFunction("k", [x, y, z], [untraced(clamp(a, b, c))])
+    h, _ = build_function(k; expression = Val{false})
+    @testset "clamp($u, $lo, $hi)" for (u, lo, hi) in JULIA_CLAMP_CASES
+        @test isequal(only(h([u], [lo], [hi])), clamp(u, lo, hi))
+    end
+    t = CasadiFunction("t", [x], [untraced(trunc(a))])
+    @test isequal(only(build_function(t; expression = Val{false})[1]([-0.5])), -0.0)
+end
+
 @testset "determinant, inverse and solve of a traced matrix" begin
     # LinearAlgebra factorizes with pivoting, which compares values; CasADi forms them from the graph.
     z = SX.sym("z", 4)
@@ -100,4 +120,38 @@ end
     g = CasADiCodegen.traced_function("decay", (u, p) -> -p.k * u, [1.0], (k = 0.5,); inplace = false, time = false)
     @test casadi.name(casadi.sx_in(g, 1)) == "k" && build_function(g; expression = Val{false})[1]([2.0], [0.5]) ≈ [-1.0]
     @test_throws ArgumentError CasADiCodegen.traced_function("rober", rober!, u0, p; states = [:a, :b])
+end
+
+# Generic code writes a piecewise function as conditions times values; in Julia a `Bool`
+# is a strong zero, so `false * Inf` is zero where CasADi gives `0 * Inf == NaN`.
+@testset "a condition times a value is the value or zero" begin
+    piecewise(x) = (0 <= x) * (x <= 300) * 30 * x + (300 < x) * (x <= 400) * 31 * x + (x < 0) * Inf + Inf * (x > 400)
+    @testset "$S" for S in (SX, MX)
+        x = S.sym("x", 1)
+        y = untraced(piecewise(only(traced(x))))
+        g, _ = build_function(CasadiFunction("f", [x], [y, jacobian(y, x)]); expression = Val{false})
+        for v in (-1.0, 100.0, 350.0, 500.0)
+            value, slope = g([v])
+            @test isequal(value[1], piecewise(v))
+            @test slope[1] == (0 <= v <= 300 ? 30.0 : 300 < v <= 400 ? 31.0 : 0.0)
+        end
+    end
+end
+
+@testset "a BigFloat constant enters the graph as a Float64" begin
+    x = SX.sym("x", 1)
+    g, _ = build_function(CasadiFunction("f", [x], [untraced(only(traced(x)) * big(0.25) + big(1))]); expression = Val{false})
+    @test g([2.0]) == [1.5]
+end
+
+@testset "error functions of traced values" begin
+    x = SX.sym("x", 1)
+    t = only(traced(x))
+    y = vcat(untraced(SpecialFunctions.erf(t)), untraced(SpecialFunctions.erfc(t)), untraced(SpecialFunctions.erfinv(t / 2)))
+    g, _ = build_function(CasadiFunction("f", [x], [y, jacobian(y, x)]); expression = Val{false})
+    for v in (-0.7, 0.3, 1.5)
+        value, slope = g([v])
+        @test value ≈ [SpecialFunctions.erf(v), SpecialFunctions.erfc(v), SpecialFunctions.erfinv(v / 2)] rtol = 1e-12
+        @test slope ≈ ForwardDiff.derivative.([SpecialFunctions.erf, SpecialFunctions.erfc, z -> SpecialFunctions.erfinv(z / 2)], v) rtol = 1e-10
+    end
 end
