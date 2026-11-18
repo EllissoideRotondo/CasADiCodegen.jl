@@ -390,3 +390,7 @@ end
     refusal = try CasADiCodegen.reduce_index(singular) catch e e end
     @test refusal isa ArgumentError && occursin("alg[2]", refusal.msg)
 end
+
+@testset "the CasADi version is the one whose internals the package reads" begin
+    @test CasADiCodegen.casadi.CasadiMeta.version() == CasADiCodegen.CASADI_VERSION
+end

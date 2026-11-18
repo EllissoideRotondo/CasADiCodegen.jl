@@ -21,7 +21,11 @@ those of CasADi, plus one.
 ```jldoctest
 julia> using CasADiCodegen
 
-julia> pattern = casadi.triplet(casadi.Sparsity, 3, 3, [0, 1, 1, 2], [0, 0, 1, 2]);
+julia> rows = [0, 1, 1, 2];
+
+julia> cols = [0, 0, 1, 2];
+
+julia> pattern = casadi.triplet(casadi.Sparsity, 3, 3, rows, cols);
 
 julia> CasADiCodegen.block_triangular_form(pattern).blocks
 3
@@ -52,24 +56,26 @@ A = ∂f/∂x, \\quad B = ∂f/∂u, \\quad C = ∂h/∂x, \\quad D = ∂h/∂u.
 ```
 
 `f` and `h` are CasADi functions of the column vectors `x`, `u` and `p`, with one column
-vector as their result; `f` has the size of `x`. Give `p` of no element for a model with
-no parameter. The matrices are dense; with `sparse = true` they keep the sparsity patterns
+vector as their result; `f` has the size of `x`. For a model without parameters, `p` has
+no elements. The matrices are dense; with `sparse = true` they keep the sparsity patterns
 of the Jacobians. [`linearization`](@ref linearization) gives the generated
 code of this function.
 
 With three functions of `(x, z, u, p)`, the model is the differential-algebraic system
 `x' = f(x, z, u, p)`, `0 = g(x, z, u, p)`, `y = h(x, z, u, p)` with the algebraic
-states `z`, and the result is the function `(x, z, u, p) -> (A, B, C, D)`. The
-algebraic states are eliminated by the implicit function theorem: with `M = (∂g/∂z) \\ [∂g/∂x ∂g/∂u]`,
-
-```math
-[A \\; B] = [∂f/∂x \\; ∂f/∂u] - (∂f/∂z) M, \\quad [C \\; D] = [∂h/∂x \\; ∂h/∂u] - (∂h/∂z) M.
-```
-
-The result of `g` has the size of `z`. The matrices are those of the model at a point where
-`g = 0` and `∂g/∂z` is invertible, which need not be a steady state. The caller ensures both
+states `z`, and the result is the function `(x, z, u, p) -> (A, B, C, D)`. The result of
+`g` has the size of `z`. The matrices are those of the model at a point where `g = 0` and
+`∂g/∂z` is invertible, which need not be a steady state. The caller ensures both
 conditions: they are not checked, and at a point where `g ≠ 0` the matrices do not describe
 the model.
+
+!!! details "How the algebraic states are eliminated"
+    The implicit function theorem eliminates the algebraic states: with
+    `M = (∂g/∂z) \\ [∂g/∂x ∂g/∂u]`,
+
+    ```math
+    [A \\; B] = [∂f/∂x \\; ∂f/∂u] - (∂f/∂z) M, \\quad [C \\; D] = [∂h/∂x \\; ∂h/∂u] - (∂h/∂z) M.
+    ```
 """
 function linearization_function(f::casadi.Function, h::casadi.Function; sparse::Bool = false)
     check_linearization_arguments((f, h), ("x", "u", "p"))
@@ -122,8 +128,8 @@ end
     linearization(f, h; sparse = false, expression = Val{false}, options...) -> (lin, lin!)
     linearization(f, g, h; sparse = false, expression = Val{false}, options...) -> (lin, lin!)
 
-Generate the code of the linearization of the state-space model `x' = f(x, u, p)`,
-`y = h(x, u, p)` about a point. `lin(x, u, p)` returns the matrices `(A, B, C, D)` at the
+Generate code that linearizes the state-space model `x' = f(x, u, p)`, `y = h(x, u, p)`
+about a point. `lin(x, u, p)` returns the matrices `(A, B, C, D)` at the
 point `(x, u, p)`, so that the deviations `δ` from it satisfy `δx' ≈ A δx + B δu` and
 `δy ≈ C δx + D δu`. Each is a `Matrix`, also with one column, such as `B` for one input,
 or an `SMatrix` when `x` is a static array. `lin!(out, (x, u, p))` writes them into the four
@@ -146,15 +152,27 @@ other `options` go to `build_function`.
 ```jldoctest
 julia> using CasADiCodegen
 
-julia> x, u, p = SX.sym("x", 2), SX.sym("u"), SX.sym("p");
+julia> x = SX.sym("x", 2);
 
-julia> f = CasadiFunction("f", [x, u, p], [vcat(x[2], -p * x[1] + u)]);
+julia> u = SX.sym("u");
+
+julia> p = SX.sym("p");
+
+julia> dx = vcat(x[2], -p * x[1] + u);
+
+julia> f = CasadiFunction("f", [x, u, p], [dx]);
 
 julia> h = CasadiFunction("h", [x, u, p], [x[1:1]]);
 
 julia> lin, lin! = CasADiCodegen.linearization(f, h);
 
-julia> A, B, C, D = lin([0.0, 0.0], [0.0], [4.0]);
+julia> x0 = [0.0, 0.0];
+
+julia> u0 = [0.0];
+
+julia> p0 = [4.0];
+
+julia> A, B, C, D = lin(x0, u0, p0);
 
 julia> A
 2×2 Matrix{Float64}:

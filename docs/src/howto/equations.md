@@ -3,9 +3,9 @@
 The submodule `CasADiCodegen.Models` compiles equations among the variables of a model,
 with derivatives on either side, into the semi-explicit form of the CasADi integrators:
 differential states `x` with `x' = ode(x, z, p, t)` and algebraic states `z` with
-`0 = alg(x, z, p, t)`. Both SciML and CasADi then integrate the model.
+`0 = alg(x, z, p, t)`. SciML and CasADi solvers can then integrate the model.
 
-## Write the equations
+## Write equations with `Differential` and `~`
 
 Load the submodule, make a scalar SX symbol for the time, and take its `Differential`:
 
@@ -24,7 +24,8 @@ symbols are `dq_0` and `dq_1`. `D` of an expression applies the chain rule, and 
 later sets the derivatives of the parameters to 0:
 
 ```@example equations
-x, v, m, k, c = SX.sym("x"), SX.sym("v"), SX.sym("m"), SX.sym("k"), SX.sym("c")
+x, v = SX.sym("x"), SX.sym("v")
+m, k, c = SX.sym("m"), SX.sym("k"), SX.sym("c")
 D(m * x^2 + sin(t))
 ```
 
@@ -35,7 +36,7 @@ vectors of one size stands for one equation per element. A damped oscillator:
 laws = [D(x) ~ v, m * D(v) ~ -k * x - c * v]
 ```
 
-## Compile the equations
+## Turn the equations into a `System`
 
 Give the equations, the time and the parameters to [`System`](@ref
 CasADiCodegen.Models.System):
@@ -64,26 +65,31 @@ equations(oscillator)
 In a second-order equation, the derivative below the highest, `dx`, becomes a state:
 
 ```@example equations
-second_order = System([m * D(D(x)) ~ -k * x - c * D(x)], t; parameters = [m, k, c])
+newton = [m * D(D(x)) ~ -k * x - c * D(x)]
+second_order = System(newton, t; parameters = [m, k, c])
 unknowns(second_order)
 ```
 
-The states come in the order in which the variables first appear, each followed by its
-lower derivatives, and then the algebraic states. `System` also eliminates each algebraic
-equation that is linear in a variable with a constant or parametric coefficient, such as
-`a ~ b`, and keeps the eliminated variable as observed; the other algebraic equations
-stay, and `System` differentiates them when needed (index reduction), with the keyword
-`baumgarte_pole` for stabilization. The docstring of
-[`System`](@ref CasADiCodegen.Models.System) lists the steps, and
-[Model physical systems with differential-algebraic equations](@ref) applies them.
+!!! details "How `System` orders the states and removes algebraic equations"
+    The states come in the order in which the variables first appear, each followed by
+    its lower derivatives, and then the algebraic states. `System` also eliminates each
+    algebraic equation that is linear in a variable with a constant or parametric
+    coefficient, such as `a ~ b`, and keeps the eliminated variable as observed; the other
+    algebraic equations stay, and `System` differentiates them when needed (index
+    reduction), with the keyword `baumgarte_pole` for stabilization. The docstring of
+    [`System`](@ref CasADiCodegen.Models.System) lists the steps, and
+    [Model a circuit and a pendulum as DAEs](@ref) applies them.
 
-## Solve the model
+## Solve the model with a SciML solver
 
 Give the initial values and the parameters to `SciMLBase.ODEProblem` as pairs from a
 symbol, or its name, to a value; `dx` is a state here:
 
 ```@example equations
-problem = SciMLBase.ODEProblem(second_order, [x => 1.0, :dx => 0.0], (0.0, 10.0), [m => 1.0, k => 4.0, c => 0.5])
+u0 = [x => 1.0, :dx => 0.0]
+tspan = (0.0, 10.0)
+params = [m => 1.0, k => 4.0, c => 0.5]
+problem = SciMLBase.ODEProblem(second_order, u0, tspan, params)
 solution = SciMLBase.solve(problem, Tsit5())
 solution[:x][end], solution[:ddx][end]
 ```
@@ -97,14 +103,16 @@ consistent value, or pass `initializealg = BrownFullBasicInit()` of
 OrdinaryDiffEqNonlinearSolve.jl to `solve`. After index reduction, the initial states must
 also satisfy the [`invariants`](@ref CasADiCodegen.Models.invariants).
 
-## Use the model with CasADi
+## Build a CasADi integrator from the model
 
 `Dict(sys)` returns the dictionary of a CasADi integrator, with `"x"`, `"z"`, `"p"`,
 `"t"`, `"ode"` and `"alg"`, without the entries that the model lacks:
 
 ```@example equations
 F = casadi.integrator("F", "cvodes", Dict(second_order), 0.0, 10.0)
-result = F(Dict("x0" => casadi.DM([1.0, 0.0]), "p" => casadi.DM([1.0, 4.0, 0.5])))
+x0 = casadi.DM([1.0, 0.0])
+p0 = casadi.DM([1.0, 4.0, 0.5])
+result = F(Dict("x0" => x0, "p" => p0))
 result["xf"]
 ```
 

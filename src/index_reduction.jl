@@ -13,18 +13,18 @@
     reduce_index(dae; baumgarte_pole = 0.0) -> NamedTuple
 
 Reduce the semi-explicit differential-algebraic equation `dae` to index 1 by
-differentiating its algebraic equations, with the structural algorithm of Pantelides.
+differentiating its algebraic equations, with Pantelides' structural algorithm.
 Return `(; dae, invariants, differentiations, index)`.
 
-`dae` is a dictionary in the form of the CasADi integrators, with SX or MX values that
+`dae` is a dictionary in the form that CasADi's integrators take, with SX or MX values that
 are dense column vectors: the differential states `"x"`, the algebraic states `"z"`,
 the parameters `"p"`, the scalar time `"t"`, and the expressions `"ode"`, the
 derivative of `x`, and `"alg"`, the algebraic equations `0 = alg`, of the size of `z`.
 `"x"`, `"z"` and `"t"` are symbols or concatenations of symbols. `"p"` and `"t"` are
 optional, and so are `"z"` and `"alg"` together.
 
-The result `dae` has the same form, and `casadi.integrator` with a DAE plugin
-such as `"idas"` accepts it. Equation `alg[i]` is replaced by its time derivative of
+The result `dae` has the same form, and `casadi.integrator` with a DAE plugin such as
+`"idas"` accepts it. Equation `alg[i]` is replaced by its time derivative of
 order `differentiations[i]`, in which the derivative of `x` is replaced by `ode`. An
 algebraic state `z[j]` whose derivative enters these equations becomes a differential
 state, and its derivative a new symbol that takes its place in `z`. The states of the
@@ -44,37 +44,38 @@ satisfies `invariants` and `alg`. `index` is the differentiation index: 0 with n
 algebraic equation, otherwise 1 plus the largest number of differentiations.
 
 A model of index 1 is returned unchanged, with `differentiations` all 0 and no
-invariant. Write a fully implicit equation `0 = F(x', x, z)` in this form with new
-algebraic states `w` for `x'`, `ode = w` and `alg = F(w, x, z)`.
+invariant.
 
 # Keywords
 - `baumgarte_pole = 0.0`: the pole `γ ≤ 0` of Baumgarte's stabilization. An equation `g`
-  differentiated `k` times becomes the sum over `j` in `0:k` of `binomial(k, j) (-γ)^j`
-  times the derivative of `g` of order `k - j`, whose characteristic polynomial
-  `(s - γ)^k` has the root `γ`, so that its invariants decay as `exp(γ t)` instead of
-  drifting. 0 gives the derivative of order `k` alone, as
-  `dae_reduce_index` of CasADi does by default. A positive `γ` throws `ArgumentError`.
+  differentiated `k` times becomes the combination of its derivatives whose characteristic
+  polynomial is `(s - γ)^k`, so that its invariants decay as `exp(γ t)` instead of
+  drifting; 0 gives the derivative of order `k` alone.
 
-Throws `ArgumentError` when the equations are structurally singular, that is, when no
-number of differentiations determines the states; the message names the equations
-`ode[i]` and `alg[i]` that are involved, with `i` from 1. The algorithm uses the
-sparsity patterns only, and terms of a derivative can cancel. When the reduced equations
-then do not determine `z`, the function throws `ArgumentError` too; it never returns
-such a model.
+Throws an `ArgumentError` for a positive `baumgarte_pole`, when the equations are
+structurally singular (no number of differentiations determines the states; the message
+names the equations `ode[i]` and `alg[i]` involved, from 1), and when terms of a
+derivative cancel so that the reduced equations do not determine `z`.
 
-The algorithm does not select dummy derivatives (Mattsson and Söderlind): the reduced
-model keeps every state and enforces only the highest derivative of each equation, so
-the invariants drift unless they are stabilized. See [Model physical systems with differential-algebraic
-equations](@ref).
+The algorithm selects no dummy derivatives: the reduced model keeps every state and
+enforces only the highest derivative of each equation, so the invariants drift unless
+they are stabilized. See [Model a circuit and a pendulum as DAEs](@ref).
 
 # Examples
 ```jldoctest
 julia> using CasADiCodegen
 
-julia> q, v, T = SX.sym("q", 2), SX.sym("v", 2), SX.sym("T");
+julia> q = SX.sym("q", 2);
 
-julia> pendulum = Dict("x" => vcat(q, v), "z" => T,
-                       "ode" => vcat(v, T * q - [0, 9.81]), "alg" => q[1]^2 + q[2]^2 - 1);
+julia> v = SX.sym("v", 2);
+
+julia> T = SX.sym("T");
+
+julia> ode = vcat(v, T * q - [0, 9.81]);
+
+julia> alg = q[1]^2 + q[2]^2 - 1;
+
+julia> pendulum = Dict("x" => vcat(q, v), "z" => T, "ode" => ode, "alg" => alg);
 
 julia> reduced = CasADiCodegen.reduce_index(pendulum);
 

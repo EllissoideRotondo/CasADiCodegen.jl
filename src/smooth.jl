@@ -45,8 +45,8 @@ flow through it include the switch.
 
 The arguments are numbers (any `Real`, dual numbers included), or SX or MX expressions,
 on which the forms act element by element. `width` is a positive number or a scalar
-symbol, so that it can be a parameter of the model and fall in a continuation. A number
-among symbolic arguments becomes a constant of their type.
+symbol, so that it can be a model parameter that a continuation lowers. A number among
+symbolic arguments becomes a constant of their type.
 
 | Function            | `kind = :tanh`                | `kind = :algebraic`  |
 |:------------------- |:----------------------------- |:-------------------- |
@@ -62,8 +62,8 @@ The error of `smooth_abs` against `abs` is at most `0.28ε` with `:tanh` and `0.
 `ε²/s²`, so for a flow that crosses the surface the `:tanh` kind converges faster as `ε`
 falls.
 
-Throws `ArgumentError` for a `width` that is not positive, a `kind` other than `:tanh` and
-`:algebraic`, or SX and MX arguments together.
+Throws an `ArgumentError` if `width` is not positive, if `kind` is neither `:tanh` nor
+`:algebraic`, or if the arguments mix SX and MX.
 
 # Examples
 ```jldoctest
@@ -72,7 +72,9 @@ julia> using CasADiCodegen
 julia> CasADiCodegen.smooth_sign(0.5, 0.1) ≈ tanh(5)
 true
 
-julia> x, width = SX.sym("x"), SX.sym("width");
+julia> x = SX.sym("x");
+
+julia> width = SX.sym("width");
 
 julia> CasADiCodegen.smooth_step(x, width)
 SX(((1+tanh((x/width)))/2))
@@ -476,10 +478,10 @@ end
 Rewrite each switch of an SX or MX function or expression into its smooth form of width
 `width`, with the forms of [`smooth_step`](@ref) of the kind `kind`.
 
-The function form returns the function named `casadi.name(f) * "_smoothed"`, with the inputs and
-the outputs of `f` and one more scalar input named `input`, the width, at the end. The
-expression form returns an expression of the symbols of `ex` and of `width`, the form for a
-model dictionary: `"ode" => smoothed(ode, width; inputs = x)`, with `width` among the
+The function form returns a function named `casadi.name(f) * "_smoothed"`, with the inputs
+and outputs of `f` and one more scalar input named `input`, the width, at the end. The
+expression form returns an expression in the symbols of `ex` and `width`; it suits a model
+dictionary: `"ode" => smoothed(ode, width; inputs = x)`, with `width` among the
 parameters.
 
 `inputs` chooses the switches to rewrite: those whose operand depends on `inputs`. For a
@@ -496,28 +498,33 @@ switch on other inputs is kept.
 | MX `norm_1`, `norm_inf`, `mmin`, `mmax` | the sum or a fold of the smooth forms           |
 | `==`, `!=`, `floor`, `ceil`, `fmod`, `remainder`, the index of `conditional`, a `linear` interpolant | kept |
 
-An equality test is kept since it switches only on a set of measure zero. A value that the
-graph shares stays shared, and a call of an SX or MX function, also inside `map` or a
-switch, becomes a call of its transform. A Julia callback, an external function and a
-solver are kept as they are. An MX graph is read one matrix at a time, so a switch on an
-element of a matrix that depends on `inputs` is rewritten.
+A value that the graph shares stays shared, and a call of an SX or MX function, also inside
+`map` or a switch, becomes a call of its transform. A Julia callback, an external function
+and a solver are kept as they are. In an MX graph a switch is rewritten for the whole
+matrix when any element of its operand depends on `inputs`.
 
 Both branches of `if_else` are weighted by the soft condition within about 19 widths of
-the surface with `:tanh`, so both must be finite there. Farther away the `:tanh` condition rounds to exactly 0 or 1, and a branch of weight 0 does not
-enter the result, even when it is NaN. The `:algebraic` condition never reaches 0, so
-with it both branches must be finite everywhere. One width serves all switches, so the
+the surface with `:tanh`, so both must be finite there. Farther away the `:tanh` condition
+rounds to exactly 0 or 1, and a branch of weight 0 does not enter the result, even when it
+is NaN. The `:algebraic` condition never reaches 0, so with it both branches must be
+finite everywhere. One width serves all switches, so the
 switching functions need comparable scales.
 
-Throws `ArgumentError` for a `kind` other than `:tanh` and `:algebraic`, a `width` that is
-not a scalar symbol or that `ex` depends on, SX with MX, an `input` name that `f` has, an
-input that `f` does not have, and a kept operation on a smoothed value, such as
-`if_else((x > 0) + (y > 0), a, b)`, whose switch would move.
+Throws an `ArgumentError`:
+- for a `kind` other than `:tanh` and `:algebraic`;
+- for a `width` that is not a scalar symbol, or that `ex` depends on;
+- for SX and MX together;
+- for an `input` name that `f` already has, or an entry of `inputs` that `f` does not have;
+- for a kept operation on a smoothed value, such as `if_else((x > 0) + (y > 0), a, b)`,
+  whose switch would move.
 
 # Examples
 ```jldoctest
 julia> using CasADiCodegen
 
-julia> x, width = SX.sym("x"), SX.sym("width");
+julia> x = SX.sym("x");
+
+julia> width = SX.sym("width");
 
 julia> CasADiCodegen.smoothed(sign(x - 1), width)
 SX(tanh(((x-1)/width)))

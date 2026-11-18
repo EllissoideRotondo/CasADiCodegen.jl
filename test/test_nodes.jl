@@ -175,8 +175,10 @@ end
     f = CasADiCodegen.Function("contract", [A, B, D], [casadi.kron_contract(A, B, true), casadi.kron_contract(A, D, false)])
     @test :OP_KRON_CONTRACT in node_ops(f)
     values = mx_inputs(f)
-    @test isequal(evaluated(native(f), f, values), mx_casadi(f, values))
-    @test isequal(written(f, values), mx_casadi(f, values))
+    # On ARM, the C compiler of CasADi fuses a product and a sum into one rounding.
+    same(a, b) = Sys.ARCH === :aarch64 ? all(isapprox.(a, b; rtol = 1e-14)) : isequal(a, b)
+    @test same(evaluated(native(f), f, values), mx_casadi(f, values))
+    @test same(written(f, values), mx_casadi(f, values))
 end
 
 # With a sparse operand CasADi has no dense routine; the product becomes a list of terms.
@@ -354,6 +356,13 @@ end
         dual = ForwardDiff.Dual(0.4, 1.0)
         @test_throws "\"model\" is compiled code, which takes Float64 only" g([fill(dual, 2), fill(dual, 0)], ([dual, dual], [dual]))
         @test_throws "is not a file" K.external_library(model)
+        # The code copies a strided argument before the library reads it as adjacent values.
+        A = [0.4 -1.1 9.0; 7.0 8.0 9.0]
+        @test isequal(written(f, [view(A, 1, 1:2), [2.5]]), mx_casadi(f, values))
+        lone = native(external)
+        out = [zeros(2), zeros(1), zeros(0)]
+        lone(out, (view(A, 1, 1:2), [2.5]))
+        @test out[1] ≈ sin.([0.4, -1.1]) .* 2.5
         # A library without the optional functions, and a function that fails.
         write(joinpath(directory, "bare.c"), "int bare(const double** arg, double** res, long long* iw, double* w, int mem) { res[0][0] = 3 * arg[0][0]; return arg[0][0] < 0; }")
         run(`$compiler -shared -fPIC $(joinpath(directory, "bare.c")) -o $(joinpath(directory, "libbare.so"))`)

@@ -16,7 +16,10 @@ x, u, p = SX.sym("x", 2), SX.sym("u"), SX.sym("p", 2)        # p = [g / L, 1 / (
 f = CasadiFunction("f", [x, u, p], [vcat(x[2], -p[1] * sin(x[1]) + p[2] * u)])
 h = CasadiFunction("h", [x, u, p], [x[1]])                    # the angle is measured
 lin, lin! = CasADiCodegen.linearization(f, h)
-A, B, C, D = lin([0.0, 0.0], [0.0], [9.81, 2.0])
+x_op = [0.0, 0.0]                                             # the operating point
+u_op = [0.0]
+p_op = [9.81, 2.0]
+A, B, C, D = lin(x_op, u_op, p_op)
 A
 ```
 
@@ -30,9 +33,10 @@ with the patterns of [`CasADiCodegen.linearization_function`](@ref):
 using SparseArrays
 
 lin_sparse, lin_sparse! = CasADiCodegen.linearization(f, h; sparse = true)
-lin_casadi = CasADiCodegen.linearization_function(f, h; sparse = true)    # (x, u, p) -> (A, B, C, D)
+# the CasADi function (x, u, p) -> (A, B, C, D), which holds the sparsity patterns
+lin_casadi = CasADiCodegen.linearization_function(f, h; sparse = true)
 out = Tuple(SparseMatrixCSC(casadi.sparsity_out(lin_casadi, i)) for i in 0:3)
-lin_sparse!(out, ([0.0, 0.0], [0.0], [9.81, 2.0]))
+lin_sparse!(out, (x_op, u_op, p_op))
 out[1]
 ```
 
@@ -49,7 +53,8 @@ xl, w, pl = SX.sym("xl"), SX.sym("w"), SX.sym("pl", 3)        # pl = [k, τ, K]
 c = pl[3] * xl
 loop_f = CasadiFunction("loop_f", [xl, w, pl], [(pl[1] * (c + w) - xl) / pl[2]])
 loop_h = CasadiFunction("loop_h", [xl, w, pl], [vcat(c + w, -c, xl)])
-closed = ss(CasADiCodegen.linearization(loop_f, loop_h)[1]([0.0], [0.0], [1.0, 1.0, -1.0])...)
+loop_lin, _ = CasADiCodegen.linearization(loop_f, loop_h)
+closed = ss(loop_lin([0.0], [0.0], [1.0, 1.0, -1.0])...)
 tf(closed[1, 1])                                               # S
 ```
 
@@ -72,7 +77,7 @@ A, B, C, D = lin_dae([2.0, 0.0], [1.0], [0.0], Float64[])
 A, C
 ```
 
-## Order equations by their dependencies
+## Order equations to solve them block by block
 
 [`CasADiCodegen.block_triangular_form`](@ref) permutes a sparsity pattern to block
 lower triangular form; for the Jacobian of a square system, each diagonal block is a

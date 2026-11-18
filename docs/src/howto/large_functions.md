@@ -1,9 +1,9 @@
-# Large functions and the cache on disk
+# Speed up compilation of large models
 
 A model with tens of thousands of instructions compiles slowly, and Julia compiles it
-again in each session; this page shows the remedies.
+again in each session.
 
-## Split a large function
+## Split a large function into smaller pieces
 
 Above a limit, the generated code is split into sub-functions that share one work
 vector. Two keywords of `build_function` and `generate_julia` control the split:
@@ -16,7 +16,7 @@ vector. Two keywords of `build_function` and `generate_julia` control the split:
 In matrix code, an instruction is one operation of the MX graph;
 `split_above = typemax(Int)` keeps any function in one piece. The split can shorten
 the first call by a factor of six but makes later calls 15 to 40 percent slower (see
-[Split of a large function](@ref)).
+[Compile and run time of a split function](@ref)).
 
 ## Compile at a lower optimization level
 
@@ -43,7 +43,8 @@ so that a later session with the same model compiles nothing:
 
 ```julia
 g, g! = build_function(f; expression = Val{false}, cache = true)
-g, g! = build_function(f; expression = Val{false}, cache = "/path/to/cache")   # another directory
+# in another directory
+g, g! = build_function(f; expression = Val{false}, cache = "/path/to/cache")
 ```
 
 | Function | Without cache, each session | With cache, first session | With cache, later sessions |

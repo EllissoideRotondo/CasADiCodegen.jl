@@ -1,17 +1,18 @@
-# Cost of the generated code
+# Compile and run times of the generated code
 
 This page gives the measurements behind the defaults of the package, whose conditions
-are in [Reproducibility](@ref): compile time at the first call, which grows with the
+are in [Package versions used to build this manual](@ref reproducibility): compile time at
+the first call, which grows with the
 model, and run time at later calls, which depends on the form of the code.
 
-## Scalar code and its forms
+## Run time of the in-place, out-of-place and static forms
 
 An instruction is one operation as CasADi counts them: a scalar operation in an SX
 function, a graph operation such as a matrix product or a call in an MX function.
 Scalar code, from an SX function or an expanded MX function, allocates nothing in
 place or out of place with static arrays, whatever its size; matrix code is described
-in [Matrix code and functions without instructions](@ref). Two scalar models with
-their 6 by 6 Jacobians, measured once on Julia 1.13:
+in [Scalar code, matrix code and special CasADi functions](@ref). Two scalar models
+with their 6 by 6 Jacobians, measured once on Julia 1.13:
 
 | Instructions | Form | First call | Later calls | Memory per call |
 |---|---|---|---|---|
@@ -23,18 +24,19 @@ their 6 by 6 Jacobians, measured once on Julia 1.13:
 | 18,861 | Out of place, arrays | 3.82 s | 4.1 µs | 576 B |
 
 The first call is mostly compilation. For scalar code above about 50,000 instructions,
-or matrix code above about 1,000, see [Large functions and the cache on disk](@ref).
+or matrix code above about 1,000, see [Speed up compilation of large models](@ref).
 
-With a `SparseMatrixCSC`, `g!` compares the whole pattern of a matrix whose index vectors
-(`colptr` and `rowval`) are not those of the last matrix that passed this comparison;
-otherwise it compares the number of rows and of stored values only, so a call costs as
-much as the function on nonzeros.
+!!! details "How `g!` checks the pattern of a sparse matrix"
+    With a `SparseMatrixCSC`, `g!` compares the whole pattern of a matrix whose index
+    vectors (`colptr` and `rowval`) are not those of the last matrix that passed this
+    comparison; otherwise it compares the number of rows and of stored values only, so a
+    call costs as much as the function on nonzeros.
 
-## Split of a large function
+## Compile and run time of a split function
 
 Above `split_above` instructions, `build_function` and `generate_julia` split the code
 into sub-functions of at most `chunk_size` instructions (see
-[Large functions and the cache on disk](@ref)). The defaults rest on the measurements
+[Speed up compilation of large models](@ref)). The defaults rest on the measurements
 below, made once on Julia 1.13 for the function on nonzeros of two models with dense
 Jacobians: a chain of `map`s, each applied to the result of the one before, and the
 acceleration of 40 bodies under mutual gravity.
@@ -62,7 +64,7 @@ compiles in 54 s instead of 339 s, while the gravity model gains nothing at the
 default size. Smaller versions of the two models near the default limit of 50,000
 instructions, not in the table, took 18 s and 14 s unsplit against 10 s and 22 s split.
 
-## Compilation of the solver for each new model
+## Solver compile time for each new model
 
 With the default `specialize = SciMLBase.FullSpecialize` of the SciML constructors,
 OrdinaryDiffEq.jl compiles its solver again for each new model. `specialize =
@@ -76,7 +78,7 @@ was 5 to 20 percent slower:
 | `Rodas5P()` | 2.55 s | 0.15 s |
 | `Tsit5()` | 0.89 s | 0.08 s, with `jac = false` |
 
-## Cost of the two kinds of code
+## Compile and run time of scalar and matrix code
 
 A model that calls a scalar function of 710 instructions 20 times in a chain, and
 returns the result with its Jacobian, shows the cost of expansion: expanded code
