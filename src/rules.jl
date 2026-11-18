@@ -23,11 +23,12 @@ Base.show(io::IO, d::Differentiable) = print(io, "the differentiable function \"
     differentiable(f::CasADiCodegen.Function; options...) -> Differentiable
 
 Make the CasADi function `f` a Julia function with forward and reverse rules for
-ChainRulesCore.jl. A package for automatic differentiation that reads those rules, such as
+ChainRulesCore.jl. An automatic differentiation package that reads those rules, such as
 Zygote.jl, then takes the derivatives of `f` from code that CasADi generates.
 
 The result `d` takes one array per input of `f` and returns one array per output, as the
-out-of-place function of [`build_function`](@ref). The `options` go to `build_function`.
+out-of-place function of [`build_function`](@ref) does. The `options` go to
+`build_function`.
 
 The rules load with ChainRulesCore.jl. The code of each derivative is generated at its
 first use. See [Use the generated derivatives from an AD package](@ref).

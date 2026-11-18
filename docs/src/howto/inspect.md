@@ -1,9 +1,9 @@
-# Inspect a model
+# Debug slow code and NaNs
 
 When a generated function is slow or returns a NaN, two unexported functions look
 into the model.
 
-## Count the operations
+## Find which operations dominate the code
 
 [`CasADiCodegen.instruction_histogram`](@ref) counts the instructions of each
 operation in the code that `build_function` emits:

@@ -11,19 +11,21 @@ include_string(@__MODULE__, CasADiCodegen.Codegen.SPARSE_HELPER_SOURCE)
 """
     SparseMatrixCSC(sparsity::CasADiCodegen.Sparsity) -> SparseMatrixCSC{Float64,Int}
 
-Make a sparse matrix of stored zeros with the sparsity pattern `sparsity`. Use it as an
-output or an input of the in-place function of `build_function` or `generate_julia`, which
-then reads and writes the stored values only.
+Make a sparse matrix with the sparsity pattern `sparsity` and all stored entries zero.
+Pass it as an input or an output of the in-place function from `build_function` or
+`generate_julia`, which then reads and writes only the stored entries.
 
 # Examples
 ```julia
 using CasADiCodegen, SparseArrays
 
 x = SX.sym("x", 2)
-f = CasadiFunction("f", [x], [jacobian([x[1]^2; x[1] * x[2]], x)])
+y = [x[1]^2; x[1] * x[2]]
+f = CasadiFunction("f", [x], [jacobian(y, x)])
 J = SparseMatrixCSC(CasADiCodegen.sparsity_out(f, 0))      # 2×2 with 3 stored entries
 _, g! = build_function(f; expression = Val{false})
-g!((J,), ([2.0, 3.0],))                             # J is now [4.0 0.0; 3.0 2.0]
+x0 = [2.0, 3.0]
+g!((J,), (x0,))                                     # J is now [4.0 0.0; 3.0 2.0]
 ```
 """
 function SparseArrays.SparseMatrixCSC(sparsity::CasADiCodegen.casadi.Sparsity)

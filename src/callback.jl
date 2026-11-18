@@ -144,8 +144,8 @@ Make the Julia function `f` a CasADi function that a matrix (MX) graph can call.
 with no CasADi in between.
 
 # Arguments
-- `f`: a function that takes one array per size of `sizes_in`. It returns one array, or a
-  tuple with one array per size of `sizes_out`. A result can be any array with the right
+- `f`: a function that takes one array per size in `sizes_in`. It returns one array, or a
+  tuple with one array per size in `sizes_out`. A result can be any array with the right
   number of elements, for example a static array.
 - `name`: the name of the CasADi function, a valid identifier.
 - `sizes_in`, `sizes_out`: tuples with one size per argument and per result. A size is an
@@ -163,7 +163,7 @@ with no CasADi in between.
       in column-major order.
     - An ADTypes.jl backend, such as `AutoForwardDiff()`, for any order. Load
       DifferentiationInterface.jl and the package of the backend.
-- `options...`: options of CasADi for the function, for example `enable_fd = true`.
+- `options...`: CasADi options for the function, for example `enable_fd = true`.
 
 `generate_julia` needs `f` and the Jacobian functions to be named functions of a module.
 The package keeps each callback for the rest of the session, since a CasADi graph can call
@@ -176,11 +176,15 @@ julia> using CasADiCodegen
 
 julia> square(v) = v .^ 2;
 
-julia> c = callback(square, "square", (2,), (2,); jacobian = v -> [2v[1] 0; 0 2v[2]]);
+julia> square_jacobian(v) = [2v[1] 0; 0 2v[2]];
+
+julia> c = callback(square, "square", (2,), (2,); jacobian = square_jacobian);
 
 julia> v = MX.sym("v", 2);
 
-julia> f = CasadiFunction("f", [v], [c(v), jacobian(c(v), v)]);
+julia> y = c(v);
+
+julia> f = CasadiFunction("f", [v], [y, jacobian(y, v)]);
 
 julia> g, g! = build_function(f; expression = Val{false});
 

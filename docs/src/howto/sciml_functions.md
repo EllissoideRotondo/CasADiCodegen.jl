@@ -5,7 +5,7 @@ generated code for the function and for the derivatives that the solvers ask for
 CasADi function takes the unknowns, then optionally the parameters, and for an ODE then the
 time. The result is an ordinary SciML problem, so any package that takes one takes it.
 
-## Solve an ODE
+## Solve a harmonic oscillator as an ODE problem
 
 ```@example sciml
 using CasADiCodegen
@@ -14,7 +14,9 @@ import SciMLBase
 
 u, k, t = SX.sym("u", 2), SX.sym("k"), SX.sym("t")
 rhs = CasadiFunction("rhs", [u, k, t], [vcat(u[2], -k * u[1])])     # also f(u) and f(u, p)
-problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), [1.0, 0.0], (0.0, pi), [4.0])
+u0 = [1.0, 0.0]
+tspan = (0.0, pi)
+problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(rhs), u0, tspan, [4.0])
 SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12).u[end]
 ```
 
@@ -22,7 +24,7 @@ A function of the time without parameters takes an empty argument, `f(u, SX(0, 1
 The time argument is whatever variable the model is integrated in: a model rewritten in
 another independent variable, for example with `substitute`, passes that variable there.
 
-## Names and observed variables
+## Index solutions by symbol name
 
 All constructors except `OptimizationFunction` take the names of the scalar symbols, so a
 solution and a problem are indexed by name; the elements of `SX.sym("u", 2)` are `u_0` and
@@ -30,21 +32,25 @@ solution and a problem are indexed by name; the elements of `SX.sym("u", 2)` are
 
 ```@example sciml
 x, v = SX.sym("x"), SX.sym("v")
-oscillator = CasadiFunction("oscillator", [vcat(x, v), k, t], [vcat(v, -k * x), (v^2 + k * x^2) / 2],
+energy = (v^2 + k * x^2) / 2
+oscillator = CasadiFunction("oscillator", [vcat(x, v), k, t], [vcat(v, -k * x), energy],
                             ["u", "k", "t"], ["du", "energy"])
-problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(oscillator), [1.0, 0.0], (0.0, pi), [4.0])
+problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(oscillator), u0, tspan, [4.0])
 solution = SciMLBase.solve(problem, Vern9(); abstol = 1e-12, reltol = 1e-12)
-solution[:x][end], solution[:energy][end], SciMLBase.remake(problem; p = [:k => 9.0]).p
+stiffer = SciMLBase.remake(problem; p = [:k => 9.0])
+solution[:x][end], solution[:energy][end], stiffer.p
 ```
 
 The parameters are an argument of the generated code, so a `remake` with new values
-compiles nothing. A `remake` without `p` shares the parameter vector of the original, so
-give the copy its own vector, `remake(problem; p = copy(problem.p))`, before you change it
-in place. A function whose arguments are not `vcat`s of named symbols, or that repeats a
-name, gets no names, and a second result is then an error; a `sys` given to the constructor
-replaces the names.
+compiles nothing. A function whose arguments are not `vcat`s of named symbols, or that
+repeats a name, gets no names, and a second result is then an error; a `sys` given to the
+constructor replaces the names.
 
-## Data as parameters
+!!! details "When `remake` shares the parameter vector"
+    A `remake` without `p` shares the parameter vector of the original, so give the copy
+    its own vector, `remake(problem; p = copy(problem.p))`, before you change it in place.
+
+## Pass a data table as a parameter
 
 A vector symbol keeps its own name besides those of its elements, so a table of data can be
 one parameter. Here a linear interpolant takes its values as an argument; the option
@@ -58,7 +64,8 @@ grid = collect(0.0:0.1:10.0)
 table = casadi.interpolant("table", "linear", [grid], 1, Dict("inline" => true))
 y, s, data = MX.sym("y"), MX.sym("s"), MX.sym("data", length(grid))
 area = CasadiFunction("area", [y, data, s], [table(s, data)])
-problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(area), [0.0], (0.0, 1.0), grid .^ 2)
+area_rhs = SciMLBase.ODEFunction(area)
+problem = SciMLBase.ODEProblem(area_rhs, [0.0], (0.0, 1.0), grid .^ 2)
 cubic = SciMLBase.remake(problem; p = [:data => grid .^ 3])
 cubic.f === problem.f, SciMLBase.solve(cubic, Tsit5(); tstops = grid).u[end]
 ```
@@ -66,7 +73,7 @@ cubic.f === problem.f, SciMLBase.solve(cubic, Tsit5(); tstops = grid).u[end]
 The new values need no new code, and `paramjac` is the derivative by them. An interpolant
 can only be called on MX symbols.
 
-## Sparse Jacobians and static arrays
+## Use a sparse Jacobian, or static arrays for small systems
 
 With SparseArrays.jl loaded, `sparse = true` gives the function a `jac_prototype` with the
 sparsity pattern of the Jacobian:
@@ -75,7 +82,8 @@ sparsity pattern of the Jacobian:
 using SparseArrays
 
 z = SX.sym("z", 5)
-chain = CasadiFunction("chain", [z], [vcat([z[i] - (i > 1 ? z[i-1]^2 : 0.0) for i in 1:5]...)])
+links = [z[i] - (i > 1 ? z[i-1]^2 : 0.0) for i in 1:5]
+chain = CasadiFunction("chain", [z], [vcat(links...)])
 SciMLBase.NonlinearFunction(chain; sparse = true).jac_prototype
 ```
 
@@ -91,7 +99,7 @@ problem = SciMLBase.ODEProblem(f, SVector(1.0, 0.0), (0.0, pi), SVector(4.0))
 f.jac(problem.u0, problem.p, 0.0)
 ```
 
-## Other problems
+## Build nonlinear, optimization, SDE and discrete problems
 
 | Constructor | Generated functions |
 |---|---|
@@ -111,8 +119,10 @@ A **nonlinear problem** takes the residual and the parameters:
 using SimpleNonlinearSolve: SimpleNewtonRaphson
 
 w, q = SX.sym("w", 2), SX.sym("q")
-residual = CasadiFunction("r", [w, q], [vcat(w[1]^2 + w[2]^2 - q, w[1] - w[2])])   # also f(w)
-problem = SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(residual), [1.0, 0.5], [2.0])
+equations = vcat(w[1]^2 + w[2]^2 - q, w[1] - w[2])
+residual = CasadiFunction("r", [w, q], [equations])                 # also f(w)
+guess = [1.0, 0.5]
+problem = SciMLBase.NonlinearProblem(SciMLBase.NonlinearFunction(residual), guess, [2.0])
 SciMLBase.solve(problem, SimpleNewtonRaphson(); abstol = 1e-12).u
 ```
 
@@ -127,8 +137,10 @@ using OptimizationIpopt: IpoptOptimizer
 objective = CasadiFunction("J", [w, q], [(w[1] - q)^2 + w[2]^2])     # also f(w)
 constraints = CasadiFunction("c", [w, q], [w[1] + w[2]])
 f = SciMLBase.OptimizationFunction(objective, constraints; sparse = true)
-problem = SciMLBase.OptimizationProblem(f, [0.0, 0.0], [1.0]; lcons = [1.0], ucons = [Inf])
-ipopt = IpoptOptimizer(additional_options = Dict{String,Any}("print_level" => 0, "sb" => "yes"))
+w0 = [0.0, 0.0]
+problem = SciMLBase.OptimizationProblem(f, w0, [1.0]; lcons = [1.0], ucons = [Inf])
+options = Dict{String,Any}("print_level" => 0, "sb" => "yes")
+ipopt = IpoptOptimizer(additional_options = options)
 SciMLBase.solve(problem, ipopt).u
 ```
 
@@ -144,7 +156,7 @@ A transcribed optimal control problem, with thousands of unknowns, solves the sa
 `OptimizationProblem(opti)` converts a problem of the `Opti` stack of CasADi with its
 initial values, parameter values and bounds. A bound on a variable stays a constraint, so
 the problem has no `lb` and `ub`. Write a two-sided bound with `bounded(lb, w, ub)` (see
-[The CasADi front end](@ref)):
+[Differences from CasADi's Python API](@ref)):
 
 ```@example sciml
 opti = Opti()
@@ -167,14 +179,18 @@ using StochasticDiffEqHighOrder: SRIW1
 using DiffEqNoiseProcess: WienerProcess
 
 r = SX.sym("r", 3)
-drift = CasadiFunction("drift", [r, k, t], [vcat(10 * (r[2] - r[1]), r[1] * (28 - r[3]) - r[2], r[1] * r[2] - k * r[3])])
+rates = vcat(10 * (r[2] - r[1]), r[1] * (28 - r[3]) - r[2], r[1] * r[2] - k * r[3])
+drift = CasadiFunction("drift", [r, k, t], [rates])
 noise = CasadiFunction("noise", [r, k, t], [0.3 * r])
-diagonal = SciMLBase.SDEProblem(drift, noise, [5.0, 5.0, 1.0], (0.0, 1.0), [8 / 3])
-scalar = SciMLBase.SDEProblem(drift, noise, [5.0, 5.0, 1.0], (0.0, 1.0), [8 / 3]; noise = WienerProcess(0.0, 0.0, 0.0))
+r0 = [5.0, 5.0, 1.0]
+diagonal = SciMLBase.SDEProblem(drift, noise, r0, (0.0, 1.0), [8 / 3])
+wiener = WienerProcess(0.0, 0.0, 0.0)
+scalar = SciMLBase.SDEProblem(drift, noise, r0, (0.0, 1.0), [8 / 3]; noise = wiener)
 o = SX(1, 1)
 mixed = CasadiFunction("mixed", [r, k, t], [[0.3r[1] o; 0.3r[2] 0.1; o 0.3r[3]]])
+mixed_problem = SciMLBase.SDEProblem(drift, mixed, r0, (0.0, 1.0), [8 / 3])
 SciMLBase.solve(diagonal, SRIW1(); seed = 1).retcode,
-    size(SciMLBase.SDEProblem(drift, mixed, [5.0, 5.0, 1.0], (0.0, 1.0), [8 / 3]).noise_rate_prototype)
+    size(mixed_problem.noise_rate_prototype)
 ```
 
 A **discrete problem** takes the map to the next state, which receives the time of the new
@@ -188,14 +204,17 @@ using ImplicitDiscreteSolve: IDSolve
 
 n = SX.sym("n")
 growth = CasadiFunction("growth", [n, k], [n + k * n * (1 - n)])
-SciMLBase.solve(SciMLBase.DiscreteProblem(growth, [0.1], (0.0, 20.0), [0.5]), FunctionMap()).u[end]
+logistic = SciMLBase.DiscreteProblem(growth, [0.1], (0.0, 20.0), [0.5])
+SciMLBase.solve(logistic, FunctionMap()).u[end]
 ```
 
 ```@example sciml
 e, e_prev, h = SX.sym("e"), SX.sym("e_prev"), SX.sym("h")
-euler = CasadiFunction("euler", [e, e_prev, vcat(k, h), t], [e - e_prev + h * k * (e - cos(t))])
+step_residual = e - e_prev + h * k * (e - cos(t))
+euler = CasadiFunction("euler", [e, e_prev, vcat(k, h), t], [step_residual])
 implicit = SciMLBase.ImplicitDiscreteProblem(euler, [0.0], (0.0, 2.0), [50.0, 0.1])
-path = SciMLBase.solve(implicit, IDSolve(); dt = 0.1, adaptive = false, initializealg = SciMLBase.NoInit())
+path = SciMLBase.solve(implicit, IDSolve();
+                       dt = 0.1, adaptive = false, initializealg = SciMLBase.NoInit())
 path.u[end]
 ```
 
@@ -209,8 +228,11 @@ using BifurcationKit: BifurcationProblem, PALC, ContinuationPar, continuation
 
 b, μ = SX.sym("b"), SX.sym("μ")
 pitchfork = CasadiFunction("pitchfork", [b, μ], [μ * b - b^3])
-problem = BifurcationProblem(pitchfork, [:b => 1.0], [:μ => -1.0], :μ; record_from_solution = :b)
-branch = continuation(problem, PALC(), ContinuationPar(p_min = -2.0, p_max = 2.0); bothside = Val(true))
+b0 = [:b => 1.0]
+μ0 = [:μ => -1.0]
+problem = BifurcationProblem(pitchfork, b0, μ0, :μ; record_from_solution = :b)
+settings = ContinuationPar(p_min = -2.0, p_max = 2.0)
+branch = continuation(problem, PALC(), settings; bothside = Val(true))
 [(point.type, round(point.param; digits = 2)) for point in branch.specialpoint]
 ```
 
@@ -221,9 +243,10 @@ Attractors.jl, take the states and parameters by name:
 using Attractors: CoupledODEs, observe_state, current_parameter
 
 lorenz = SciMLBase.ODEFunction(drift; inplace = false)
-ds = CoupledODEs(SciMLBase.ODEProblem(lorenz, SVector(5.0, 5.0, 1.0), (0.0, 1.0), [8 / 3]))
+lorenz_problem = SciMLBase.ODEProblem(lorenz, SVector(5.0, 5.0, 1.0), (0.0, 1.0), [8 / 3])
+ds = CoupledODEs(lorenz_problem)
 observe_state(ds, :r_0), current_parameter(ds, :k)
 ```
 
 For the problem of a solver object of CasADi (`cvodes`, `kinsol`, `nlpsol`), see
-[Solve the problem in Julia](@ref).
+[Make a SciML problem from a CasADi solver object](@ref).

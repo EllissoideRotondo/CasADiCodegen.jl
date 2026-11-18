@@ -11,15 +11,16 @@ Arithmetic, the elementary functions, `min`, `max`, `clamp`, `ifelse`, `floor`, 
 relative error is near `1e-12` at `x = 3` and `1e-5` at `x = 5`, and from about `x = 6`,
 where `erfc` is near `2e-17`, the value is zero. Its derivative keeps full accuracy.
 `det`, `inv` and `A \\ b` of a square matrix of `Traced` values are formed by CasADi,
-since the factorizations of LinearAlgebra choose pivots by comparing values. A comparison
+since LinearAlgebra's factorizations choose pivots by comparing values. A comparison
 gives a traced condition, not a `Bool`, so an `if`, `&&` or `? :` on traced values throws
 a `TypeError` instead of following one branch. A condition times a value gives the value
 or zero, as a `Bool` does: `(x <= 0) * Inf` is zero for a positive `x`.
-`mod` and `clamp` give the results of Julia, also for a large quotient, signed zeros and
-NaN. `min` and `max` are `fmin` and `fmax` of CasADi, which return the other operand for
-a NaN, where Julia returns NaN.
-Use `ifelse`, `min`, `max` or `clamp` for a choice that depends on the input, or
-[`CasADiCodegen.callback`](@ref "Call a Julia function from the model") for a Julia function with branches.
+`mod` and `clamp` give Julia's results, also for a large quotient, signed zeros and NaN.
+`min` and `max` are CasADi's `fmin` and `fmax`, which return the other operand for a NaN,
+where Julia returns NaN. Use `ifelse`, `min`, `max` or `clamp` for a choice that depends
+on the input, or
+[`CasADiCodegen.callback`](@ref "Call a Julia function from the model")
+for a Julia function with branches.
 
 See [`CasADiCodegen.traced`](@ref traced) and [`CasADiCodegen.untraced`](@ref untraced).
 """
@@ -177,8 +178,8 @@ LinearAlgebra.norm(v::StaticArrays.StaticArray{<:Tuple,<:Traced}) = sqrt(sum(abs
 """
     traced(x::Union{SX,MX}) -> Vector{Traced}
 
-Return the elements of the symbolic column vector `x` as a vector of [`CasADiCodegen.Traced`](@ref Traced),
-the argument of a generic Julia function to trace.
+Return the elements of the symbolic column vector `x` as a vector of
+[`CasADiCodegen.Traced`](@ref Traced), the argument of a generic Julia function to trace.
 
 # Examples
 ```julia
@@ -186,7 +187,8 @@ using CasADiCodegen, LinearAlgebra
 
 acceleration(r, μ) = -μ * r / norm(r)^3          # generic Julia code
 r = SX.sym("r", 3)
-a = acceleration(CasADiCodegen.traced(r), 398600.4418)
+μ = 398600.4418
+a = acceleration(CasADiCodegen.traced(r), μ)
 f = CasadiFunction("a", [r], [CasADiCodegen.untraced(a)])
 g, g! = build_function(f; expression = Val{false})
 ```
@@ -199,8 +201,8 @@ end
 """
     untraced(v) -> SX or MX
 
-Return the CasADi expression of the traced value `v`, or the column vector of the
-expressions of the elements of the vector `v`. A plain number in `v` becomes a constant.
+Return the CasADi expression of the traced value `v`, or, for a vector `v`, the column
+vector of the expressions of its elements. A plain number in `v` becomes a constant.
 """
 untraced(x::Traced) = x.value
 function untraced(v::AbstractVector)
@@ -223,14 +225,13 @@ without `t` when `time = false`. It must be generic Julia code, as for
 [`traced`](@ref traced). It gets the state as an array of [`Traced`](@ref Traced) values
 with the shape of `u0`, and the parameters in the container of `p` with traced elements:
 `p` may be a number, an array of numbers, a tuple or a named tuple of numbers, or
-`nothing` for a problem without parameters. In place, `du`
-starts at zero.
+`nothing` for a problem without parameters. In place, `du` starts at zero.
 
 The arguments of the result are column vectors: `u` and `du` hold the elements in the
 order of `vec(u0)`, and `p` those of `vec(p)`, or of the tuple, empty for `nothing`.
 `states` and `parameters` name the scalar symbols of these elements, as vectors of
-`Symbol` or `String`; the names become those of the variables of a SciML function made
-from the result (see [`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function))).
+`Symbol` or `String`; they become the variable names of a SciML function made from the
+result (see [`ODEFunction`](@ref SciMLBase.ODEFunction(::CasADiCodegen.Function))).
 By default the parameters of a named tuple have its keys as names, and the other
 elements are `u_0`, `u_1`, ... and `p_0`, `p_1`, ...
 `symbolic` is `SX` or `MX`. A method for a SciML problem comes with SciMLBase.jl.
@@ -241,8 +242,12 @@ using CasADiCodegen
 import SciMLBase
 
 decay!(du, u, p, t) = (du .= -p.k .* u)
-f = CasADiCodegen.traced_function("decay", decay!, [1.0, 2.0], (k = 0.5,); states = [:x, :y])
-problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(f), [1.0, 2.0], (0.0, 1.0), [0.5])
+u0 = [1.0, 2.0]
+f = CasADiCodegen.traced_function("decay", decay!, u0, (k = 0.5,); states = [:x, :y])
+rhs = SciMLBase.ODEFunction(f)
+tspan = (0.0, 1.0)
+p = [0.5]
+problem = SciMLBase.ODEProblem(rhs, u0, tspan, p)
 ```
 """
 function traced_function(name::AbstractString, f, u0::AbstractArray{<:Real}, p = nothing;

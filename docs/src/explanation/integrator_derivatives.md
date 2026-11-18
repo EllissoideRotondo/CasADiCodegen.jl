@@ -4,7 +4,7 @@ This page explains where the time of a differentiated
 [`CasADiCodegen.integrator`](@ref) goes, and when the adjoint equations are the better
 choice.
 
-## Forward sensitivities
+## Jacobian from the forward sensitivity equations
 
 The Jacobian of an integrator is a second integrator, of the state with its
 sensitivity matrices by the initial state and the parameters, so CasADi
@@ -18,7 +18,7 @@ sensitivities, and takes both from that run; a function that needs the state alo
 integrates the state alone. The two states agree to the solver tolerances only,
 because the sensitivities take part in the step size control.
 
-## A vector of output times
+## Derivatives at many output times from one run
 
 `integrator(name, alg, dae, t0, times)` runs the solver once from `t0` and ends a step
 at each output time, as `solve` with `saveat` and `tstops` does, because the
@@ -26,37 +26,38 @@ tolerances control the error of a step but not of the interpolant. Its Jacobian 
 integration with sensitivities over the same times, so each derivative order costs one
 solver run rather than one per output time.
 
-## Free times
+## Derivatives with respect to the start and end times
 
 With free times, the derivative by the final time is the right side at the final
 state, and for an autonomous model the derivative by the initial time is its
 opposite, so free times add no state; a model whose right side depends on time adds
 one column of sensitivities for the initial time.
 
-## Through an event
+## Derivatives through an event
 
-The event time is the root of the event function on the trajectory, a node between
-two arcs that CasADi differentiates by the implicit function theorem; the chain rule
-through the arc before, the transition and the arc after then gives the jump of the
-state transition matrix at the event, to any order. A switch in the right side, such
-as an `if_else`, has no such node and its derivatives lack the jump; see
-[Discontinuous models](@ref discontinuities).
+The event time is the root of the event function on the trajectory, and CasADi
+differentiates it by the implicit function theorem. The chain rule through the arc
+before the event, the transition and the arc after then gives the jump of the state
+transition matrix at the event, to any order. A switch in the right side, such as an
+`if_else`, has no event time and its derivatives lack the jump; see
+[Get correct derivatives from a model with switches](@ref discontinuities).
 
-Let the right side change from ``f^-`` to ``f^+`` where the switching function ``S(y, t)``
-changes its sign, with the rate ``\dot S = \frac{\partial S}{\partial y} f^- + \frac{\partial S}{\partial t}``.
-The state transition matrix (STM) is then multiplied at the switch by
+!!! details "Why a switch makes the derivatives jump"
+    Let the right side change from ``f^-`` to ``f^+`` where the switching function
+    ``S(y, t)`` changes its sign, with the rate
+    ``\dot S = \frac{\partial S}{\partial y} f^- + \frac{\partial S}{\partial t}``.
+    The state transition matrix (STM) is then multiplied at the switch by
 
-```math
-\Psi = I + \left(\dot y^+ - \dot y^-\right) \frac{1}{\dot S} \frac{\partial S}{\partial y},
-\qquad \dot y^\pm = f^\pm(y(t_s), t_s),
-```
+    ```math
+    \Psi = I + \left(\dot y^+ - \dot y^-\right) \frac{1}{\dot S} \frac{\partial S}{\partial y},
+    \qquad \dot y^\pm = f^\pm(y(t_s), t_s),
+    ```
 
-which is singular at a grazing contact, where ``\dot S = 0``. An integrator with an event
-function contains this jump to any order, while a
-switch written with `if_else` in `"ode"` has no event time, so its derivatives take
-``\Psi = I``.
+    which is singular at a grazing contact, where ``\dot S = 0``. An integrator with an
+    event function contains this jump to any order, while a switch written with `if_else`
+    in `"ode"` has no event time, so its derivatives take ``\Psi = I``.
 
-## Adjoint equations
+## When adjoint equations are cheaper
 
 With `adjoint = true`, a reverse derivative comes from one backward integration of the
 adjoint equations, whose number of states does not grow with the number of
@@ -68,8 +69,9 @@ never stop, so they give the cheaper gradient with few parameters and many outpu
 times, as in fitting a model to samples; the adjoint equations win when the parameters
 far outnumber the states.
 
-For a model with algebraic states, the adjoint equations have the mass matrix of the
-model, so the multipliers of the algebraic states are algebraic too. A seed (the
-vector that a reverse derivative multiplies with the Jacobian) on a final algebraic
-state passes through the algebraic equations to the other final states, the
-parameters and the final time, at the cost of one linear solve.
+!!! details "Adjoint equations of a model with algebraic states"
+    For a model with algebraic states, the adjoint equations have the mass matrix of the
+    model, so the multipliers of the algebraic states are algebraic too. A seed (the
+    vector that a reverse derivative multiplies with the Jacobian) on a final algebraic
+    state passes through the algebraic equations to the other final states, the
+    parameters and the final time, at the cost of one linear solve.

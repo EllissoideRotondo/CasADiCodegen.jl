@@ -178,38 +178,37 @@ end
     generate_julia(f, io::IO; kwargs...) -> nothing
 
 Write Julia source code for the CasADi function `f` to the file `path` or to the stream
-`io`. The output is one module with the functions of
-[`build_function`](@ref), which describes them.
+`io`. The output is one module with the functions of [`build_function`](@ref), which
+describes them.
 
 The module holds:
 
 - the in-place function `name`;
 - the out-of-place function, whose name is `name` without `!`;
 - the function on nonzeros, `f_nonzeros!` for a function `f`;
-- the constants `NAME`, `NAMES_IN`, `NAMES_OUT`, `NNZ_IN`, `NNZ_OUT`, `NWORK`, `SPARSITY_IN`,
-  `SPARSITY_OUT` and `DEPENDENCIES`. Each sparsity pattern is `(nrow, ncol, colptr, rowval)`,
-  1-based. `NWORK` is the length of the work vector. `DEPENDENCIES` is the sorted tuple of
-  the names of the packages that the module imports.
+- the constants `NAME`, `NAMES_IN`, `NAMES_OUT`, `NNZ_IN`, `NNZ_OUT`, `NWORK`,
+  `SPARSITY_IN`, `SPARSITY_OUT` and `DEPENDENCIES`. Each sparsity pattern is
+  `(nrow, ncol, colptr, rowval)`, 1-based. `NWORK` is the length of the work vector.
+  `DEPENDENCIES` is the sorted tuple of the package names that the module imports.
 
 The module does not need CasADiCodegen.jl. A package that includes the file must have each
 package of `DEPENDENCIES` as a dependency: StaticArraysCore.jl, and as the code needs them
 NaNMath.jl, SparseArrays.jl, SpecialFunctions.jl, LinearAlgebra, StaticArrays.jl and the
-package of each Julia function of a `callback`, which the module calls by its full name. A
+package of each Julia function in a `callback`, which the module calls by its full name. A
 function with a SciML integrator, rootfinder or solver gives a module that makes the
 solvers again, so it also loads CasADiCodegen.jl, SciMLBase.jl and the packages of the
 algorithms.
 
 Throws an `ArgumentError` if `module_name` or `name` is not a valid identifier, if `name`
-does not end with `!`, or if `f` has free symbols or an operation outside the scope of the
-package.
+does not end with `!`, or if `f` has free symbols or an operation outside the package's
+scope.
 
 # Keywords
 - `module_name`: the name of the module, a valid identifier. The default is the name of
   `f` with its first letter in upper case.
 - `optlevel = nothing`: with an integer from 0 to 3, the module sets its optimization
   level with `Base.Experimental.@optlevel`.
-- The other keywords of the signature have the meaning that [`build_function`](@ref)
-  gives them.
+- The other keywords of the signature mean what they mean for [`build_function`](@ref).
 
 # Examples
 ```julia

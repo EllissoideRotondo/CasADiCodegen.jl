@@ -18,9 +18,17 @@ let front = Set(names(CasADiCodegen.Codegen.Front)),
     isempty(missing) || error("the reference lists no docstring of: ", join(missing, ", "))
 end
 
+extensions = [
+    extension(:CasADiCodegenSciMLBaseExt),
+    extension(:CasADiCodegenChainRulesCoreExt),
+    extension(:CasADiCodegenSparseArraysExt),
+    extension(:CasADiCodegenOptimizationBaseExt),
+    extension(:CasADiCodegenBifurcationKitExt),
+]
+
 makedocs(;
     sitename = "CasADiCodegen.jl",
-    modules = [CasADiCodegen, CasADiCodegen.Codegen, CasADiCodegen.Models, extension(:CasADiCodegenSciMLBaseExt), extension(:CasADiCodegenChainRulesCoreExt), extension(:CasADiCodegenSparseArraysExt), extension(:CasADiCodegenOptimizationBaseExt), extension(:CasADiCodegenBifurcationKitExt)],
+    modules = [CasADiCodegen, CasADiCodegen.Codegen, CasADiCodegen.Models, extensions...],
     format = Documenter.HTML(;
         prettyurls = get(ENV, "CI", "false") == "true",
         canonical = "https://orbitology.github.io/CasADiCodegen.jl",
@@ -41,28 +49,33 @@ makedocs(;
             "tutorials/bang_bang.md",
             "tutorials/large_models.md",
         ],
-        "Models" => [
-            "howto/equations.md",
-            "howto/load_model.md",
-            "howto/symbolics.md",
-            "howto/traced_models.md",
-            "howto/callbacks.md",
-            "howto/integrators.md",
-            "howto/events.md",
-            "howto/discontinuities.md",
-            "howto/rootfinders.md",
-            "howto/linearize.md",
+        # Each group folds in the sidebar (`collapselevel = 1`) until one of its pages is open.
+        "How-to guides" => [
+            "Write or import a model" => [
+                "howto/equations.md",
+                "howto/load_model.md",
+                "howto/symbolics.md",
+                "howto/traced_models.md",
+                "howto/callbacks.md",
+            ],
+            "Integrate, find roots and handle events" => [
+                "howto/integrators.md",
+                "howto/events.md",
+                "howto/discontinuities.md",
+                "howto/rootfinders.md",
+                "howto/casadi_solvers.md",
+            ],
+            "Use the code with SciML and AD packages" => [
+                "howto/sciml_functions.md",
+                "howto/autodiff_rules.md",
+                "howto/linearize.md",
+            ],
+            "Compile large models and debug" => [
+                "howto/large_functions.md",
+                "howto/inspect.md",
+            ],
         ],
-        "Solvers and SciML" => [
-            "howto/sciml_functions.md",
-            "howto/casadi_solvers.md",
-            "howto/autodiff_rules.md",
-        ],
-        "Large models and debugging" => [
-            "howto/large_functions.md",
-            "howto/inspect.md",
-        ],
-        "Concepts" => [
+        "How the generated code works" => [
             "explanation/matrix_code.md",
             "explanation/integrator_derivatives.md",
             "explanation/performance.md",

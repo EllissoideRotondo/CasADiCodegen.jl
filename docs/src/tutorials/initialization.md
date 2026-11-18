@@ -16,7 +16,7 @@ using OrdinaryDiffEqTsit5: Tsit5
 using NonlinearSolve: LevenbergMarquardt, TrustRegion
 ```
 
-## Write the pendulum in index-1 form
+## Write the pendulum as an index-1 DAE
 
 A pendulum of unit mass on a rod of unit length, with the multiplier ``\lambda``, has
 index 3:
@@ -26,7 +26,7 @@ x'' = \lambda x, \qquad y'' = \lambda y - g, \qquad 0 = x^2 + y^2 - 1.
 ```
 
 The problem of a `System` (see
-[Model physical systems with differential-algebraic equations](@ref)) makes its
+[Model a circuit and a pendulum as DAEs](@ref)) makes its
 `ODEFunction` without the keyword `initialization`, so we write the right side by hand, in
 the index-1 form of dummy derivatives: ``y`` and ``v_y`` are differential, and ``x``,
 ``v_x`` and ``\lambda`` are algebraic, fixed by the constraint and its first two time
@@ -40,7 +40,8 @@ ddt(e) = sum(jacobian(e, s) * ds for (s, ds) in zip(variables, slopes))
 
 constraint = x^2 + y^2 - 1
 u, p = vcat(y, vy, x, vx, λ), vcat(g, x0, y0, vy0)
-rhs = CasadiFunction("pendulum", [u, p, t], [vcat(vy, λ * y - g, constraint, ddt(constraint), ddt(ddt(constraint)))])
+dynamics = vcat(vy, λ * y - g, constraint, ddt(constraint), ddt(ddt(constraint)))
+rhs = CasadiFunction("pendulum", [u, p, t], [dynamics])
 mass = Diagonal([1.0, 1.0, 0.0, 0.0, 0.0])
 nothing # hide
 ```
@@ -57,12 +58,13 @@ conditions(rows...) = CasadiFunction("conditions", [u, p, t], [vcat(rows...)])
 function pendulum(guess, rows...; tspan = (0.0, 1.5), parameters = [1.0, 1.0, 0.0, 0.0])
     f = SciMLBase.ODEFunction(rhs; mass_matrix = mass, initialization = conditions(rows...),
                               specialize = SciMLBase.AutoSpecialize)
-    SciMLBase.ODEProblem(f, guess, tspan, parameters; initializealg = initialize, abstol = 1e-8, reltol = 1e-8)
+    SciMLBase.ODEProblem(f, guess, tspan, parameters; initializealg = initialize,
+                         abstol = 1e-8, reltol = 1e-8)
 end
 nothing # hide
 ```
 
-## Start from a position
+## Start the pendulum at a given position
 
 We start the pendulum at `x = 1`, `y = 0`, with the guess `λ = 1`:
 
@@ -82,14 +84,16 @@ The multiplier leaves its guess for 0, the value at rest at the side. Any variab
 carry a condition, here `λ = 0` or `vy = 0` with `x = 1`:
 
 ```@example init
-from_lambda = SciMLBase.solve(pendulum([1.0, 0.0, 1.0, 0.0, 0.0], x - x0, λ), Rodas5P())
-from_speed = SciMLBase.solve(pendulum([1.0, 0.0, 1.0, 0.0, 0.0], x - x0, vy - vy0), Rodas5P())
+by_lambda = pendulum([1.0, 0.0, 1.0, 0.0, 0.0], x - x0, λ)
+by_speed = pendulum([1.0, 0.0, 1.0, 0.0, 0.0], x - x0, vy - vy0)
+from_lambda = SciMLBase.solve(by_lambda, Rodas5P())
+from_speed = SciMLBase.solve(by_speed, Rodas5P())
 from_lambda.u[1], from_speed.u[1]
 ```
 
 The height is of order ``10^{-4}``, at a double root of the constraint.
 
-## Count the conditions
+## Count how many initial conditions are needed
 
 Five variables and three algebraic equations need two conditions.
 [`initialization_problem`](@ref CasADiCodegen.initialization_problem) returns the
@@ -114,19 +118,23 @@ SciMLBase.solve(under, Rodas5P()).retcode, SciMLBase.solve(over, Rodas5P()).retc
 Contradictory conditions fail; with `vy = 2` the constraint needs `λ = -4`, not 1:
 
 ```@example init
-target = [1.0, 1.0, 0.0, 2.0]
-failed = SciMLBase.solve(pendulum([0.0, 2.0, 1.0, 0.0, 1.0], x - x0, y - y0, vy - vy0, λ - 1; parameters = target), Rodas5P())
+target = [1.0, 1.0, 0.0, 2.0]                             # g, x0, y0, vy0
+conflicting = pendulum([0.0, 2.0, 1.0, 0.0, 1.0], x - x0, y - y0, vy - vy0, λ - 1;
+                       parameters = target)
+failed = SciMLBase.solve(conflicting, Rodas5P())
 failed.retcode
 ```
 
-## Solve the initialization problem alone
+## Solve for the initial values without integrating
 
 Solved alone, the initialization problem shows the residual of the algebraic equations,
 then of the conditions; no state satisfies them all:
 
 ```@example init
-inconsistent = pendulum([0.0, 2.0, 1.0, 0.0, 1.0], x - x0, y - y0, vy - vy0, λ - 1; parameters = target)
-alone = SciMLBase.solve(CasADiCodegen.initialization_problem(inconsistent), LevenbergMarquardt())
+inconsistent = pendulum([0.0, 2.0, 1.0, 0.0, 1.0], x - x0, y - y0, vy - vy0, λ - 1;
+                        parameters = target)
+initial_values = CasADiCodegen.initialization_problem(inconsistent)
+alone = SciMLBase.solve(initial_values, LevenbergMarquardt())
 alone.retcode, round.(alone.resid; digits = 3)
 ```
 
@@ -137,7 +145,7 @@ square = SciMLBase.solve(CasADiCodegen.initialization_problem(problem), TrustReg
 square.retcode, square[:λ]
 ```
 
-## Change the conditions
+## Change the starting values and the conditions
 
 A new target is a new parameter value and needs no new code:
 
@@ -149,7 +157,7 @@ SciMLBase.solve(moving, Rodas5P())[:vy][1]
 
 Other conditions need a new conditions function, and only its code is compiled.
 
-## Solve for a parameter
+## Find a parameter during initialization
 
 In a model where `x + y` is the parameter `total`, we give two of the three and compute
 the third; `y` is an observed variable:
@@ -157,7 +165,8 @@ the third; `y` is an observed variable:
 ```@example init
 x, total, x0, y0 = SX.sym("x"), SX.sym("total"), SX.sym("x0"), SX.sym("y0")
 q = vcat(total, x0, y0)
-sum_model = CasadiFunction("sum_model", [x, q, t], [-x, total - x], ["u", "p", "t"], ["du", "y"])
+sum_model = CasadiFunction("sum_model", [x, q, t], [-x, total - x],
+                           ["u", "p", "t"], ["du", "y"])
 nothing # hide
 ```
 
@@ -167,12 +176,14 @@ problem are guesses. With `x = 1` and `y = 2`:
 ```@example init
 both = CasadiFunction("both", [x, q, t], [vcat(x - x0, (total - x) - y0)])
 f = SciMLBase.ODEFunction(sum_model; initialization = both, solved_parameters = [:total])
-solution = SciMLBase.solve(SciMLBase.ODEProblem(f, [0.0], (0.0, 1.0), [0.0, 1.0, 2.0]), Tsit5();
-                           initializealg = initialize, abstol = 1e-8, reltol = 1e-8)
+values_sum = [0.0, 1.0, 2.0]                              # total (a guess), x0, y0
+sum_problem = SciMLBase.ODEProblem(f, [0.0], (0.0, 1.0), values_sum)
+solution = SciMLBase.solve(sum_problem, Tsit5(); initializealg = initialize,
+                           abstol = 1e-8, reltol = 1e-8)
 solution.ps[:total]
 ```
 
-## Start at a steady state
+## Start the predator-prey model at equilibrium
 
 Conditions on the derivatives initialize an ODE too, here the Lotka-Volterra system at a
 steady state:
@@ -182,9 +193,11 @@ r, s = SX.sym("r"), SX.sym("s")
 prey = vcat(r, s)
 slope = vcat(1.5r - r * s, -3s + r * s)
 lotka = CasadiFunction("lotka", [prey], [slope])
-steady = SciMLBase.ODEFunction(lotka; initialization = CasadiFunction("steady", [prey], [slope]))
-solution = SciMLBase.solve(SciMLBase.ODEProblem(steady, [2.0, 1.0], (0.0, 10.0)), Tsit5();
-                           initializealg = initialize, abstol = 1e-8, reltol = 1e-8)
+at_rest = CasadiFunction("steady", [prey], [slope])
+steady = SciMLBase.ODEFunction(lotka; initialization = at_rest)
+equilibrium = SciMLBase.ODEProblem(steady, [2.0, 1.0], (0.0, 10.0))
+solution = SciMLBase.solve(equilibrium, Tsit5(); initializealg = initialize,
+                           abstol = 1e-8, reltol = 1e-8)
 solution.u[1], solution.u[end]
 ```
 
