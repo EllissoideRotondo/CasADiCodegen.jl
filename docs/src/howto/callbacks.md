@@ -8,43 +8,50 @@ can call. Wrap a drag force and its Jacobian, call it in a model, and generate c
 using CasADiCodegen
 
 drag(v) = -0.5 * sqrt(v[1]^2 + v[2]^2) .* v                  # any Julia code
-drag_jacobian(v) = (n = sqrt(v[1]^2 + v[2]^2); -0.5 * (n * [1 0; 0 1] + v * v' / n))
+function drag_jacobian(v)
+    n = sqrt(v[1]^2 + v[2]^2)
+    return -0.5 * (n * [1 0; 0 1] + v * v' / n)
+end
 force = callback(drag, "drag", (2,), (2,); jacobian = drag_jacobian)
 
 v = MX.sym("v", 2)
-f = CasadiFunction("f", [v], [force(2v), jacobian(force(2v), v)])
+drag_force = force(2v)
+f = CasadiFunction("f", [v], [drag_force, jacobian(drag_force, v)])
 g, g! = build_function(f; expression = Val{false})
 g([3.0, 4.0])[2]
 ```
 
 The two tuples hold the size of each argument and of each result, an integer or
-`(rows, columns)`. A function that returns static arrays gives a call without allocation.
+`(rows, columns)`. A function that returns static arrays gives a call that does not
+allocate.
 
-## Give the derivatives
+## Give the derivatives of the Julia function
 
 The keyword `jacobian` takes one of three kinds of value.
 
-### A Julia function, for the first order
+### Give the Jacobian as a Julia function
 
-The function returns the Jacobian, or with several results or arguments a tuple of one
-matrix per pair; any array with the elements in column-major order is accepted.
+For the first derivatives, the function returns the Jacobian, or with several results or
+arguments a tuple of one matrix per pair; any array with the elements in column-major
+order is accepted.
 
-### A tuple of Julia functions, for higher orders
+### Give higher derivatives as a tuple of Julia functions
 
 Each function returns the Jacobian of the one before it.
 
-### An ADTypes.jl backend, for any order
+### Let an AD package compute the derivatives
 
-A backend such as `AutoForwardDiff()` differentiates the function through
+A backend such as `AutoForwardDiff()` differentiates the function to any order through
 DifferentiationInterface.jl, which must be loaded with the backend package; it is
 slower than hand-written derivatives.
 
-## How the code reaches the function
+## Requirements on the Julia function
 
 The package expands the operations around the calls into scalar code that passes
 static arrays to the Julia functions. The code stays matrix code (see
-[Matrix code and functions without instructions](@ref)) with `expand = false`, when it
-must be split (see [Large functions and the cache on disk](@ref)), and when a call is
+[Scalar code, matrix code and special CasADi functions](@ref)) with `expand = false`, when
+it
+must be split (see [Speed up compilation of large models](@ref)), and when a call is
 inside a function that CasADi does not inline.
 
 - A function that `build_function` makes for the session holds the Julia function

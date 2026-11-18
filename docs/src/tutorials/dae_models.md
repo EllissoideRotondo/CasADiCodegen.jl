@@ -1,4 +1,4 @@
-# Model physical systems with differential-algebraic equations
+# Model a circuit and a pendulum as DAEs
 
 In this tutorial, we write an electric circuit from its parts, and a pendulum.
 [`System`](@ref CasADiCodegen.Models.System) of the submodule `CasADiCodegen.Models`
@@ -12,7 +12,7 @@ import SciMLBase
 using OrdinaryDiffEqRosenbrock: Rodas5P
 ```
 
-## Write the parts of a circuit
+## Write the source, resistor and capacitor
 
 The circuit is a source of 1 V, a resistor of 2 Ω and a capacitor of 1 F in a loop,
 with the negative side of the source grounded. A pin carries a voltage `v` and a current
@@ -63,7 +63,7 @@ length(circuit)
 
 The circuit has 20 voltages and currents and as many equations.
 
-## Compile and solve the circuit
+## Reduce the circuit to one ODE and solve it
 
 `System` compiles the equations, and [`unknowns`](@ref CasADiCodegen.Models.unknowns)
 gives the states that remain:
@@ -91,7 +91,10 @@ filter(o -> casadi.name(first(o)) == "resistor_i", observed(rc))
 symbol, or its name, to a value:
 
 ```@example dae
-problem = SciMLBase.ODEProblem(rc, [capacitor.v => 0.0], (0.0, 10.0), [R => 2.0, Cap => 1.0, V => 1.0])
+v0 = [capacitor.v => 0.0]
+tspan = (0.0, 10.0)
+rc_values = [R => 2.0, Cap => 1.0, V => 1.0]
+problem = SciMLBase.ODEProblem(rc, v0, tspan, rc_values)
 solution = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-8, reltol = 1e-8)
 solution[:capacitor_v][end], solution[:resistor_i][end]
 ```
@@ -118,7 +121,8 @@ The constraint does not contain `T`, so a mass-matrix solver fails at the first 
 ```@example dae
 x, y, T = SX.sym("x"), SX.sym("y"), SX.sym("T")
 g, L = SX.sym("g"), SX.sym("L")
-pendulum = System([D(D(x)) ~ T * x, D(D(y)) ~ T * y - g, x^2 + y^2 ~ L^2], t; parameters = [g, L], name = "pendulum")
+pendulum_equations = [D(D(x)) ~ T * x, D(D(y)) ~ T * y - g, x^2 + y^2 ~ L^2]
+pendulum = System(pendulum_equations, t; parameters = [g, L], name = "pendulum")
 differentiation_index(pendulum), unknowns(pendulum)
 ```
 
@@ -137,11 +141,17 @@ CasADiCodegen.Models.invariants), which the initial values must satisfy (see
 
 ```@example dae
 start = [x => 1.0, D(x) => 0.0, y => 0.0, D(y) => 0.0, T => 0.0]
-problem = SciMLBase.ODEProblem(pendulum, start, (0.0, 10.0), [g => 9.8, L => 1.0])
+pendulum_values = [g => 9.8, L => 1.0]
+problem = SciMLBase.ODEProblem(pendulum, start, tspan, pendulum_values)
 solution = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-8, reltol = 1e-8)
+
 column(v) = vcat(v...)
-residuals = CasadiFunction("residuals", [column(unknowns(pendulum)), column(parameters(pendulum))], [invariants(pendulum)])
-drift(solution) = maximum(u -> maximum(abs, Matrix(residuals(u, solution.prob.p))), solution.u)
+states_in, parameters_in = column(unknowns(pendulum)), column(parameters(pendulum))
+residuals = CasadiFunction("residuals", [states_in, parameters_in], [invariants(pendulum)])
+function drift(solution)
+    p = solution.prob.p
+    maximum(u -> maximum(abs, Matrix(residuals(u, p))), solution.u)
+end
 drift(solution)
 ```
 
@@ -152,9 +162,9 @@ With the keyword `baumgarte_pole = γ < 0`, Baumgarte's stabilization enforces
 `exp(γ t)`:
 
 ```@example dae
-stabilized = System([D(D(x)) ~ T * x, D(D(y)) ~ T * y - g, x^2 + y^2 ~ L^2], t; parameters = [g, L],
-                    name = "pendulum", baumgarte_pole = -5.0)
-problem = SciMLBase.ODEProblem(stabilized, start, (0.0, 10.0), [g => 9.8, L => 1.0])
+stabilized = System(pendulum_equations, t; parameters = [g, L], name = "pendulum",
+                    baumgarte_pole = -5.0)
+problem = SciMLBase.ODEProblem(stabilized, start, tspan, pendulum_values)
 drift(SciMLBase.solve(problem, Rodas5P(); abstol = 1e-8, reltol = 1e-8))
 ```
 

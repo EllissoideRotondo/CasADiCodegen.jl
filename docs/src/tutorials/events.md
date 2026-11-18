@@ -1,8 +1,7 @@
 # Simulate a bouncing ball
 
 In this tutorial, we simulate a bouncing ball as a SciML problem with a callback and as a
-CasADi function that returns the contact times and their derivatives, then put the ball in
-a box where the number of contacts is not known in advance.
+CasADi function that returns the contact times and their derivatives.
 
 ```@example events
 using CasADiCodegen
@@ -25,17 +24,23 @@ height 1:
 ```@example events
 s = SX.sym("s", 2)                                        # s = [x, v]
 fall = CasadiFunction("fall", [s], [vcat(s[2], SX(-9.8))])
-problem = SciMLBase.ODEProblem(SciMLBase.ODEFunction(fall), [1.0, 0.0], (0.0, 5.0))
+rhs = SciMLBase.ODEFunction(fall)
+u0 = [1.0, 0.0]
+tspan = (0.0, 5.0)
+problem = SciMLBase.ODEProblem(rhs, u0, tspan)
 nothing # hide
 ```
 
-## Apply the bounce with a callback
+## Reverse the velocity with a SciML callback
 
 A bounce is a `ContinuousCallback` at a root of the height that reverses the velocity:
 
 ```@example events
-bounce = SciMLBase.ContinuousCallback((u, t, integ) -> u[1], integ -> (integ.u[2] = -integ.u[2]))
-solution = SciMLBase.solve(problem, Tsit5(); callback = bounce, abstol = 1e-10, reltol = 1e-10)
+height(u, t, integ) = u[1]
+reverse_velocity!(integ) = (integ.u[2] = -integ.u[2])
+bounce = SciMLBase.ContinuousCallback(height, reverse_velocity!)
+solution = SciMLBase.solve(problem, Tsit5(); callback = bounce,
+                           abstol = 1e-10, reltol = 1e-10)
 minimum(solution[1, :])
 ```
 
@@ -52,12 +57,12 @@ maximum(abs, contacts - t_exact)
 These contact times come from a SciML solution, outside any graph that CasADi could
 differentiate.
 
-## Return the contact times from a CasADi function
+## Differentiate the bounce times with a CasADi integrator
 
 To differentiate the contact times, we make them outputs of a CasADi function.
 [`integrator`](@ref) takes the event function as `"zero"` and the state
-after an event as `"transition"` (see [Stop at an event](@ref events)). The integrator is called
-inside an `MX` graph, and we ask for six events that do not end the integration:
+after an event as `"transition"` (see [Stop at an event](@ref events)). The integrator is
+called inside an `MX` graph, and we ask for six events that do not end the integration:
 
 ```@example events
 m = MX.sym("m", 2)

@@ -1,4 +1,4 @@
-# From a Julia problem to generated code
+# Generate code from an existing SciML problem
 
 Tracing calls a plain-Julia SciML function once on numbers that record each operation,
 which turns it into a CasADi graph; CasADiCodegen.jl then generates code for the function
@@ -13,7 +13,7 @@ using OrdinaryDiffEqBDF: FBDF
 nothing # hide
 ```
 
-## A problem written for OrdinaryDiffEq.jl
+## Write the Robertson problem in plain Julia
 
 We write the right side of the Robertson equations, a standard stiff test problem, for
 OrdinaryDiffEq.jl, with no reference to CasADi:
@@ -27,11 +27,14 @@ function rober!(du, u, p, t)
     du[3] = k₂ * y₂^2
     nothing
 end
-original = SciMLBase.ODEProblem(rober!, [1.0, 0.0, 0.0], (0.0, 1e5), (0.04, 3e7, 1e4))
+y0 = [1.0, 0.0, 0.0]
+tspan = (0.0, 1e5)
+rates = (0.04, 3e7, 1e4)                                  # k₁, k₂, k₃
+original = SciMLBase.ODEProblem(rober!, y0, tspan, rates)
 nothing # hide
 ```
 
-## The traced problem
+## Convert the problem to generated code
 
 [`CasADiCodegen.traced_problem`](@ref CasADiCodegen.traced_problem(::AbstractString, ::SciMLBase.ODEProblem))
 traces `rober!` and returns an `ODEProblem` whose
@@ -68,18 +71,21 @@ A change of a parameter value needs no new trace, because the values enter the g
 code as arguments; a value that fixes the structure, such as a size or the number of steps
 of a loop, is read once during the trace and needs a new trace when it changes.
 
-## Names of the states and of the parameters
+## Name the states and the parameters
 
 By default the states are `u_0`, `u_1`, `u_2` and the parameters `p_0`, `p_1`, `p_2`; the
 keywords `states` and `parameters` give one name per element:
 
 ```@example traced_problems
-named = CasADiCodegen.traced_problem("rober", original; states = [:y₁, :y₂, :y₃], parameters = [:k₁, :k₂, :k₃])
+state_names = [:y₁, :y₂, :y₃]
+parameter_names = [:k₁, :k₂, :k₃]
+named = CasADiCodegen.traced_problem("rober", original; states = state_names,
+                                     parameters = parameter_names)
 solution = SciMLBase.solve(named, Rodas5P(); abstol = 1e-10, reltol = 1e-10)
 solution[:y₂][end], SciMLBase.remake(named; p = [:k₁ => 0.08]).p
 ```
 
-## A model with loops, views and a sparse Jacobian
+## Trace a reaction-diffusion model written with loops
 
 A discretized partial differential equation has a large, sparse Jacobian. We write the
 Gray-Scott equations in one dimension with a matrix state, views, a loop and `@.`:
@@ -104,14 +110,17 @@ n = 256
 x = range(0.0, 1.0; length = n)
 bump = @. exp(-200 * (x - 0.5)^2)
 u0 = [1 .- 0.5 .* bump 0.25 .* bump]
-original = SciMLBase.ODEProblem(grayscott!, u0, (0.0, 100.0), (1e-3, 5e-4, 0.04, 0.06, step(x)))
+tspan = (0.0, 100.0)
+coefficients = (1e-3, 5e-4, 0.04, 0.06, step(x))         # Du, Dv, F, k, h
+original = SciMLBase.ODEProblem(grayscott!, u0, tspan, coefficients)
 nothing # hide
 ```
 
 The trace unrolls the loop and takes the branches on integer indices once; a branch on a
-state needs `ifelse` (see [Choices that depend on the input](@ref)). With `sparse = true`,
+state needs `ifelse` (see [Write branches that tracing can record](@ref)). With
+`sparse = true`,
 which needs SparseArrays loaded, the `ODEFunction` holds a `jac_prototype` with the
-pattern that CasADi derives:
+sparsity pattern that CasADi derives:
 
 ```@example traced_problems
 problem = CasADiCodegen.traced_problem("grayscott", original; sparse = true)
@@ -121,7 +130,8 @@ size(problem.f.jac_prototype), nnz(problem.f.jac_prototype)
 FBDF factorizes this sparse matrix. The traced problem keeps the matrix shape of the state:
 
 ```@example traced_problems
-solution = SciMLBase.solve(problem, FBDF(); abstol = 1e-8, reltol = 1e-8, save_everystep = false)
+solution = SciMLBase.solve(problem, FBDF(); abstol = 1e-8, reltol = 1e-8,
+                           save_everystep = false)
 solution.retcode, size(solution.u[end])
 ```
 
@@ -130,13 +140,15 @@ The solver may also compute the Jacobian from the pattern alone, by coloring:
 ```@example traced_problems
 f_pattern = SciMLBase.ODEFunction(problem.f.f; jac_prototype = problem.f.jac_prototype)
 colored = SciMLBase.remake(problem; f = f_pattern)
-SciMLBase.solve(colored, FBDF(); abstol = 1e-8, reltol = 1e-8, save_everystep = false).u[end] ≈ solution.u[end]
+by_coloring = SciMLBase.solve(colored, FBDF(); abstol = 1e-8, reltol = 1e-8,
+                              save_everystep = false)
+by_coloring.u[end] ≈ solution.u[end]
 ```
 
-A graph of tens of thousands of instructions takes seconds to compile at the first call;
-[Large functions and the cache on disk](@ref) shortens that.
+A graph of tens of thousands of operations takes seconds to compile at the first call;
+[Speed up compilation of large models](@ref) shortens that.
 
-## A mass matrix
+## Trace a pendulum with a mass matrix
 
 The traced problem keeps the mass matrix of a pendulum whose tension ``T`` is an algebraic
 state. Tracing does not reduce the index, so the last equation is the length constraint
@@ -153,9 +165,15 @@ function pendulum!(du, u, p, t)
     du[5] = 2 * (dx^2 + dy^2 + y * (y * T - g) + T * x^2)
     nothing
 end
-f = SciMLBase.ODEFunction(pendulum!; mass_matrix = Diagonal([1.0, 1, 1, 1, 0]))
-original = SciMLBase.ODEProblem(f, [1.0, 0, 0, 0, 0], (0.0, 10.0), [9.8, 1.0])
-problem = CasADiCodegen.traced_problem("pendulum", original; states = [:x, :dx, :y, :dy, :T])
+M = Diagonal([1.0, 1, 1, 1, 0])
+f = SciMLBase.ODEFunction(pendulum!; mass_matrix = M)
+start = [1.0, 0, 0, 0, 0]
+tspan = (0.0, 10.0)
+gravity_length = [9.8, 1.0]                               # g, L
+original = SciMLBase.ODEProblem(f, start, tspan, gravity_length)
+
+pendulum_states = [:x, :dx, :y, :dy, :T]
+problem = CasADiCodegen.traced_problem("pendulum", original; states = pendulum_states)
 solution = SciMLBase.solve(problem, Rodas5P(); abstol = 1e-8, reltol = 1e-8)
 problem.f.mass_matrix == f.mass_matrix, solution[:x][end]^2 + solution[:y][end]^2
 ```
@@ -163,7 +181,7 @@ problem.f.mass_matrix == f.mass_matrix, solution[:x][end]^2 + solution[:y][end]^
 The initial state is consistent: the start lies on the circle of unit length, and the
 last equation gives ``T = 0`` at rest. `pendulum!` reads `L` but does not use it.
 
-## Nonlinear problems
+## Trace a nonlinear system
 
 A `NonlinearProblem` traces in the same way, here an out-of-place residual whose root is
 on a circle and on the line ``u_1 = u_2``:
@@ -172,7 +190,9 @@ on a circle and on the line ``u_1 = u_2``:
 using NonlinearSolve: NewtonRaphson
 
 circle(u, p) = [u[1]^2 + u[2]^2 - p[1], u[1] - u[2]]
-original = SciMLBase.NonlinearProblem(circle, [1.0, 0.5], [2.0])
+guess = [1.0, 0.5]
+squared_radius = [2.0]
+original = SciMLBase.NonlinearProblem(circle, guess, squared_radius)
 problem = CasADiCodegen.traced_problem("circle", original)
 SciMLBase.solve(problem, NewtonRaphson()).u
 ```

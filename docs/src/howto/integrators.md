@@ -2,8 +2,9 @@
 
 [`CasADiCodegen.integrator`](@ref) makes a CasADi function that integrates an ordinary
 differential equation with a SciML solver and that CasADi differentiates to any order
-(for a solver name such as `"cvodes"`, see [Replace the solvers of CasADi](@ref)). The
-examples use the planar two-body problem:
+(for a solver name such as `"cvodes"`, see
+[Run CasADi solver objects with SciML solvers](@ref)). The examples use the planar
+two-body problem:
 
 ```@example ode
 using CasADiCodegen
@@ -46,7 +47,7 @@ xf
 The keywords `specialize`, `adjoint`, `mass` and those of events belong to `integrator`,
 and the others, such as `abstol`, `reltol` and `maxiters`, go to the solver.
 
-## Choose the form of the times
+## Choose the output times or make them inputs
 
 | Call | Function | Result |
 |---|---|---|
@@ -61,29 +62,35 @@ second result. A Jacobian by the final time:
 G = integrator("G", Vern9(), model; abstol = 1e-13, reltol = 1e-13)
 t0, tf = MX.sym("t0"), MX.sym("tf")
 h = CasadiFunction("h", [x0, p, t0, tf], [jacobian(G(x0, p, t0, tf), tf)])
-build_function(h; expression = Val{false})[1]([1.0, 0.0, 0.0, 1.0], [1.0], [0.0], [3.0])
+dxf_dtf = build_function(h; expression = Val{false})[1]
+dxf_dtf([1.0, 0.0, 0.0, 1.0], [1.0], [0.0], [3.0])
 ```
 
-## Get a gradient by many parameters
+## Compute a gradient with many inputs (adjoint)
 
 For the gradient of one number by many inputs, pass `adjoint = true`: a reverse
 derivative such as `gradient` then integrates the adjoint equations backward once instead
 of one forward sensitivity per input.
 
 ```@example ode
-A = integrator("A", Vern9(), model, 0.0, 3.0; adjoint = true, abstol = 1e-13, reltol = 1e-13)
-cost = CasadiFunction("cost", [x0, p], [gradient(casadi.sumsqr(A(x0, p)), vcat(x0, p))])
-build_function(cost; expression = Val{false})[1]([1.0, 0.0, 0.0, 1.0], [1.0])
+A = integrator("A", Vern9(), model, 0.0, 3.0;
+               adjoint = true, abstol = 1e-13, reltol = 1e-13)
+grad = gradient(casadi.sumsqr(A(x0, p)), vcat(x0, p))
+cost = CasadiFunction("cost", [x0, p], [grad])
+cost_gradient = build_function(cost; expression = Val{false})[1]
+cost_gradient([1.0, 0.0, 0.0, 1.0], [1.0])
 ```
 
 Forward and higher derivatives use forward sensitivities;
-[How an integrator is differentiated](@ref) explains both methods. For a gradient by 6
-initial states and 36 parameters, measured once:
+[How an integrator is differentiated](@ref) explains both methods.
 
-| Derivative | Time per call |
-|---|---|
-| Forward sensitivities | 90.7 µs |
-| `adjoint = true` | 52.7 µs |
+!!! details "Timing: gradient of 42 inputs, forward and adjoint"
+    For a gradient by 6 initial states and 36 parameters, measured once:
+
+    | Derivative | Time per call |
+    |---|---|
+    | Forward sensitivities | 90.7 µs |
+    | `adjoint = true` | 52.7 µs |
 
 ## Shorten the compilation of the solver
 
@@ -96,7 +103,7 @@ later one, measured once on Julia 1.13:
 | `SciMLBase.FullSpecialize` (default) | 3.7 s | 2.9 s | 36.6 µs |
 | `SciMLBase.AutoSpecialize` | 2.8 s | 0.5 s | 41.9 µs |
 
-## Derivatives of higher order
+## Take higher derivatives of the solution
 
 A Taylor coefficient of the solution in a parameter, `∂ᵏx/∂εᵏ / k!`, is a repeated
 `jacobian`; each order costs a further integration:
@@ -107,11 +114,12 @@ fall = Dict("x" => X, "p" => e, "ode" => vcat(X[2], -(1 + e * X[1])^(-2)))
 flow = integrator("flow", Vern9(), fall, 0.0, 3.0; abstol = 1e-12, reltol = 1e-12)
 position = flow(MX([0.0, 1.0]), e)[1]
 first_order = jacobian(position, e)
-taylor = CasadiFunction("taylor", [e], [position, first_order, jacobian(first_order, e) / 2])
+second_order = jacobian(first_order, e) / 2
+taylor = CasadiFunction("taylor", [e], [position, first_order, second_order])
 build_function(taylor; expression = Val{false})[1]([0.0])
 ```
 
-## Add algebraic states
+## Integrate a DAE with a mass matrix
 
 Pass `mass`, the diagonal of the mass matrix: 0 for an algebraic state, whose row of
 `"ode"` holds the residual of its equation, and 1 for the others.
@@ -126,19 +134,20 @@ using OrdinaryDiffEqRosenbrock: Rodas5P
 
 y, k = MX.sym("y", 3), MX.sym("k")                       # y[3] is algebraic: y[3] = k y[1]
 model = Dict("x" => y, "p" => k, "ode" => vcat(-y[3], y[1], y[3] - k * y[1]))
-stiff = integrator("stiff", Rodas5P(), model, 0.0, 1.0; mass = [1.0, 1.0, 0.0], abstol = 1e-11, reltol = 1e-11)
+stiff = integrator("stiff", Rodas5P(), model, 0.0, 1.0;
+                   mass = [1.0, 1.0, 0.0], abstol = 1e-11, reltol = 1e-11)
 ```
 
-## Write the model to a file
+## Write an integrator to a source file
 
 `generate_julia` writes an integrator to a module that loads the package of the
 algorithm, so the algorithm and its options must be values that a source file can hold:
 numbers, symbols and structures of them.
 
-## Integrate many arcs
+## Integrate many initial states at once
 
-For the arcs of a multiple shooting method, map the integrator over the columns of the
-initial states with `map` of CasADi:
+For the arcs of a multiple shooting method (one integration per time interval), map the
+integrator over the columns of the initial states with CasADi's `map`:
 
 ```julia
 X = MX.sym("X", 4, 20)

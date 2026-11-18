@@ -129,32 +129,32 @@ end
                                       chunk_size = nothing, split_above = nothing,
                                       optlevel = nothing, cache = false, options...)
 
-Make the bifurcation problem of the steady states `f(u, p) = 0` of the CasADi function `f`,
+Make a bifurcation problem for the steady states `f(u, p) = 0` of the CasADi function `f`,
 continued in the parameter `parameter`. It holds generated code for the residual, its
 Jacobian (`jac`) and, with `jet`, the higher derivatives that BifurcationKit.jl uses.
 
 `f` takes the state and the parameters, and its first result is the residual, a column
-vector of the size of the state. `f(u, p, t)` with a residual that does not depend on `t`,
-such as the right side of an `ODEFunction`, also serves. The states and the parameters have
-the names of the scalar symbols of `f`, as for `SciMLBase.NonlinearFunction`. Further results
-of `f` are observed variables, each known by the name of its result.
+vector of the size of the state. `f(u, p, t)` also works if the residual does not depend
+on `t`, such as the right side of an `ODEFunction`. States and parameters are named after
+the scalar symbols of `f`, as for `SciMLBase.NonlinearFunction`. Further results of `f`
+are observed variables, each named after its result.
 
-`u0`, the guess of a steady state, and `p`, the values of the parameters, are vectors in the
-order of the symbols of `f`, or vectors of pairs `name => value`, which must give a value to
-each element. `parameter` is the name of a scalar parameter, such as `:μ`, or its place in
-`p`, from 1.
+`u0`, a guess of a steady state, and `p`, the parameter values, are vectors in the order of
+the symbols of `f`, or vectors of pairs `name => value` that give a value to each element.
+`parameter` is the name of a scalar parameter, such as `:μ`, or its place in `p`, from 1.
 
-`record_from_solution` gives what the branch records at each point: a name, or a vector or
+`record_from_solution` sets what the branch records at each point: a name, or a vector or
 tuple of names, of states, parameters and observed variables, recorded as a named tuple;
-a function `(u, p; k...) -> value`; or `nothing` for the default of BifurcationKit.jl, the
+a function `(u, p; k...) -> value`; or `nothing` for the BifurcationKit.jl default, the
 norm of the state.
 
 `jac = false` leaves the Jacobian to automatic differentiation by BifurcationKit.jl. `jet`
-adds the Jacobian-vector product (`jvp`), the derivatives of the second and the third order
-by the state in given directions (`d2F`, `d3F`), and the derivatives by the continued
-parameter (`R01`, `R11`), which the normal forms at branch points and Hopf points need;
-with `jet = false`, BifurcationKit.jl computes them by automatic differentiation of the
-generated residual, and `R11` by finite differences.
+adds the Jacobian-vector product (`jvp`), the second and third derivatives by the state in
+given directions (`d2F`, `d3F`), and the derivatives by the continued parameter (`R01`,
+`R11`), which the normal forms at branch points and Hopf points need. With `jet = false`,
+BifurcationKit.jl computes them by automatic differentiation of the generated residual,
+and `R11` by finite differences.
+
 `chunk_size`, `split_above`, `optlevel` and `cache` go to
 [`build_function`](@ref CasADiCodegen.build_function), and the other `options` to
 `BifurcationKit.BifurcationProblem`.
@@ -163,7 +163,9 @@ generated residual, and `R11` by finite differences.
 ```julia
 x, μ = SX.sym("x"), SX.sym("μ")
 f = CasadiFunction("f", [x, μ], [μ * x - x^3])
-problem = BifurcationKit.BifurcationProblem(f, [:x => 0.0], [:μ => -1.0], :μ; record_from_solution = :x)
+u0 = [:x => 0.0]
+params = [:μ => -1.0]
+problem = BifurcationKit.BifurcationProblem(f, u0, params, :μ; record_from_solution = :x)
 ```
 """
 function BifurcationKit.BifurcationProblem(f::CasADiCodegen.Function, u0, p, parameter::Union{Symbol,Integer};

@@ -2,11 +2,11 @@
 
 [`casadi_function`](@ref CasADiCodegen.casadi_function) translates Symbolics.jl
 expressions into a CasADi function, which [`build_function`](@ref) and
-[the integrator page](@ref "Integrate a differential equation") take as any other. The
+[the integrator page](@ref "Integrate a differential equation") take like any other. The
 method exists once Symbolics.jl is loaded, and it translates expressions only, not a
 ModelingToolkit system.
 
-## Translate expressions
+## Translate expressions into a CasADi function
 
 Each symbol or array of symbols makes one argument, and each expression or array of
 expressions one result. Pass an array of symbols whole, such as `p` for `p[1:2]`. A vector
@@ -20,7 +20,8 @@ using Symbolics: @variables
 @variables x y p[1:2]
 expr = sin(x) * y^2 + p[1] * exp(-x) / (1 + p[2]^2)
 
-f = casadi_function("f", [x, y, p], [expr, Symbolics.gradient(expr, [x, y])];
+grad = Symbolics.gradient(expr, [x, y])
+f = casadi_function("f", [x, y, p], [expr, grad];
                     input_names = ["x", "y", "p"], output_names = ["value", "gradient"])
 g, g! = build_function(f; expression = Val{false})
 g(0.3, -1.2, [2.0, 0.5])
@@ -29,7 +30,7 @@ g(0.3, -1.2, [2.0, 0.5])
 Both packages export `build_function`, so `import Symbolics` rather than `using` it,
 or qualify the name.
 
-## Supported operations
+## Which Symbolics.jl operations are supported
 
 The translation accepts `+ - * / ^`, `sin cos tan asin acos atan sinh cosh tanh asinh
 acosh atanh`, `exp exp2 expm1 log log2 log10 log1p sqrt inv`, `abs sign floor ceil min max

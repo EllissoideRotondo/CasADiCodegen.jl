@@ -12,8 +12,8 @@
 A SciML algorithm `alg`, for example `Vern9()`, with the `options` that go to its solver,
 for example `abstol`. Use it as a field of [`Solvers`](@ref) when the algorithm has options.
 
-With `target`, a solver object of CasADi, the result is an override: the solver for that
-object and for its derivatives only. Give an override in the field `overrides` of `Solvers`.
+With `target`, a CasADi solver object, the result is an override: the solver for that
+object and its derivatives only. Give an override in the field `overrides` of `Solvers`.
 """
 struct Solver
     target::Union{Nothing,casadi.Function}
@@ -28,8 +28,8 @@ Base.:(==)(a::Solver, b::Solver) = a.target === b.target && a.alg == b.alg && a.
     Solvers(; ode = nothing, dae = nothing, nonlinear = nothing, optimization = nothing,
               overrides = (), nonsmooth = :warn)
 
-Select the SciML solvers that generated code calls in place of the solver objects of
-CasADi in the graph of a function. Pass the result as the keyword `solvers` of
+Select the SciML solvers that generated code calls instead of the CasADi solver objects
+in a function's graph. Pass the result as the keyword `solvers` of
 [`build_function`](@ref) or [`generate_julia`](@ref).
 
 Each field is an algorithm, or a [`Solver`](@ref) when the algorithm has options.
@@ -43,25 +43,29 @@ Each field is an algorithm, or a [`Solver`](@ref) when the algorithm has options
 | `overrides`    | one object each: a collection of `Solver(target, alg; options...)`   |
 
 An override has priority over the other fields. Only an override replaces an integrator
-`rk` or `collocation` or a rootfinder `newton`, for which the package has Julia code of the
-method of CasADi. An integrator with an event function is replaced by the same fields, and
+`rk` or `collocation` or a rootfinder `newton`, for which the package has Julia code of
+CasADi's method. An integrator with an event function is replaced by the same fields, and
 `rk` and `collocation` then need an override.
 
-The tolerances of an integrator of CasADi are the options `abstol` and `reltol` of its
-solver, unless the solver has them. A solver of the first four fields must have no
-`target`, and each override must have one. See [Replace the solvers of CasADi](@ref).
+A CasADi integrator's tolerances become the options `abstol` and `reltol` of its
+replacement solver, unless that solver has them already. A solver of the first four fields
+must have no
+`target`, and each override must have one. See
+[Run CasADi solver objects with SciML solvers](@ref).
 
 `nonsmooth` is what a replaced integrator gives when a switch of its model depends on the
 state, or on the time and a parameter together: a warning, an `ArgumentError` with
 `:error`, or nothing with `:ignore`, as the keyword `nonsmooth` of `integrator`. This scan
-runs when generated code replaces the integrator. See [Discontinuous models](@ref discontinuities).
+runs when generated code replaces the integrator. See
+[Get correct derivatives from a model with switches](@ref discontinuities).
 
 # Examples
 ```julia
 using CasADiCodegen
 using OrdinaryDiffEqVerner: Vern9
 
-solvers = CasADiCodegen.Solvers(ode = CasADiCodegen.Solver(Vern9(); abstol = 1e-13, reltol = 1e-13))
+vern = CasADiCodegen.Solver(Vern9(); abstol = 1e-13, reltol = 1e-13)
+solvers = CasADiCodegen.Solvers(ode = vern)
 g, g! = build_function(f; expression = Val{false}, expand = false, solvers)   # f calls `cvodes`
 ```
 """

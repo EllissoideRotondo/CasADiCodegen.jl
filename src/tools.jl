@@ -13,7 +13,7 @@ Count the instructions of the code that [`build_function`](@ref) emits for the C
 function `f`, by operation. Return the pairs `operation => count`, the most frequent first.
 
 Matrix code counts the instructions of `f` itself, not those of the functions that it
-calls. `expand` is that of `build_function`.
+calls. `expand` is the keyword of `build_function`.
 
 # Examples
 ```jldoctest
@@ -21,7 +21,9 @@ julia> using CasADiCodegen
 
 julia> x = SX.sym("x", 2);
 
-julia> f = CasadiFunction("f", [x], [sin(x[1]) * x[2] + x[1] * x[2]]);
+julia> y = sin(x[1]) * x[2] + x[1] * x[2];
+
+julia> f = CasadiFunction("f", [x], [y]);
 
 julia> CasADiCodegen.instruction_histogram(f)
 5-element Vector{Pair{Symbol, Int64}}:

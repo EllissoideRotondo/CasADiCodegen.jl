@@ -1,10 +1,10 @@
 """
     CasADiCodegen.Models
 
-Differential equations written as equations of SX expressions: `Differential(t)` gives the
-time derivative of a symbol or an expression, `lhs ~ rhs` an equation, and `System`
-compiles a list of equations into the semi-explicit form of the CasADi integrators. Load it
-with `using CasADiCodegen.Models`.
+Differential equations written with SX expressions: `Differential(t)` gives the time
+derivative of a symbol or an expression, `lhs ~ rhs` an equation, and `System` compiles a
+list of equations into the semi-explicit form that CasADi's integrators take. Load it with
+`using CasADiCodegen.Models`.
 """
 module Models
 
@@ -76,15 +76,16 @@ symbols(e::SX) = SX[s for s in casadi.symvar(e)]
 """
     Differential(t::SX)
 
-The time derivative by the scalar symbol `t`. `D = Differential(t)` applies to an SX
-expression: `D(x)` of a symbol `x` is the derivative symbol of `x`, named `"dx"`, the same
-symbol at each call, and `D(D(x))` is `"ddx"`. `D(e)` of an expression is the chain rule,
-`D(t)` is 1 and `D` of a number is 0. A matrix gives the matrix of the derivatives of its
-elements. [`System`](@ref) sets the derivative of a parameter to 0.
+The time derivative with respect to the scalar symbol `t`. `D = Differential(t)` applies
+to an SX expression: `D(x)` of a symbol `x` is the derivative symbol of `x`, named `"dx"`,
+the same symbol at each call, and `D(D(x))` is `"ddx"`. `D(e)` of an expression is the
+chain rule, `D(t)` is 1 and `D` of a number is 0. A matrix gives the matrix of the
+derivatives of its elements. [`System`](@ref) sets the derivative of a parameter to 0.
 
 # Examples
 ```julia
-t, x = SX.sym("t"), SX.sym("x")
+t = SX.sym("t")
+x = SX.sym("x")
 D = Differential(t)
 D(x^2 + t)    # 2 x dx + 1
 ```
@@ -111,8 +112,8 @@ end
     Equation(lhs::SX, rhs::SX)
     lhs ~ rhs
 
-The equation `lhs = rhs` of a [`System`](@ref). `lhs` and `rhs` have one size, or one of
-them is a scalar, which stands for each element of the other; a number is a scalar.
+The equation `lhs = rhs` of a [`System`](@ref). `lhs` and `rhs` have the same size, or one
+of them is a scalar, which stands for each element of the other; a number is a scalar.
 A matrix gives one scalar equation per element. Broadcasting over Julia vectors of
 symbols, as in `D.(xs) .~ vs`, gives a vector of equations.
 """
@@ -141,24 +142,24 @@ than `t` and `parameters` are the variables of the model. `parameters` is a vect
 symbols, scalar or vector. The model must have one scalar equation per variable, where a
 variable counts once with all its derivatives.
 
-The compilation takes four steps:
-
-1. An algebraic equation (one without derivatives) with a variable `y` that is not
-   differentiated and that it contains linearly, with a coefficient that is a number or
-   an expression of the parameters, is solved for `y`, and `y` is replaced by its solution
-   in the other equations. `y` becomes an observed variable; a coefficient of parameters
-   that is zero gives it the value `NaN` or `Inf`. This removes the equations of the form `a ~ b`, `a ~ -b` and
-   `a ~ f(b, c)`, which connections of parts make.
-2. A variable `x` whose derivatives appear up to the order `n` becomes the `n`
-   differential states `x`, `dx`, ..., the derivative symbols of `D = Differential(t)`.
-3. When the equations that contain the derivatives of the highest order are as many as
-   these and linear in them, with a nonsingular coefficient, they are solved for the
-   derivatives, which become observed variables. Otherwise each such derivative becomes
-   an algebraic state, as in `exp(D(x)) ~ x`.
-4. When the model has algebraic states, [`reduce_index`](@ref CasADiCodegen.reduce_index)
-   reduces it to index 1, with the pole `baumgarte_pole`. The constraints that the
-   reduction differentiates become [`invariants`](@ref), which the initial values must
-   satisfy.
+!!! details "How `System` compiles the equations, in four steps"
+    1. An algebraic equation (one without derivatives) that contains linearly a variable `y`
+       that is not differentiated, with a coefficient that is a number or an expression of
+       the parameters, is solved for `y`, and `y` is replaced by its solution in the other
+       equations. `y` becomes an observed variable; a coefficient of parameters that is
+       zero gives it the value `NaN` or `Inf`. This removes the equations of the form
+       `a ~ b`, `a ~ -b` and `a ~ f(b, c)`, which connections of parts make.
+    2. A variable `x` whose derivatives appear up to the order `n` becomes the `n`
+       differential states `x`, `dx`, ..., the derivative symbols of `D = Differential(t)`.
+    3. When the equations that contain the derivatives of the highest order are as many as
+       these and linear in them, with a nonsingular coefficient, they are solved for the
+       derivatives, which become observed variables. Otherwise each such derivative becomes
+       an algebraic state, as in `exp(D(x)) ~ x`.
+    4. When the model has algebraic states,
+      [`reduce_index`](@ref CasADiCodegen.reduce_index)
+       reduces it to index 1, with the pole `baumgarte_pole`. The constraints that the
+       reduction differentiates become [`invariants`](@ref), which the initial values must
+       satisfy.
 
 [`unknowns`](@ref) gives the states of the result, [`observed`](@ref) the eliminated
 variables, `Dict(sys)` the model for `casadi.integrator`, and
@@ -166,12 +167,14 @@ variables, `Dict(sys)` the model for `casadi.integrator`, and
 
 Throw an `ArgumentError` when the number of scalar equations differs from that of the
 variables, when the elimination leaves an equation without variables, when two symbols of
-the model have one name, and when `reduce_index` refuses the model.
+the model have the same name, and when `reduce_index` refuses the model.
 
 # Examples
 ```julia
 using CasADiCodegen, CasADiCodegen.Models
-t, x, k = SX.sym("t"), SX.sym("x"), SX.sym("k")
+t = SX.sym("t")
+x = SX.sym("x")
+k = SX.sym("k")
 D = Differential(t)
 sys = System([D(D(x)) ~ -k * x], t; parameters = [k])
 unknowns(sys)    # [x, dx]
@@ -456,7 +459,7 @@ differentiation_index(sys::System) = sys.index
 """
     Dict(sys::System) -> Dict{String,SX}
 
-Return the model of `sys` in the form of the CasADi integrators: `"x"`, `"z"`, `"p"`,
+Return the model of `sys` in the form that CasADi's integrators take: `"x"`, `"z"`, `"p"`,
 `"t"`, `"ode"` and `"alg"`, without `"z"` and `"alg"` for a model without algebraic
 states and without `"p"` for one without parameters.
 """

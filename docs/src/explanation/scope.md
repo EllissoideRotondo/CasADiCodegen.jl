@@ -3,13 +3,13 @@
 This page lists what the package supports, what it refuses at build time, and where
 its results differ from those of CasADi.
 
-## What is supported
+## Supported functions, models and solvers
 
 | Item | State |
 |---|---|
 | Scalar (SX) functions | Every scalar operation of CasADi 3.8.2 (below) |
 | Matrix (MX) functions, not expanded | Elementwise operations, slices, joins, splits, transpose, reshape, projection (change of sparsity pattern), assignment to chosen nonzeros, reads at computed indices, interval search in a grid, `monitor`, calls of SX and MX functions, `map`, `mapaccum`, `fold`; `if_else` and `conditional` with `short_circuit = true` run only the selected branch |
-| Functions and nodes of CasADi without instructions | Interpolants `linear` and `bspline`, the B-spline node, `einstein`, `kron_contract`, `repsum`, `convexify`, `attachAssert`, `printme`, `dump`, `lift`, `find`, `map` (serial, threads or OpenMP) as one loop, external functions (`Float64` only), rootfinder `newton`, integrators `rk` and `collocation` with first- and second-order sensitivities |
+| Special functions that CasADi runs as compiled code | Interpolants `linear` and `bspline`, the B-spline node, `einstein`, `kron_contract`, `repsum`, `convexify`, `attachAssert`, `printme`, `dump`, `lift`, `find`, `map` (serial, threads or OpenMP) as one loop, external functions (`Float64` only), rootfinder `newton`, integrators `rk` and `collocation` with first- and second-order sensitivities |
 | Files of CasADi | Saved functions from CasADi 3.8.2 or older (see [Load a model from another language](@ref)) |
 | Solver objects of CasADi | As SciML problems: `ODEProblem`, `NonlinearProblem`, `OptimizationProblem` (also of an `Opti` stack). In generated code through `solvers = CasADiCodegen.Solvers(...)`: `cvodes`, `idas`, `kinsol`, `fast_newton` with forward and reverse derivatives; `nlpsol` solvers, `Float64` only, forward and reverse; integrators with event functions, also with algebraic states, `Float64` only, forward only; `conic` solvers of quadratic problems. |
 | Linear algebra, not expanded | Matrix product, inner product, bilinear form, rank-one update, Frobenius, 1- and infinity norms, smallest and largest element, Kronecker product, `logsumexp`, determinant, inverse, linear solve |
@@ -23,40 +23,39 @@ its results differ from those of CasADi.
 | Linearization, order of equations, index reduction | `linearization`, `block_triangular_form` and `reduce_index` of a semi-explicit DAE (see [Linearize a model and order its equations](@ref)) |
 | Roots of equations | `rootfinder(name, alg, f)`, dense unknowns and arguments, derivatives of any order; static arrays up to 16 unknowns, vectors beyond |
 | Ordinary differential equations | `integrator(name, alg, dae, t0, tf)`, with free times as `integrator(name, alg, dae)` or with a vector `tf`; quadratures, forward sensitivities, adjoint sensitivities with `adjoint = true`. With free times, events of one or several event functions, each with a state transition and a fixed or bounded count; the default `direction = 0` finds both changes of sign, where the integrators of CasADi find a change from positive to negative only. Algebraic states with `mass`, with sensitivities and events but not with a vector of times |
-| Discontinuous right sides | A warning, or `ArgumentError` with `nonsmooth = :error`, for a switch on the state, or on time and a parameter together, in the integrators of this package and, with the keyword `nonsmooth` of `Solvers`, in code that replaces a CasADi integrator. Switches as events with `modes = m => S` and a bound `switches`, at fixed, free or vector times, with the switch times as results. A sliding arc or two switches in one step of the event search throws (see [Discontinuous models](@ref discontinuities)) |
+| Discontinuous right sides | A warning, or `ArgumentError` with `nonsmooth = :error`, for a switch on the state, or on time and a parameter together, in the integrators of this package and, with the keyword `nonsmooth` of `Solvers`, in code that replaces a CasADi integrator. Switches as events with `modes = m => S` and a bound `switches`, at fixed, free or vector times, with the switch times as results. A sliding arc or two switches in one step of the event search throws (see [Get correct derivatives from a model with switches](@ref discontinuities)) |
 | Smoothing of switches | `smooth_step`, `smooth_sign`, `smooth_abs`, `smooth_max`, `smooth_min` on numbers, SX and MX. `smoothed` of an SX or MX expression or function, also through calls, `map` and `conditional`; it leaves equality tests, `floor`, `ceil`, `fmod`, `remainder`, the index of `conditional`, `linear` interpolants, Julia callbacks, external functions and solvers unchanged. An SX function that calls another function is refused; its MX form works. `natural_continuation` in the width |
 | Rules for automatic differentiation | `CasADiCodegen.differentiable(f)`: forward and reverse rules for ChainRulesCore.jl |
 | Julia functions on symbols | `inv(A, lsolver)` with a CasADi linear solver, `log2`, `exp2`, `abs2`, `SpecialFunctions.erf`, `SpecialFunctions.erfinv`; `LinearAlgebra.norm(x, p)` of a symbolic matrix or an array of symbols, elementwise, for every `p`; `LinearAlgebra.opnorm` with `p = 1`, `p = Inf`, and `p = 2` of a row or column |
-| Julia array code on symbols | Sums, iteration, concatenation, broadcasting and arithmetic with arrays of symbols and numbers (see [The CasADi front end](@ref)). Concatenating `SX` with `MX` throws `ArgumentError` |
+| Julia array code on symbols | Sums, iteration, concatenation, broadcasting and arithmetic with arrays of symbols and numbers (see [Differences from CasADi's Python API](@ref)). Concatenating `SX` with `MX` throws `ArgumentError` |
 | Forms of a generated function | Out of place and in place on `Array`, `SArray`, `MArray` in matrix shape; in place on `SparseMatrixCSC`; in place on vectors of nonzeros with `nonzeros = true` |
 | Number types | `Float64`, `Float32`, ForwardDiff dual numbers; any real type with `nanmath = false` of `build_function` and `generate_julia` |
 | Platforms | Tested on Linux (x86), macOS (ARM) and Windows (x86) |
 
-The scalar operations are:
+!!! details "Full list of supported scalar operations"
+    | Kind | Operations |
+    |---|---|
+    | Arithmetic | `+`, `-`, `*`, `/`, negation, reciprocal, square, twice (the product `2x`), `^` with any exponent, `sqrt`, `abs`, `sign`, `copysign`, `hypot` |
+    | Exponential | `exp`, `log`, `expm1`, `log1p` |
+    | Trigonometric | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` |
+    | Rounding | `floor`, `ceil`, `fmod`, `remainder` |
+    | Comparison and logic | `<`, `<=`, `==`, `!=`, `not`, `and`, `or`, `if_else_zero`, `fmin`, `fmax` |
+    | Special | `erf`, `erfinv`, `printme` |
 
-| Kind | Operations |
-|---|---|
-| Arithmetic | `+`, `-`, `*`, `/`, negation, reciprocal, square, twice (the product `2x`), `^` with any exponent, `sqrt`, `abs`, `sign`, `copysign`, `hypot` |
-| Exponential | `exp`, `log`, `expm1`, `log1p` |
-| Trigonometric | `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` |
-| Rounding | `floor`, `ceil`, `fmod`, `remainder` |
-| Comparison and logic | `<`, `<=`, `==`, `!=`, `not`, `and`, `or`, `if_else_zero`, `fmin`, `fmax` |
-| Special | `erf`, `erfinv`, `printme` |
-
-## What is refused
+## Functions the package rejects, and what to do instead
 
 Generated code never calls CasADi, so a CasADi function without a method in the
 package is refused at build time with a message that names the function and the remedy.
 
 | Function of CasADi in the graph | Remedy |
 |---|---|
-| Integrator `cvodes` or `idas`, rootfinder `kinsol` or `fast_newton`, solver of `nlpsol` or of `conic` (quadratic problem, which CasADi does not differentiate either) | A SciML solver through the option `solvers` (see [Replace the solvers of CasADi](@ref)) |
+| Integrator `cvodes` or `idas`, rootfinder `kinsol` or `fast_newton`, solver of `nlpsol` or of `conic` (quadratic problem, which CasADi does not differentiate either) | A SciML solver through the option `solvers` (see [Run CasADi solver objects with SciML solvers](@ref)) |
 | Integrator `rk` or `collocation` with an event function | A solver through `Solvers(overrides = ...)` |
 | Subtype of `Callback` (a callback written as a Julia type, whose object CasADi keeps to itself) | `callback` with a Julia function |
 | `conic` with cone constraints; other classes such as a Functional Mock-up Unit (FMU) | None |
 | Matrix 2-norm without expansion | None: CasADi cannot evaluate it either |
 
-## Differences from CasADi
+## Where results differ from CasADi
 
 - The `newton` rootfinder ignores the option `constraints`, which the Newton method of
   CasADi does not use either. It solves each linear system by Gaussian elimination
@@ -90,5 +89,6 @@ package is refused at build time with a message that names the function and the 
   at a fixed slice plus computed indices, the reverse derivative of a read such as
   `get_nz(v, false, Slice(1, 5, 2), i)`; the generated code gives the correct sum.
 - CasADi 3.8.2 misses a `cvodes` event that falls on an output time, so the state does
-  not jump there or later. The replacing code (see [Integrators with events](@ref))
-  applies the event and returns the state after it at that output time.
+  not jump there or later. The replacing code (see
+  [Replace an integrator that has events](@ref)) applies the event and returns the state
+  after it at that output time.

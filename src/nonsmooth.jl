@@ -211,19 +211,23 @@ Count the switching surfaces in the CasADi function `f` whose operand depends on
 by operation. Return the pairs `operation => count`, the most frequent first. An operation
 is CasADi's operation code, such as `:OP_SIGN`, or the class of a called function.
 
-A switching surface is an operation whose derivative CasADi takes branch by branch:
+A switching surface is an operation whose derivative CasADi takes branch by branch, at a
+jump of the value or a kink of the slope.
 
-- a jump of the value: `<` and `>` (both `:OP_LT`), `<=` and `>=` (`:OP_LE`), `sign`,
-  `floor`, `ceil`, `fmod`, `remainder`, the sign operand of `copysign` (`:OP_COPYSIGN`),
-  and the index of `conditional` (`:Switch`);
-- a kink of the slope: `abs` (`:OP_FABS`), `fmin`, `fmax`, the magnitude operand of
-  `copysign`, the MX `norm_1`, `norm_inf`, `mmin` and `mmax`, CasADi's `low`, and a
-  `linear` interpolant (`:LinearInterpolant`).
+!!! details "Which operations count as switching surfaces"
+    - a jump of the value: `<` and `>` (both `:OP_LT`), `<=` and `>=` (`:OP_LE`), `sign`,
+      `floor`, `ceil`, `fmod`, `remainder`, the sign operand of `copysign` (`:OP_COPYSIGN`),
+      and the index of `conditional` (`:Switch`);
+    - a kink of the slope: `abs` (`:OP_FABS`), `fmin`, `fmax`, the magnitude operand of
+      `copysign`, the MX `norm_1`, `norm_inf`, `mmin` and `mmax`, CasADi's `low`, and a
+      `linear` interpolant (`:LinearInterpolant`).
 
-Equality tests and logical operations are not counted. An `if_else` or a `conditional`
-whose condition is a comparison counts once, at the comparison. The integrators warn about
+    Equality tests and logical operations are not counted. An `if_else` or a `conditional`
+    whose condition is a comparison counts once, at the comparison.
+
+The integrators warn about
 a surface whose operand depends on the state, or on the time and a parameter together (see
-[Discontinuous models](@ref discontinuities)).
+[Get correct derivatives from a model with switches](@ref discontinuities)).
 
 `inputs` is `nothing` for all inputs, an input place from 1 or an input name, or a
 collection of them. With `expand = true` an MX function is first expanded to scalar code
@@ -236,9 +240,13 @@ Throws `ArgumentError` for an input that `f` does not have.
 ```jldoctest
 julia> using CasADiCodegen
 
-julia> x, p = SX.sym("x", 2), SX.sym("p");
+julia> x = SX.sym("x", 2);
 
-julia> f = CasadiFunction("f", [x, p], [sign(x[1]) + min(p, 2) * x[2]], ["x", "p"], ["r"]);
+julia> p = SX.sym("p");
+
+julia> r = sign(x[1]) + min(p, 2) * x[2];
+
+julia> f = CasadiFunction("f", [x, p], [r], ["x", "p"], ["r"]);
 
 julia> CasADiCodegen.nonsmooth_operations(f; inputs = ["x"])
 1-element Vector{Pair{Symbol, Int64}}:

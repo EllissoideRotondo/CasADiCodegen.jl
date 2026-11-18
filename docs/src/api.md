@@ -2,13 +2,14 @@
 
 This page and [SciML problems and functions](@ref) list the functions and types of
 CasADiCodegen.jl, grouped by task. The package exports `build_function`,
-`generate_julia`, `CasadiFunction`, `casadi_function` and `casadi`; the other names below
-are public and need the prefix `CasADiCodegen.`, except `callback`, `integrator` and
-`rootfinder`, which are functions of the front end to which the package adds methods.
+`generate_julia`, `CasadiFunction`, `casadi_function` and `casadi`. The other names below
+are public and need the prefix `CasADiCodegen.`. The exceptions are `callback`,
+`integrator` and `rootfinder`: they are front-end functions to which the package adds
+methods.
 
-## The CasADi front end
+## Differences from CasADi's Python API
 
-`using CasADiCodegen` loads CasADiNative.jl, the Julia front end of CasADi 3.8.2, whose
+`using CasADiCodegen` loads CasADiNative.jl, the Julia front end of CasADi 3.8.2. Its
 calls follow the [CasADi documentation](https://web.casadi.org/docs/) for Python, with
 these differences:
 
@@ -26,7 +27,7 @@ these differences:
 - A chained comparison such as `-2 <= w[1] <= 2` is not a constraint, since Julia
   evaluates it with `&&`; write `bounded(-2, w[1], 2)`.
 
-## Code generation
+## Generate code from a CasADi function
 
 ```@docs
 CasadiFunction
@@ -37,8 +38,8 @@ generate_julia
 
 ## Models written as equations
 
-The submodule `CasADiCodegen.Models` exports these names, which `using CasADiCodegen.Models`
-gives; `SciMLBase.ODEProblem` of a `System` is on [SciML problems and functions](@ref).
+`using CasADiCodegen.Models` gives these names. `SciMLBase.ODEProblem` of a `System` is
+on [SciML problems and functions](@ref).
 
 ```@docs
 CasADiCodegen.Models
@@ -75,24 +76,24 @@ CasADiCodegen.callback(::Any, ::AbstractString, ::Tuple, ::Tuple)
 
 ## SciML solvers inside a model
 
-`integrator` and `rootfinder` are the functions of the CasADi front end. With a
-solver name such as `"cvodes"` or `"kinsol"`, they make a solver object of CasADi
-itself, as in Python. The methods below take a SciML algorithm instead; they exist
-once SciMLBase.jl is loaded, which each SciML solver package does.
+`integrator` and `rootfinder` come from the CasADi front end. With a solver name such
+as `"cvodes"` or `"kinsol"`, they make a CasADi solver object, as in Python. The
+methods below take a SciML algorithm instead. They exist once SciMLBase.jl is loaded,
+which every SciML solver package does.
 
 ```@docs
 CasADiCodegen.integrator(::AbstractString, ::SciMLBase.AbstractODEAlgorithm, ::Any, ::Real, ::Real)
 CasADiCodegen.rootfinder(::AbstractString, ::SciMLBase.AbstractNonlinearAlgorithm, ::CasADiCodegen.Function)
 ```
 
-## Solvers of CasADi in generated code
+## Replace CasADi solvers in generated code
 
 ```@docs
 CasADiCodegen.Solvers
 CasADiCodegen.Solver
 ```
 
-## Linearization, the order of equations and index reduction
+## Linearize, order equations and reduce the index
 
 ```@docs
 CasADiCodegen.linearization
@@ -101,7 +102,7 @@ CasADiCodegen.block_triangular_form
 CasADiCodegen.reduce_index
 ```
 
-## Discontinuous models
+## Find and smooth switches in a model
 
 ```@docs
 CasADiCodegen.nonsmooth_operations
@@ -113,14 +114,14 @@ CasADiCodegen.smooth_min
 CasADiCodegen.smoothed
 ```
 
-## Automatic differentiation rules and sparse matrices
+## AD rules and sparse patterns
 
 ```@docs
 CasADiCodegen.differentiable
 SparseArrays.SparseMatrixCSC(::CasADiCodegen.Sparsity)
 ```
 
-## Inspection
+## Count operations and trace NaNs
 
 ```@docs
 CasADiCodegen.instruction_histogram

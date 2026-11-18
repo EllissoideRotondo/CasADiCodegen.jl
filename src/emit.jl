@@ -487,12 +487,13 @@ expression_flag(other) =
 """
     build_function(f; expression = Val{true}, force_SA = false, nonzeros = false,
                    vector_columns = true, name = Symbol(name_of_f, "!"),
-                   chunk_size = nothing, split_above = nothing,
-                   nanmath = true, expand = true, cache = false, solvers = nothing, optlevel = nothing)
+                   chunk_size = nothing, split_above = nothing, nanmath = true,
+                   expand = true, cache = false, solvers = nothing, optlevel = nothing)
 
-Generate Julia code for the CasADi function `f`. Return an out-of-place function `g(arg1, arg2, ...)` and an
-in-place function `g!(res, arg)`: as one `Expr` with the two definitions by default, or as
-the pair `(g, g!)` of compiled functions with `expression = Val{false}`.
+Generate Julia code for the CasADi function `f`. Return an out-of-place function
+`g(arg1, arg2, ...)` and an in-place function `g!(res, arg)`: as one `Expr` with the two
+definitions by default, or as the pair `(g, g!)` of compiled functions with
+`expression = Val{false}`.
 
 Both functions take arrays in matrix shape. `g` returns an output of one column as a
 vector, and as a matrix with `vector_columns = false`.
@@ -500,15 +501,14 @@ vector, and as a matrix with `vector_columns = false`.
 - `g` takes one array per input. It returns one array for one output, and a tuple of
   arrays otherwise. The arrays are `SVector` and `SMatrix` when the first argument is a
   static array, and `Vector` and `Matrix` otherwise. A `Vector` or `SVector` holds an
-  output of one column, also a scalar. Outputs with more than 1024
-  elements in all give `Vector` and `Matrix` for any argument, with a warning at the
-  first call with a static array.
+  output of one column, also a scalar. Outputs with more than 1024 elements in all give
+  `Vector` and `Matrix` for any argument, with a warning at the first call with a static
+  array.
 - `g!` fills the arrays of the tuple `res` from the tuple `arg` and returns `res`. An array
   of `res` can be a mutable static array and must not share memory with an array of
   `arg`, since the code reads the arguments while it writes the results. An array of
-  `res` or `arg` needs the number of
-  elements of its output or input only, so a vector and a matrix of one column both serve
-  for a column.
+  `res` or `arg` needs only the number of elements of its output or input, so a vector
+  and a matrix of one column both serve for a column.
 - A structural zero of an output is set to zero. A structural zero of an input is not read.
 - With SparseArrays.jl loaded, an array of `res` or `arg` can be a `SparseMatrixCSC` with
   the sparsity pattern of that output or input, which `SparseMatrixCSC(sparsity)` makes.
@@ -529,31 +529,33 @@ vector, and as a matrix with `vector_columns = false`.
   `!` unless `nonzeros` is set. The name of `g` is `name` without `!`.
 - `chunk_size = nothing`, `split_above = nothing`: a function with more than `split_above`
   instructions is split into sub-functions of at most `chunk_size` instructions, which
-  compile faster. `chunk_size` is $DEFAULT_CHUNK_SIZE by default. `split_above` is `chunk_size` when that is given;
-  otherwise it is $UNSPLIT_LIMIT for scalar code and $DEFAULT_CHUNK_SIZE operations for
-  matrix code. See [Large functions and the cache on disk](@ref).
+  compile faster. `chunk_size` is $DEFAULT_CHUNK_SIZE by default. `split_above` is
+  `chunk_size` when that is given; otherwise it is $UNSPLIT_LIMIT for scalar code and
+  $DEFAULT_CHUNK_SIZE operations for matrix code. See
+  [Speed up compilation of large models](@ref).
 - `nanmath = true`: an operation outside its domain returns NaN through NaNMath.jl, as in
   CasADi. With `false` it throws a `DomainError`, as in Base, and the code accepts any
   real number type.
 - `expand = true`: a matrix (MX) function is expanded to scalar operations where CasADi
   can do that and the expansion does not repeat a called function many times, as the step
   of an integrator. With `false` the code keeps the matrix operations. See
-  [Matrix code and functions without instructions](@ref).
+  [Scalar code, matrix code and special CasADi functions](@ref).
 - `cache = false`: with `true` or a directory, the compiled functions come from a package
   on disk that Julia compiles once, so a later session compiles nothing. A caller that
-  was compiled before the call must call the functions with `Base.invokelatest`. A Julia function in the graph must belong to a package. See
-  [Large functions and the cache on disk](@ref).
+  was compiled before the call must call the functions with `Base.invokelatest`. A Julia
+  function in the graph must belong to a package. See
+  [Speed up compilation of large models](@ref).
 - `optlevel = nothing`: with an integer from 0 to 3, Julia compiles the functions at this
-  optimization level, as `Base.Experimental.@optlevel` sets it, in place of the level of
-  the session (`-O`, 2 by default). With `cache` it sets the level of the cached package.
-- `solvers = nothing`: a [`CasADiCodegen.Solvers`](@ref Solvers) with the SciML solvers that the
-  code calls in place of the solver objects of CasADi in the graph, since generated code
-  never calls CasADi.
+  optimization level, as `Base.Experimental.@optlevel` sets it, in place of the session's
+  level (`-O`, 2 by default). With `cache` it sets the level of the cached package.
+- `solvers = nothing`: a [`CasADiCodegen.Solvers`](@ref Solvers) with the SciML solvers
+  that the code calls in place of the CasADi solver objects in the graph, since generated
+  code never calls CasADi.
 
 Throws an `ArgumentError`:
 - when `f` has free symbols or an operation outside the scope of the package (see
   [Scope and differences from CasADi](@ref));
-- when `f` calls a solver object of CasADi that `solvers` does not replace;
+- when `f` calls a CasADi solver object that `solvers` does not replace;
 - when `name` does not end with `!` and `nonzeros` is not set;
 - with `force_SA = true` for outputs with more than 1024 elements in all;
 - with `cache` or `optlevel` and `expression = Val{true}`, or an `optlevel` outside 0 to 3.
@@ -567,16 +569,20 @@ julia> using CasADiCodegen
 
 julia> x = SX.sym("x", 2);
 
-julia> f = CasadiFunction("f", [x], [x[1] * x[2], jacobian(x[1] * x[2], x)]);
+julia> y = x[1] * x[2];
+
+julia> f = CasadiFunction("f", [x], [y, jacobian(y, x)]);
 
 julia> g, g! = build_function(f; expression = Val{false});
 
-julia> g([2.0, 3.0])
+julia> u = [2.0, 3.0];
+
+julia> g(u)
 ([6.0], [3.0 2.0])
 
 julia> out = (zeros(1), zeros(1, 2));
 
-julia> g!(out, ([2.0, 3.0],));
+julia> g!(out, (u,));
 
 julia> out[2]
 1×2 Matrix{Float64}:
