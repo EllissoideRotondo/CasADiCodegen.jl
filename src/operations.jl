@@ -653,6 +653,25 @@ function write_matrix(base, nrow, ncol, rows, columns, values)
     end
     nothing
 end""",
+    # The LU factors of a dense `n` by `n` matrix of the work vector, with a pivot vector of the task
+    # for each size, so
+    # that a determinant, inverse or solve allocates nothing. `lu!` gives the same factors
+    # through LAPACK, but with a new pivot vector at each call; another element type, such as
+    # a dual number, takes `lu!`.
+    Symbol("dense_lu!") => """
+struct Pivots{N} end
+function pivot_vector(::Val{N}) where {N}
+    storage = task_local_storage()
+    p = get(storage, Pivots{N}, nothing)
+    p isa Vector{LinearAlgebra.BlasInt} && return p
+    storage[Pivots{N}] = Vector{LinearAlgebra.BlasInt}(undef, N)
+end
+function dense_lu!(A::StridedMatrix{T}, n::Val) where {T<:LinearAlgebra.BlasFloat}
+    ipiv = pivot_vector(n)::Vector{LinearAlgebra.BlasInt}
+    factors, pivots, info = LinearAlgebra.LAPACK.getrf!(A, ipiv; check = false)
+    LinearAlgebra.LU{T,typeof(factors),Vector{LinearAlgebra.BlasInt}}(factors, pivots, info)
+end
+dense_lu!(A, ::Val) = LinearAlgebra.lu!(A; check = false)""",
     :workspace => """
 struct Workspace{K,T} end
 function workspace(::Type{K}, ::Type{T}, n::Int) where {K,T}
@@ -692,6 +711,7 @@ is_stored(::SparseArrays.SparseMatrixCSC) = true"""
 
 "The helper functions of `HELPER_SOURCE`, defined for use by this package."
 module Helpers
+import LinearAlgebra
 import SpecialFunctions
 import StaticArrays
 import StaticArraysCore

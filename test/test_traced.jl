@@ -1,5 +1,6 @@
 # Generic Julia code traced into CasADi graphs with `Traced`.
 import LinearAlgebra
+import SparseArrays
 import ForwardDiff
 import SpecialFunctions
 using StaticArrays: SVector
@@ -95,10 +96,29 @@ end
     # LinearAlgebra factorizes with pivoting, which compares values; CasADi forms them from the graph.
     z = SX.sym("z", 4)
     A = reshape(traced(z), 2, 2)
-    outputs = [LinearAlgebra.det(A); vec(LinearAlgebra.inv(A)); A \ [1.0, 2.0]]
+    # A view with index vectors is not strided, so it takes the other method of `inv`.
+    outputs = [LinearAlgebra.det(A); vec(LinearAlgebra.inv(A)); A \ [1.0, 2.0]; vec(inv(view(A, [2, 1], :)))]
     g, _ = build_function(CasadiFunction("m", [z], [untraced(outputs)]); expression = Val{false})
     M = [2.0 1.0; -1.0 3.0]
-    @test g(vec(M)) ≈ [LinearAlgebra.det(M); vec(inv(M)); M \ [1.0, 2.0]]
+    @test g(vec(M)) ≈ [LinearAlgebra.det(M); vec(inv(M)); M \ [1.0, 2.0]; vec(inv(M[[2, 1], :]))]
+end
+
+@testset "a structured or sparse traced matrix solves as the matrix it stands for" begin
+    LA, SA = LinearAlgebra, SparseArrays
+    # `sparse` of a dense matrix asks whether each entry is zero, which a traced value cannot
+    # answer, so the sparse matrix is made from its entries.
+    stored(M) = SA.sparse([1, 2, 3, 1, 3], [1, 2, 3, 3, 1], [M[1, 1], M[2, 2], M[3, 3], M[1, 3], M[3, 1]], 3, 3)
+    structures = Any[LA.UpperTriangular, LA.LowerTriangular, LA.UnitUpperTriangular, LA.UnitLowerTriangular,
+                     LA.Symmetric, LA.Hermitian, stored,
+                     M -> LA.Diagonal(M[1:3]), M -> LA.Bidiagonal(M[1:3], M[4:5], :U),
+                     M -> LA.Tridiagonal(M[4:5], M[1:3], M[6:7]), M -> LA.SymTridiagonal(M[1:3], M[4:5])]
+    z = SX.sym("z", 9)
+    A = reshape(traced(z), 3, 3)
+    b = [1.0, 2.0, 3.0]
+    g, _ = build_function(CasadiFunction("s", [z], [untraced(reduce(vcat, [W(A) \ b for W in structures]))]); expression = Val{false})
+    M = [4.0 0.5 1.0; 1.0 5.0 0.25; -1.0 2.0 6.0]
+    # LinearAlgebra solves each structure with a method of its own; CasADi factorizes the full matrix.
+    @test g(vec(M)) ≈ reduce(vcat, [W(M) \ b for W in structures]) rtol = 1e-12
 end
 
 @testset "traced_function takes tuples of parameters and names its symbols" begin

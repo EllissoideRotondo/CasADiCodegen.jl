@@ -6,7 +6,7 @@ import SciMLBase
 using CasADiCodegen.Codegen: @requires, @ensures
 
 const casadi = CasADiCodegen.casadi
-const SII = SciMLBase.SymbolicIndexingInterface
+import SymbolicIndexingInterface as SII
 
 "The extension for SciMLBase.jl, whose `NonlinearFunction` and names this extension builds on."
 sciml() = Base.get_extension(CasADiCodegen, :CasADiCodegenSciMLBaseExt)

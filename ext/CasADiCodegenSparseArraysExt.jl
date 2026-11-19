@@ -8,6 +8,11 @@ using CasADiCodegen.Codegen: @requires
 # The methods of `stored` and `is_stored` for a sparse matrix, for generated code.
 include_string(@__MODULE__, CasADiCodegen.Codegen.SPARSE_HELPER_SOURCE)
 
+# SparseArrays solves a sparse matrix with a method of its own, as specific as the method for
+# matrices of traced values; a sparse matrix of traced values is solved as a dense one.
+Base.:\(A::SparseArrays.SparseMatrixCSC{CasADiCodegen.Codegen.Traced{S},Int}, b::AbstractVector{<:Real}) where {S} =
+    Matrix(A) \ b
+
 """
     SparseMatrixCSC(sparsity::CasADiCodegen.Sparsity) -> SparseMatrixCSC{Float64,Int}
 
