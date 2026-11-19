@@ -357,6 +357,24 @@ end
                    Base.invokelatest((r, a) -> m.wide!(r, a), [zeros(64)], Tuple(mx_inputs(wide)))))
 end
 
+@testset "dense determinant, inverse and solve run without allocating" begin
+    # Two orders in one function: the task keeps a pivot vector for each order.
+    A, B, v = MX.sym("A", 3, 3), MX.sym("B", 2, 2), MX.sym("v", 3)
+    f = CasADiCodegen.Function("lu", [A, B, v], [casadi.solve(A + SHIFT, v) * casadi.det(B + 2)])
+    @test mx_near(f)
+    # CasADi has no numerical evaluation for the inverse node, so Julia is the oracle.
+    h = CasADiCodegen.Function("inverse", [A], [casadi.inv_node(A + SHIFT)])
+    @test :OP_INVERSE in mx_ops(h)
+    a = mx_inputs(h)[1]
+    @test mx_emitted(h, [a])[1] ≈ vec(inv(reshape(a, 3, 3) + 3LinearAlgebra.I))
+    for (fun, x) in ((f, Tuple(mx_inputs(f))), (h, (a,)))
+        g! = build_function(fun; nonzeros = true, expression = Val{false}, expand = false)
+        out = [zeros(casadi.nnz_out(fun, 0))]
+        g!(out, x)
+        @test (@allocated g!(out, x)) == 0
+    end
+end
+
 @testset "linear algebra accepts any real number type" begin
     A, v = MX.sym("A", 3, 3), MX.sym("v", 3)
     g = build_function(CasADiCodegen.Function("ad", [A, v], [casadi.solve(A, v), casadi.mtimes(A, v), casadi.det(A), casadi.inv_node(A)]); nonzeros = true,

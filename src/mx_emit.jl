@@ -285,10 +285,10 @@ function instruction_statements(em::Emission, alg::MXAlgorithm, ins::MXInstructi
     elseif haskey(TABLE_OPERATIONS, op)
         table_statements(em, ins, writes[ins.out[1]], at, alg.slot_nnz[ins.in], nnz(ins.out[1]), scratch)
     else
-        slot = ins.out[1]
-        n = nnz(slot)
-        operand(s, i) = element(reads[s], nnz(s) == n ? i : 1)
-        loop(n, i -> :($(element(writes[slot], i)) = $(OPERATIONS[op].build(em.ref, (operand(s, i) for s in ins.in)...))))
+        target = ins.out[1]
+        count = nnz(target)
+        operand(s, i) = element(reads[s], nnz(s) == count ? i : 1)
+        loop(count, i -> :($(element(writes[target], i)) = $(OPERATIONS[op].build(em.ref, (operand(s, i) for s in ins.in)...))))
     end
 end
 
@@ -393,16 +393,16 @@ function linear_statements(em::Emission, ins::MXInstruction, out, at, sizes, scr
         Any[:($(helper(Symbol("qr_factor!")))(w, $(em.indices_name), $base, $(at[2]), $scratch)), keep()...,
             :($(helper(Symbol("qr_solve!")))(w, $(em.indices_name), $base, $scratch, $out, $(data.nrhs), $(data.tr)))]
     else
-        n = data.n
-        matrix(first, columns) = :(reshape(view(w, $(first + 1):$(first + n * columns)), $n, $columns))
+        order = data.n
+        matrix(first, columns) = :(reshape(view(w, $(first + 1):$(first + order * columns)), $order, $columns))
         dense = copy_statements(Vector{Int}[data.place], Int[at[op === :OP_SOLVE ? 2 : 1]], Int(scratch))
-        factors = :($(library(:lu!))($(matrix(scratch, n)); check = false))
+        factors = :($(em.ref(:Helpers, Symbol("dense_lu!")))($(matrix(scratch, order)), Val($order)))
         if op === :OP_DETERMINANT
             Any[dense..., :($result = $(library(:det))($factors))]
         elseif op === :OP_INVERSE
-            Any[dense..., loop(n * n, i -> :($(element(out, i)) = zero(eltype(w))))...,
-                loop(n, i -> :(w[$(stride(out + 1, n + 1, i))] = one(eltype(w))))...,
-                :($(library(:ldiv!))($factors, $(matrix(out, n))))]
+            Any[dense..., loop(order * order, i -> :($(element(out, i)) = zero(eltype(w))))...,
+                loop(order, i -> :(w[$(stride(out + 1, order + 1, i))] = one(eltype(w))))...,
+                :($(library(:ldiv!))($factors, $(matrix(out, order))))]
         else
             factors = data.tr ? :($(library(:transpose))($factors)) : factors
             Any[dense..., keep()..., :($(library(:ldiv!))($factors, $(matrix(out, data.nrhs))))]

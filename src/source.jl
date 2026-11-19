@@ -244,6 +244,7 @@ function generate_julia(f, io::IO;
     helpers = sort!(unique!([helpers; (needed for helper in helpers for needed in get(HELPER_NEEDS, helper, Symbol[]))...]))
     imports = Set(owner for (owner, _) in used if owner !== :Helpers)
     :erfinv in helpers && push!(imports, :SpecialFunctions)
+    Symbol("dense_lu!") in helpers && push!(imports, :LinearAlgebra)
     :stored in helpers && push!(imports, :SparseArrays)
     :static in helpers && push!(imports, :StaticArrays)   # a Julia function gets static arrays
     union!(imports, setdiff(roots, (:Main, :Base, :Core)))    # modules of the Julia functions of callbacks

@@ -155,11 +155,23 @@ function traced_inverse(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic}
     reshape(traced(casadi.reshape(casadi.inv(casadi_matrix(A)), n * n, 1)), n, n)
 end
 # LinearAlgebra has a method for strided matrices of any element type.
-LinearAlgebra.inv(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic} = traced_inverse(A)
-LinearAlgebra.inv(A::StridedMatrix{Traced{S}}) where {S<:Symbolic} = traced_inverse(A)
+Base.inv(A::AbstractMatrix{Traced{S}}) where {S<:Symbolic} = traced_inverse(A)
+Base.inv(A::StridedMatrix{Traced{S}}) where {S<:Symbolic} = traced_inverse(A)
 function Base.:\(A::AbstractMatrix{Traced{S}}, b::AbstractVector{<:Real}) where {S<:Symbolic}
     @requires size(square_traced(A), 1) == length(b) "the matrix has $(size(A, 1)) rows and the vector $(length(b)) elements"
     traced(casadi.solve(casadi_matrix(A), casadi_column(S, b)))
+end
+# LinearAlgebra solves its structured matrices with methods of their own, which are as
+# specific as the one above and so ambiguous with it; a structured matrix of traced values is
+# solved as the matrix it stands for. Its storage is a `Matrix` or `Vector`, so that these
+# methods meet no method of another package for a structured matrix of its own arrays.
+for W in (:UpperTriangular, :LowerTriangular, :UnitUpperTriangular, :UnitLowerTriangular, :Symmetric, :Hermitian)
+    @eval Base.:\(A::LinearAlgebra.$W{Traced{S},Matrix{Traced{S}}}, b::AbstractVector{<:Real}) where {S<:Symbolic} =
+        Matrix(A) \ b
+end
+for W in (:Diagonal, :Bidiagonal, :Tridiagonal, :SymTridiagonal)
+    @eval Base.:\(A::LinearAlgebra.$W{Traced{S},Vector{Traced{S}}}, b::AbstractVector{<:Real}) where {S<:Symbolic} =
+        Matrix(A) \ b
 end
 
 """

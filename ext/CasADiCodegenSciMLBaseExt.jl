@@ -1035,7 +1035,7 @@ end
 
 # Names of the variables of a solution, from the names of the symbols of CasADi.
 
-const SII = SciMLBase.SymbolicIndexingInterface
+import SymbolicIndexingInterface as SII
 
 """
     element_names(f, i) -> Vector{Symbol} or nothing
@@ -1199,7 +1199,7 @@ function named_system(f::CasADiCodegen.Function, arguments, values, time::Bool, 
     # A parameter symbol of several elements is also one parameter, the vector of its elements.
     taken = Set([states; parameters; clock; outputs; elements])
     blocks = Dict{Symbol,UnitRange{Int}}(filter(block -> first(block) ∉ taken, symbol_blocks(parameters)))
-    cache = time ? SciMLBase.SymbolCache(states, parameters, only(clock)) : SciMLBase.SymbolCache(states, parameters)
+    cache = time ? SII.SymbolCache(states, parameters, only(clock)) : SII.SymbolCache(states, parameters)
     (; sys = Names(cache, isempty(values) ? Dict{Symbol,Any}() : observed_functions(f, arguments, values, codegen), blocks))
 end
 
@@ -2156,7 +2156,7 @@ function SciMLBase.ODEProblem(dae::casadi.DaeBuilder, tspan::Union{Nothing,Tuple
     # CasADi replaces a constant by its value, which is NaN until `set(dae, name, value)` gives it.
     @requires all(isfinite, casadi.nonzeros(rhs(casadi.DM(u0), casadi.DM(p0), casadi.DM(float(span[1]))))) "$label: the right side is not finite at the start values; give each constant its value with set(dae, name, value)"
     scalar = length(u0) == length(differential) + length(algebraic) && length(p0) == length(constant) + length(inputs)
-    names = scalar ? (; sys = Names(SciMLBase.SymbolCache(Symbol.([differential; algebraic]), Symbol.([constant; inputs]), :t), Dict{Symbol,Any}(), Dict{Symbol,UnitRange{Int}}())) : (;)
+    names = scalar ? (; sys = Names(SII.SymbolCache(Symbol.([differential; algebraic]), Symbol.([constant; inputs]), :t), Dict{Symbol,Any}(), Dict{Symbol,UnitRange{Int}}())) : (;)
     mass = nz == 0 ? (;) : (; mass_matrix = LinearAlgebra.Diagonal([ones(nx); zeros(nz)]))
     f = SciMLBase.ODEFunction(rhs; jac, paramjac, sparse, specialize, chunk_size, split_above, optlevel, cache, mass..., names...)
     SciMLBase.ODEProblem(f, u0, float.(span), p0; options...)
