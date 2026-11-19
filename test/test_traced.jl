@@ -96,10 +96,11 @@ end
     # LinearAlgebra factorizes with pivoting, which compares values; CasADi forms them from the graph.
     z = SX.sym("z", 4)
     A = reshape(traced(z), 2, 2)
-    outputs = [LinearAlgebra.det(A); vec(LinearAlgebra.inv(A)); A \ [1.0, 2.0]]
+    # A view with index vectors is not strided, so it takes the other method of `inv`.
+    outputs = [LinearAlgebra.det(A); vec(LinearAlgebra.inv(A)); A \ [1.0, 2.0]; vec(inv(view(A, [2, 1], :)))]
     g, _ = build_function(CasadiFunction("m", [z], [untraced(outputs)]); expression = Val{false})
     M = [2.0 1.0; -1.0 3.0]
-    @test g(vec(M)) ≈ [LinearAlgebra.det(M); vec(inv(M)); M \ [1.0, 2.0]]
+    @test g(vec(M)) ≈ [LinearAlgebra.det(M); vec(inv(M)); M \ [1.0, 2.0]; vec(inv(M[[2, 1], :]))]
 end
 
 @testset "a structured or sparse traced matrix solves as the matrix it stands for" begin
